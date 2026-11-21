@@ -62,6 +62,10 @@ test.describe("STATE-03 persist + reload (05-05)", () => {
       .locator("textarea.highlight-popover-textarea")
       .fill("Persistent note across reload.");
     await page.locator("#highlight-popover .highlight-popover-done").click();
+    // `has-note` is optimistic. The editor's close is the saved signal: it
+    // closes only after the awaited note write lands (issue #177), so the
+    // reload below cannot interrupt it.
+    await expect(page.locator("dialog#highlight-popover")).not.toBeVisible();
     await expect(page.locator("mark.highlight").first()).toBeVisible();
     await expect(page.locator("mark.highlight.has-note").first()).toBeVisible();
     const id2 = await page

@@ -301,6 +301,53 @@ export async function waitForReadingSurface(page: Page): Promise<void> {
 }
 
 /**
+ * Apply `document.body.style.zoom` from a settled paginated surface and wait
+ * for the reader to finish laying out at that zoom, before any interaction.
+ *
+ * A zoom change repaginates asynchronously, a few hundred ms later. That pass
+ * either commits new pages or, when content can no longer be divided at the
+ * zoomed geometry, publishes a terminal fallback, and the session flips to
+ * scrolling. That unmounts the paginated surface and every mark in it.
+ * Interacting before it lands races that swap: focus restored to a mark is
+ * lost when the mark is replaced. Body zoom is engine-variable, so this waits
+ * for whichever outcome the engine produces: any publication NEWER than the
+ * pre-zoom one that is either settled "ok" or "fallback". It never assumes
+ * which, and never sleeps. An engine that ignores the zoom entirely publishes
+ * nothing and times out, which is a visible signal rather than a silent pass.
+ */
+export async function zoomBodyAndSettle(page: Page, zoom: string): Promise<void> {
+  const before = await page.evaluate(
+    () =>
+      (window as unknown as { __lemPagination?: { publicationSeq?: number } }).__lemPagination
+        ?.publicationSeq,
+  );
+  if (typeof before !== "number") {
+    throw new Error(
+      "zoomBodyAndSettle: no pre-zoom publicationSeq — call it on a settled paginated surface (after openArticle)",
+    );
+  }
+  await page.evaluate((z) => {
+    document.body.style.zoom = z;
+  }, zoom);
+  const outcome = await (
+    await page.waitForFunction((seq) => {
+      const dev = (window as unknown as Record<string, unknown>).__lemPagination as
+        { publicationSeq?: number; status?: string; overflowSettled?: boolean } | undefined;
+      if (!dev || typeof dev.publicationSeq !== "number" || dev.publicationSeq <= seq) return false;
+      if (dev.status === "fallback") return "fallback";
+      return dev.status === "ok" && dev.overflowSettled === true ? "ok" : false;
+    }, before)
+  ).jsonValue();
+  if (outcome === "fallback") {
+    // The fallback publication precedes the session flip; wait for the
+    // scrolling body that replaces the paginated surface.
+    await expect(
+      page.locator(".article-body:not(.article-body-measurement):not(.paginated-surface)"),
+    ).toBeVisible();
+  }
+}
+
+/**
  * Query the visible reading surface (the live .page-fragment in paginated
  * mode, the live .article-body in scrolling mode). Excludes the always-
  * mounted hidden measurement body (Plan 04-08).
