@@ -20,6 +20,16 @@ test("a window crossing does not wait for a geometry debounce", async ({ page })
   await page.clock.install();
   await page.clock.pauseAt(new Date());
   await page.keyboard.press("ArrowRight");
+  // The crossing's window publication arrives through real-time work (render
+  // scheduling the fake clock does not control). Demand it with the clock
+  // still PAUSED: zero virtual time, so a crossing gated on any timer, such
+  // as the 400 ms debounce, never arrives here. Only then run virtual time
+  // for the frame-deferred overflow check that issues the turn receipt. A
+  // bare runFor() can finish before the publication lands, leaving that
+  // check queued on a paused clock.
+  await expect
+    .poll(async () => (await readPagination(page))?.publicationSeq)
+    .toBeGreaterThan(before.publicationSeq!);
   await page.clock.runFor(200);
   const after = await readPagination(page);
   expect(after?.turnSeq).toBeGreaterThan(before.turnSeq!);
