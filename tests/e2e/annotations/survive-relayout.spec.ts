@@ -106,6 +106,11 @@ test.describe("ANNO-05 / STATE-03 survive relayout (05-05)", () => {
     await page.keyboard.press("n");
     await page.locator("textarea.highlight-popover-textarea").fill("Surviving note.");
     await page.locator("#highlight-popover .highlight-popover-done").click();
+    // The editor closes only after the awaited note write lands (issue
+    // #177). Reloading before that interrupts the write. The text survives
+    // as a recovery draft, but the landed-note contract this cell proves
+    // does not.
+    await expect(page.locator("dialog#highlight-popover")).not.toBeVisible();
     await expect(page.locator("mark.highlight").first()).toBeVisible();
     const hlId = await page.locator("mark.highlight").first().getAttribute("data-highlight-id");
     expect(hlId).toBeTruthy();

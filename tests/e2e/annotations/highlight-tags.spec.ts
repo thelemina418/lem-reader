@@ -25,6 +25,7 @@ import {
   switchMode,
   announcementRegion,
   waitForReadingSurface,
+  zoomBodyAndSettle,
 } from "./_fixtures";
 import { makeArticle, prepareFreshPage, seedRows } from "../portability/_portability";
 
@@ -411,11 +412,11 @@ test.describe("highlight tags in the reader (issue #207)", () => {
   }) => {
     // Keyboard-only on purpose (the note-placement zoom discipline): exact
     // zoom geometry is engine-variable — this cell proves FUNCTION
-    // reachability at the 400% code path, not pixel positions.
+    // reachability at the 400% code path, not pixel positions. The zoom's
+    // own relayout (a repagination or a fallback flip to scrolling) must
+    // land BEFORE the session: a flip after Escape replaces the focused mark.
     await openArticle(page, FIXTURE);
-    await page.evaluate(() => {
-      document.body.style.zoom = "4";
-    });
+    await zoomBodyAndSettle(page, "4");
     const blockIdx = await findFirstBlockWithText(page, 24);
     await selectRangeInBlock(page, blockIdx, 0, 14);
     await page.keyboard.press("n");
