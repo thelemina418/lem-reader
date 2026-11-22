@@ -228,9 +228,15 @@ test.describe("ANNO-02 note create + edit (05-05)", () => {
   });
 });
 
-/** Click the popover's Done button (flushes the debounced note save). */
+/**
+ * Click the popover's Done button and wait for the editor to close. The
+ * editor stays open, its actions disabled, until the awaited note save lands
+ * (issue #177); reopening before then finds the closing editor, not the
+ * controls.
+ */
 async function popoverDone(page: import("@playwright/test").Page): Promise<void> {
   await page.locator("#highlight-popover .highlight-popover-done").click();
+  await expect(page.locator("dialog#highlight-popover")).not.toBeVisible();
 }
 
 // ── Phase 19 (Plan 19-05 Task 2 item 6): the SPAN note-edit cell ──────────────

@@ -47,6 +47,10 @@ test.describe("ANNO-03 delete confirm (05-05)", () => {
     await page.keyboard.press("n");
     await noteTextarea(page).fill("Note to delete.");
     await page.locator("#highlight-popover .highlight-popover-done").click();
+    // The editor closes only after the awaited note save lands (issue #177).
+    // Until then it is still open with its actions disabled, so reopening
+    // the controls would find the closing editor instead.
+    await expect(page.locator("dialog#highlight-popover")).not.toBeVisible();
     // Reopen: mark click → the lightweight controls → Delete.
     await openHighlightControls(page);
     await (await annotationAction(page, "Delete")).click();
@@ -74,6 +78,7 @@ test.describe("ANNO-03 delete confirm (05-05)", () => {
     await page.keyboard.press("n");
     await noteTextarea(page).fill("Note to keep.");
     await page.locator("#highlight-popover .highlight-popover-done").click();
+    await expect(page.locator("dialog#highlight-popover")).not.toBeVisible();
     await expect(page.locator("mark.highlight").first()).toBeVisible();
     const baseline = await page.locator("mark.highlight").count();
 
@@ -102,6 +107,7 @@ test.describe("ANNO-03 delete confirm (05-05)", () => {
     await page.keyboard.press("n");
     await noteTextarea(page).fill("Note to delete.");
     await page.locator("#highlight-popover .highlight-popover-done").click();
+    await expect(page.locator("dialog#highlight-popover")).not.toBeVisible();
     // Capture the highlight id so we can verify both the mark + the Dexie
     // row are gone after delete.
     const hlId = await page.locator("mark.highlight").first().getAttribute("data-highlight-id");
@@ -153,6 +159,7 @@ test.describe("ANNO-03 delete confirm (05-05)", () => {
     await page.keyboard.press("n");
     await noteTextarea(page).fill("Span note to delete with the highlight.");
     await page.locator("#highlight-popover .highlight-popover-done").click();
+    await expect(page.locator("dialog#highlight-popover")).not.toBeVisible();
     const mark = page.locator("mark.highlight").first();
     await expect(mark).toBeVisible();
     const hlId = await mark.getAttribute("data-highlight-id");
@@ -231,6 +238,7 @@ test.describe("Issue #174 — no-note highlights delete immediately (reading mod
     // and closes with Done — the highlight stays note-less.
     await page.keyboard.press("n");
     await page.locator("#highlight-popover .highlight-popover-done").click();
+    await expect(page.locator("dialog#highlight-popover")).not.toBeVisible();
     const mark = page.locator("mark.highlight").first();
     await expect(mark).toBeVisible();
     const hlId = await mark.getAttribute("data-highlight-id");
@@ -283,6 +291,7 @@ test.describe("Issue #174 — no-note highlights delete immediately (reading mod
     // unchanged) but it gates nothing — there is no written content to lose.
     await noteTextarea(page).fill("   ");
     await page.locator("#highlight-popover .highlight-popover-done").click();
+    await expect(page.locator("dialog#highlight-popover")).not.toBeVisible();
     await expect(page.locator("mark.highlight").first()).toBeVisible();
 
     await openHighlightControls(page);
@@ -303,6 +312,7 @@ test.describe("Issue #174 — no-note highlights delete immediately (reading mod
     await page.keyboard.press("n");
     await noteTextarea(page).fill("Worth a confirmation.");
     await page.locator("#highlight-popover .highlight-popover-done").click();
+    await expect(page.locator("dialog#highlight-popover")).not.toBeVisible();
     await expect(page.locator("mark.highlight").first()).toBeVisible();
 
     await openHighlightControls(page);
@@ -338,6 +348,7 @@ test.describe("Issue #174 — no-note highlights delete immediately (reading mod
     await selectRangeInBlock(page, blockIdx, 0, 18);
     await page.keyboard.press("n");
     await page.locator("#highlight-popover .highlight-popover-done").click();
+    await expect(page.locator("dialog#highlight-popover")).not.toBeVisible();
     await expect(page.locator("mark.highlight").first()).toBeVisible();
 
     await openHighlightControls(page);
