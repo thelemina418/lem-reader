@@ -1033,9 +1033,20 @@ export async function openHighlightControls(page: Page): Promise<Locator> {
  */
 export async function openNoteEditorViaControls(page: Page): Promise<void> {
   const controls = await openHighlightControls(page);
-  if (!(await noteTextarea(page).isVisible())) {
-    await controls.getByRole("button", { name: "Add note" }).click();
-  } else await noteTextarea(page).focus();
+  const textarea = noteTextarea(page);
+  // A recovered draft (issue #178) loads asynchronously and expands the note
+  // after the controls open, which replaces the Add note action. Retry the
+  // check-then-click as a unit so that expansion cannot strand the click.
+  // Keep each attempt short: the recovered marker lasts only until the
+  // restored text saves (800 ms debounce), and callers assert on it.
+  await expect(async () => {
+    if (await textarea.isVisible()) {
+      await textarea.focus();
+      return;
+    }
+    await controls.getByRole("button", { name: "Add note" }).click({ timeout: 200 });
+    await expect(textarea).toBeVisible({ timeout: 500 });
+  }).toPass({ intervals: [0] });
   await expect(page.locator("dialog#highlight-popover")).toBeVisible();
 }
 

@@ -296,6 +296,7 @@ test.describe("highlight tags in the reader (issue #207)", () => {
     await tagInput.press("Enter");
     await expect(dialog.locator(".tag-picker-pill-text")).toHaveText(["legacy-tag", "kept-anyway"]);
     await dialog.locator(".highlight-popover-done").click();
+    await expect(page.locator("dialog#highlight-popover")).not.toBeVisible();
     await expect
       .poll(async () => (await readFirstHighlightRow(page))?.tags)
       .toEqual(["legacy-tag", "kept-anyway"]);

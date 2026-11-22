@@ -195,6 +195,7 @@ test.describe("Drawer delete (issue #175 + #174)", () => {
     await page.keyboard.press("n");
     await page.locator("textarea.highlight-popover-textarea").fill("Drawer delete probe.");
     await page.locator("#highlight-popover .highlight-popover-done").click();
+    await expect(page.locator("dialog#highlight-popover")).not.toBeVisible();
     await expect(page.locator("mark.highlight").first()).toBeVisible();
     const baseline = await page.locator("mark.highlight").count();
 
