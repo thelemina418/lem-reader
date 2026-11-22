@@ -107,6 +107,27 @@ function overlap(a: Box, b: Box): boolean {
   );
 }
 
+/** Read the geometry once the editor has stopped moving. A content change
+ *  repositions the editor through a ResizeObserver, a frame and a React
+ *  render, so a read taken right after the change can see the old place.
+ *  Settled means three identical reads 100 ms apart. */
+async function readSettledGeometry(page: Page): Promise<Awaited<ReturnType<typeof readGeometry>>> {
+  let last = await readGeometry(page);
+  let unchanged = 0;
+  await expect
+    .poll(
+      async () => {
+        const next = await readGeometry(page);
+        unchanged = JSON.stringify(next) === JSON.stringify(last) ? unchanged + 1 : 0;
+        last = next;
+        return unchanged;
+      },
+      { intervals: [100] },
+    )
+    .toBeGreaterThanOrEqual(3);
+  return last;
+}
+
 /** Create a highlight + open the editor through the proven create path
  *  (selection → N), then close via Done so the highlight survives for the
  *  controls-based reopening the placement specs use. */
@@ -167,10 +188,10 @@ test.describe("Issue #176 — note editor placement beside the passage", () => {
     await openNoteEditorViaControls(page);
     await expect(noteTextarea(page)).toBeFocused();
 
-    const before = await readGeometry(page);
+    const before = await readSettledGeometry(page);
     expect(before.mode).toBe("gutter");
     await noteTextarea(page).fill("L".repeat(4000));
-    const after = await readGeometry(page);
+    const after = await readSettledGeometry(page);
 
     expect(after.mode).toBe("gutter");
     expect(after.box!.x).toBeCloseTo(before.box!.x, 0);
@@ -183,9 +204,9 @@ test.describe("Issue #176 — note editor placement beside the passage", () => {
     expect(after.box!.height).toBeLessThan(after.vh);
     const textarea = noteTextarea(page);
     expect(await textarea.evaluate((el) => el.scrollHeight > el.clientHeight)).toBe(true);
-    const bounded = await readGeometry(page);
+    const bounded = await readSettledGeometry(page);
     await textarea.fill("L".repeat(8000));
-    const longer = await readGeometry(page);
+    const longer = await readSettledGeometry(page);
     expect(longer.box!.y).toBeCloseTo(bounded.box!.y, 0);
     expect(longer.box!.height).toBeCloseTo(bounded.box!.height, 0);
   });
