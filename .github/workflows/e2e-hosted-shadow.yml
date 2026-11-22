@@ -1,0 +1,81 @@
+# Hosted macOS shadow of the PR browser gate (issue #285).
+#
+# A DISTINCT, NON-AUTHORITATIVE producer. It runs the same PR suite as
+# ci.yml's e2e-reference (`npm run test:e2e:pr`, unchanged config, retries
+# and timeouts) on GitHub-hosted macOS, one job per engine. Same entry point,
+# only a project selector. The Mac (lem-reference) STAYS AUTHORITATIVE:
+#
+# - The check names are `e2e-hosted (<engine>)`, never `e2e-reference`, so
+#   neither protection layer (classic branch protection or ruleset
+#   24549266) can mistake them for the gate. They are not required checks;
+#   a red shadow job does not block a merge.
+# - pull_request only. Checks land on PR heads, never on main's SHA
+#   (issue #226: main's check-run surface stays exactly the gates).
+# - ci.yml, the Mac runner, factory-validation, nightly and evidence.yml
+#   are untouched.
+#
+# Purpose: same-revision comparison against e2e-reference on every PR until
+# the owner accepts or rejects routing the gate here. The acceptance
+# criteria and the cutover shape are in the PR that added this file.
+# Retire it by deleting this file.
+name: e2e-hosted-shadow
+
+on:
+  pull_request:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  e2e-hosted:
+    name: e2e-hosted (${{ matrix.project }})
+    runs-on: macos-15
+    # Same per-job limit as e2e-reference. Trial 3 (run 44931256174) took
+    # 45 / 57 / 49 min for chromium / firefox / webkit.
+    timeout-minutes: 90
+    strategy:
+      # One red engine must not hide the others' outcomes.
+      fail-fast: false
+      matrix:
+        project: [chromium, firefox, webkit]
+    env:
+      LEM_E2E_BASE: http://localhost:15173
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - run: npx playwright install ${{ matrix.project }}
+      # Duration and flake interpretation need the runner image and load.
+      - name: Record test environment
+        run: |
+          git rev-parse HEAD
+          printf 'Runner image: %s %s\n' "$ImageOS" "$ImageVersion"
+          sw_vers
+          uname -m
+          node --version
+          npx playwright --version
+          uptime
+      - name: PR suite (${{ matrix.project }})
+        run: npm run test:e2e:pr -- --project=${{ matrix.project }} --reporter=line,json
+        env:
+          PLAYWRIGHT_JSON_OUTPUT_FILE: .test-reports/functional-${{ matrix.project }}.json
+      - name: Upload Playwright results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: playwright-artifacts-hosted-${{ matrix.project }}
+          include-hidden-files: true
+          path: |
+            test-results/
+            .test-reports/functional-${{ matrix.project }}.json
+          retention-days: 7
+          if-no-files-found: ignore
