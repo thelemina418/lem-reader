@@ -272,4 +272,65 @@ test.describe("Note popover modal-dialog focus (ACPT-02 finding #2)", () => {
       page.getByRole("dialog", { name: "Highlight", description: descriptionRe }),
     ).toBeVisible();
   });
+
+  test("a late close event never closes controls opened after the dialog closed (#285)", async ({
+    page,
+  }) => {
+    // The browser fires `close` asynchronously after dialog.close(). Hold
+    // every dialog close listener back 150 ms, as a loaded machine can, so
+    // the highlight is activated again before the previous session's event
+    // arrives. Count the delayed runs to know when that event has landed.
+    await page.addInitScript(() => {
+      const win = window as unknown as { __lateCloseRuns: number };
+      win.__lateCloseRuns = 0;
+      const add = EventTarget.prototype.addEventListener;
+      const remove = EventTarget.prototype.removeEventListener;
+      const delayed = new WeakMap<EventListener, EventListener>();
+      EventTarget.prototype.addEventListener = function (type, listener, options) {
+        if (
+          type === "close" &&
+          this instanceof HTMLDialogElement &&
+          typeof listener === "function"
+        ) {
+          const late: EventListener = (event) =>
+            setTimeout(() => {
+              listener.call(this, event);
+              win.__lateCloseRuns++;
+            }, 150);
+          delayed.set(listener, late);
+          return add.call(this, type, late, options);
+        }
+        return add.call(this, type, listener, options);
+      };
+      EventTarget.prototype.removeEventListener = function (type, listener, options) {
+        const late = typeof listener === "function" ? delayed.get(listener) : undefined;
+        return remove.call(this, type, late ?? listener, options);
+      };
+    });
+    await page.reload();
+    await createHighlightAndOpenEditor(page);
+    const runsBefore = await page.evaluate(
+      () => (window as unknown as { __lateCloseRuns: number }).__lateCloseRuns,
+    );
+    await page.locator("#highlight-popover .highlight-popover-done").click();
+    const dlg = page.locator("dialog#highlight-popover");
+    await expect(dlg).not.toBeVisible();
+
+    // Reactivate the highlight while the first session's close is pending.
+    const mark = page.locator("mark.highlight").first();
+    await mark.focus();
+    await page.keyboard.press("Enter");
+    const controls = page.locator("dialog.annotation-panel[open]");
+    await expect(controls).toBeVisible();
+
+    // Once the late event has run, the new controls are still open and
+    // still hold focus.
+    await expect
+      .poll(() =>
+        page.evaluate(() => (window as unknown as { __lateCloseRuns: number }).__lateCloseRuns),
+      )
+      .toBeGreaterThan(runsBefore);
+    await expect(controls).toBeVisible();
+    await expect(controls.getByRole("button", { name: "Add note" })).toBeFocused();
+  });
 });

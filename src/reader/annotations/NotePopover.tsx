@@ -197,6 +197,11 @@ export function NotePopover(): React.ReactElement | null {
   // edit after the failed dismissal is a decision to stay).
   const [working, setWorking] = useState(false);
   const workingRef = useRef(false);
+  // The browser fires `close` asynchronously after dlg.close(). Set when this
+  // component closes the dialog because its state already went empty, so the
+  // listener knows that state is cleared and must not be cleared again: a
+  // highlight activated before the event fires has already set new state.
+  const stateDrivenCloseRef = useRef(false);
   const dismissalPendingRef = useRef(false);
   // The highlight id THIS editor session belongs to, captured at open.
   // Retry and the dismissal flush only ever address this id — the
@@ -326,6 +331,7 @@ export function NotePopover(): React.ReactElement | null {
       // State-driven close (guarded dismissal / Keep / delete-confirm).
       // dlg.close() fires the `close` event → the listener below flushes the
       // note save (safety net) + restores focus.
+      stateDrivenCloseRef.current = true;
       dlg.close();
     }
   }, [activeId, isConfirm, resetNoteSaveState, resolved, openPopoverFor, noteText]);
@@ -650,6 +656,12 @@ export function NotePopover(): React.ReactElement | null {
   // unobstructed. All annotation coordination states clear together;
   // returning focus never recreates the controls or another dismissal layer.
   //
+  // The event is asynchronous (#285): a highlight can be activated after
+  // dlg.close() but before `close` fires. When the close was state-driven,
+  // the coordination state is already empty, so the listener leaves it
+  // alone rather than clearing the newer request. When a newer session has
+  // already reopened the dialog, the listener does nothing at all.
+  //
   // `cancel` (issue #177): the browser fires it for Escape BEFORE closing.
   // preventDefault + the guarded dismissal — the browser-default close must
   // never outrun the awaited save, or a failed write would close the editor
@@ -658,12 +670,23 @@ export function NotePopover(): React.ReactElement | null {
     const dlg = popoverRef.current;
     if (!dlg) return;
     const handleCloseEvent = () => {
+      const stateDriven = stateDrivenCloseRef.current;
+      stateDrivenCloseRef.current = false;
+      // A newer session reopened the dialog before this late event arrived.
+      // Its state, refs and focus are current; leave them alone.
+      if (dlg.open) return;
       copyAttemptRef.current++;
       flushNoteSave();
-      setPanelFor(null);
       setTagsExpanded(false);
-      setOpenPopoverFor(null);
-      setConfirmDeleteFor(null);
+      if (!stateDriven) {
+        // A close this component did not drive: clear the session's state.
+        // After a state-driven close it is already empty, and clearing it
+        // again would discard a request made before this event fired.
+        setPanelFor(null);
+        setOpenPopoverFor(null);
+        setConfirmDeleteFor(null);
+        setControlsFor(null);
+      }
       const mark = readingHighlightRef.current
         ? visibleMarkForId(readingHighlightRef.current)
         : null;
@@ -676,7 +699,6 @@ export function NotePopover(): React.ReactElement | null {
       const listTrigger =
         originItem?.querySelectorAll<HTMLElement>("button")[origin?.actionIndex ?? 0];
       const restoreTo = focusRestoreRef.current ?? listTrigger ?? mark ?? triggerRef.current;
-      setControlsFor(null);
       listOriginRef.current = null;
       readingHighlightRef.current = null;
       focusRestoreRef.current = null;
