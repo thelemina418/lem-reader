@@ -10,7 +10,7 @@
 
 | item                                      | value                                                                           |
 | ----------------------------------------- | ------------------------------------------------------------------------------- |
-| repository                                | thelemina418/lem-reader                                                            |
+| repository                                | thelemina418/lem-reader                                                         |
 | candidate SHA                             | **UNCOLLECTED — the candidate SHA argument was not resolved**                   |
 | candidate tree                            | **UNCOLLECTED — candidate tree not resolved**                                   |
 | environment pin (recorded at candidate)   | **UNCOLLECTED — the recorded environment pin at the candidate SHA**             |
