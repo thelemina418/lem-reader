@@ -203,8 +203,12 @@ runner to report online. The old runner directory is preserved at
 ## Enforced trusted revision and update procedure
 
 The pin (`lemfleet-rev`) currently records lemfleet
-`3c8682b732002b85ba126a2408ee9acb374df2a0` (lemfleet#12, F5 — the revision
-that took over `factory-validation`, lemfleet ADR-0012). **A clean checkout is not a
+`b06493f8a8fbc2cc7c68c23c95721c1f426100d5`: `thelemina418/lemfleet` main
+after the move from `wvanderen`. It is the rewritten twin of the previous
+pin `e9ac0e6…` (the merge of the old lemfleet PR #34), and differs from it
+only by the owner rename. The pin before that was `3c8682b…` (lemfleet#12,
+F5 — the revision that took over `factory-validation`, lemfleet ADR-0012).
+**A clean checkout is not a
 pin**: the wrapper compares the harness checkout's HEAD against the pin
 file on every run and refuses mismatches (exit 4), so an outdated, advanced
 or locally modified checkout cannot silently produce check runs.
