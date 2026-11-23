@@ -118,7 +118,7 @@ node ops/lemcentre-runner/verify-enforcement.mjs            # pre-cutover produc
 node ops/lemcentre-runner/verify-enforcement.mjs --expect-linux   # only post-cutover
 gh api repos/thelemina418/lem-reader/branches/main/protection
 gh api repos/thelemina418/lem-reader/rulesets
-gh api repos/thelemina418/lem-reader/rulesets/24549266
+gh api repos/thelemina418/lem-reader/rulesets/27907308
 ```
 
 Repair the classic layer (PUT replaces the whole protection object — send
@@ -132,7 +132,12 @@ gh api -X PUT repos/thelemina418/lem-reader/branches/main/protection --input - <
     "contexts": ["checks", "e2e-reference", "factory-validation"]
   },
   "enforce_admins": false,
-  "required_pull_request_reviews": null,
+  "required_pull_request_reviews": {
+    "dismiss_stale_reviews": false,
+    "require_code_owner_reviews": false,
+    "require_last_push_approval": false,
+    "required_approving_review_count": 0
+  },
   "restrictions": null,
   "allow_force_pushes": false,
   "allow_deletions": false
@@ -144,17 +149,19 @@ Repair the ruleset layer (PATCH `rules` replaces the rules array — send
 every rule the ruleset must keep):
 
 ```bash
-gh api -X PATCH repos/thelemina418/lem-reader/rulesets/24549266 --input - <<'JSON'
+gh api -X PATCH repos/thelemina418/lem-reader/rulesets/27907308 --input - <<'JSON'
 {
   "rules": [
+    { "type": "deletion" },
+    { "type": "non_fast_forward" },
     {
       "type": "required_status_checks",
       "parameters": {
-        "strict": false,
+        "strict_required_status_checks_policy": false,
         "do_not_enforce_on_create": false,
         "required_status_checks": [
-          { "context": "checks" },
-          { "context": "e2e-reference" }
+          { "context": "checks", "integration_id": 15368 },
+          { "context": "e2e-reference", "integration_id": 15368 }
         ]
       }
     }
@@ -168,7 +175,12 @@ Recorded deliberate state (verify-enforcement asserts both):
 - classic `enforce_admins: false` → **admin bypass ON** (the owner merges
   own PRs through it — lemfleet ADR-0012). `true` is a surprise, not a
   hardening.
-- ruleset "main guardrails" has **no bypass actors**.
+- classic layer requires a pull request with 0 approvals (direct pushes to
+  `main` go through a PR; the admin bypass still applies).
+- ruleset "main guardrails" (id 27907308 since the move to `thelemina418`;
+  the pre-move id was 24549266) targets `refs/heads/main`, has **no bypass
+  actors**, blocks deletion and force pushes, and pins both checks to the
+  GitHub Actions app (`integration_id` 15368).
 - `factory-validation` lives in the classic layer only — do NOT add it to
   the ruleset.
 
