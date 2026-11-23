@@ -47,7 +47,7 @@ function classicFixture(contexts: string[], enforceAdmins = false) {
 function rulesetListFixture() {
   return [
     {
-      id: 24549266,
+      id: 27907308,
       name: "main guardrails",
       enforcement: "active",
       source: "thelemina418/lem-reader",
@@ -59,7 +59,7 @@ function rulesetDetailFixture(contexts: string[], bypassActors: unknown[] = []) 
   // Live shape (observed 2026-11-17): the detail carries `bypass` (the
   // older `bypass_actors` key is also accepted by the analyzer).
   return {
-    id: 24549266,
+    id: 27907308,
     name: "main guardrails",
     enforcement: "active",
     source: "thelemina418/lem-reader",

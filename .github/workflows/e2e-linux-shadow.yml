@@ -18,7 +18,7 @@
 # NON-AUTHORITATIVE by design (mirror of browser-guest-smoke.yml /
 # browser-guest-diagnostics.yml): the check name e2e-linux-shadow is
 # deliberately distinct so no protection layer (classic branch protection
-# or ruleset 24549266) can ever confuse it with the e2e-reference gate.
+# or ruleset 27907308) can ever confuse it with the e2e-reference gate.
 #
 # HONEST-RED discipline: until lemfleet#21 provisions the browser guest
 # and installs the trusted browser-suite launcher, this lane runs visibly

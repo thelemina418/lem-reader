@@ -18,7 +18,7 @@
 # browser-guest-diagnostics.yml / e2e-linux-shadow.yml, issues
 # #278/#279/#281): the check name nightly-linux-shadow is deliberately
 # distinct so no protection layer (classic branch protection or ruleset
-# 24549266) can confuse it with any gate. It is never a required check
+# 27907308) can confuse it with any gate. It is never a required check
 # and never attaches to a PR.
 #
 # HONEST-RED discipline: until the lemfleet companion ticket provisions
