@@ -27,7 +27,8 @@
 //   - NOT sticky (READ-04 — sticky chrome competes with content).
 //
 // Lifecycle (UI-SPEC §Interaction 23, unchanged): the banner auto-dismisses
-// on the reader's first scroll or pointer activity (ArticleView owns the
+// on the reader's first scrolling gesture (wheel, touch, scroll keys — never
+// the app's own programmatic scroll) or pointer activity (ArticleView owns the
 // listeners + the visibility flag — this component stays a controlled
 // presentational surface). A polite announce fires on appearance via the
 // role=status region (aria-live regions announce freshly inserted content).
