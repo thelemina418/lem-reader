@@ -38,6 +38,7 @@
 import { test, expect, type Page } from "@playwright/test";
 import {
   BASE,
+  announcementRegion,
   wipeDatabase,
   selectRangeInBlock,
   findFirstBlockWithText,
@@ -935,6 +936,10 @@ test.describe("ING-05 — chapter reading identity (SC#2)", () => {
     await expect(mark).toBeVisible();
     const highlightId = await mark.getAttribute("data-highlight-id");
     expect(highlightId).toBeTruthy();
+    // The mark is drawn optimistically before saveHighlight resolves; the
+    // announce fires only after the write lands. Reloading on the mark alone
+    // can interrupt the write (same race as old #315's note save).
+    await expect(announcementRegion(page)).toContainText(/Highlight saved/i);
 
     // Reload #1 — location restores within the persistence.spec tolerances
     // AND the highlight re-renders from Dexie at its offset.
