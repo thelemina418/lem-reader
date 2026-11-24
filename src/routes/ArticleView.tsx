@@ -2784,87 +2784,66 @@ export function ArticleView({
   }, [article]);
 
   // Phase 4 Plan 04-05 (PAGE-09): auto-dismiss the fallback banner on the
-  // reader's first scroll or pointer activity (UI-SPEC §Interaction 23 —
-  // mirrors the retired resume banner's original pattern, D18-06).
-  // Registered ONLY while the banner
-  // is shown. The banner reappears if fallback re-triggers on a later
-  // repagination (it is NOT one-per-session — the subscription re-shows it).
-  // Auto-dismiss hides the banner only; the session-mode override stays so
-  // the reader remains in scrolling until they explicitly Switch to pages /
-  // toggle (the banner is non-blocking chrome, not the fallback itself).
+  // reader's first scrolling gesture or pointer activity (UI-SPEC
+  // §Interaction 23 — mirrors the retired resume banner's original pattern,
+  // D18-06). Registered ONLY while the banner is shown. The banner reappears
+  // if fallback re-triggers on a later repagination (it is NOT
+  // one-per-session — the subscription re-shows it). Auto-dismiss hides the
+  // banner only; the session-mode override stays so the reader remains in
+  // scrolling until they explicitly Switch to pages / toggle (the banner is
+  // non-blocking chrome, not the fallback itself).
   //
-  // Plan 04-10 (PAGE-09 banner-race fix): the ORIGINAL ResumeBanner-style
-  // pattern ({ passive: true, once: true } on BOTH scroll + pointerdown)
-  // tears the banner down BEFORE the reader's "Switch to pages" / × click
-  // lands on firefox + webkit. Two races compound:
-  //   (a) Playwright's click actionability check fires a "scroll into view"
-  //       which generates a scroll event → the scroll listener dismisses →
-  //       React unmounts the banner → the subsequent click event finds the
-  //       element detached → 30s timeout ("element was detached from the
-  //       DOM, retrying").
-  //   (b) The pointerdown that precedes the click fires on the banner (the
-  //       pointer IS on the banner to click it) → the pointerdown listener
-  //       dismisses → same detach.
-  // Chromium passed both by timing luck; firefox + webkit expose the race.
+  // Reader INTENT, never a `scroll` event (issue #240 follow-up). The app
+  // scrolls the window itself — the mode swap and the fallback flip restore
+  // the reader's passage — and a `scroll` listener cannot tell that apart
+  // from the reader. After "Switch to pages" the engine re-emits the genuine
+  // oversize, the banner re-shows, and the app's own passage-restore scroll
+  // then dismissed it with no reader input (WebKit
+  // fallback-banner.spec.ts:170, ~8% in the browser guest). So the scrolling
+  // signals are the reader's own scroll gestures: wheel, touch scrolling and
+  // the scroll keys. A programmatic scroll (including Playwright's
+  // scroll-into-view before a click — the Plan 04-10 race) fires none of
+  // them, so the old 300 ms scroll-dismiss debounce is no longer needed.
   //
-  // Fix (combines the plan's Fix A + a scroll debounce): the pointerdown
-  // listener IGNORES events originating INSIDE the banner (pointer activity
-  // ON the banner is the reader acting on it — the explicit onClick handlers
-  // on the buttons handle their own dismissal). The scroll listener does NOT
-  // use { once: true } — instead it SCHEDULES a dismiss after a short delay
-  // (DISMISS_DELAY_MS). If a pointerdown inside the banner follows within
-  // that window (the actual click on Switch to pages / ×), the pending
-  // scroll-dismiss is CANCELLED so the click-action sequence completes
-  // without the banner being torn down. A real user scrolling still dismisses
-  // — the 300ms delay is imperceptible. A real user clicking outside the
-  // banner dismisses immediately (the pointerdown-outside path). The
-  // bannerEl.contains check reads only DOM geometry (EventTarget →
-  // Node.contains) — pure layout check, no reader data (T-04-10-02 accept).
+  // Pointer activity keeps the Plan 04-10 rule: a pointerdown INSIDE the
+  // banner is the reader acting on its controls (their own onClick handlers
+  // dismiss as appropriate); a pointerdown elsewhere dismisses immediately.
+  // Keys pressed on the banner's controls or in an editable field are not
+  // scrolling. The bannerEl.contains check reads only DOM structure
+  // (EventTarget → Node.contains) — no reader data (T-04-10-02 accept).
   useEffect(() => {
     if (fallbackFailure === null) return;
-    const DISMISS_DELAY_MS = 300;
-    let dismissTimer: ReturnType<typeof setTimeout> | null = null;
-    const scheduleDismiss = () => {
-      if (dismissTimer) return; // already scheduled — coalesce
-      dismissTimer = setTimeout(() => {
-        setFallbackFailure(null);
-      }, DISMISS_DELAY_MS);
-    };
-    const cancelDismiss = () => {
-      if (dismissTimer) {
-        clearTimeout(dismissTimer);
-        dismissTimer = null;
-      }
-    };
-    const onScroll = () => {
-      // Schedule rather than dismiss immediately so Playwright's scroll-into-
-      // view (part of click actionability) doesn't tear the banner down
-      // before the pointerdown/click that follows. If a pointerdown inside
-      // the banner follows within DISMISS_DELAY_MS, cancelDismiss aborts it.
-      scheduleDismiss();
-    };
-    const onPointerDown = (event: PointerEvent) => {
-      const target = event.target;
+    const SCROLL_KEYS = new Set(["PageDown", "PageUp", "ArrowDown", "ArrowUp", "Home", "End", " "]);
+    const insideBanner = (target: EventTarget | null): boolean => {
       const bannerEl = document.querySelector(".pagination-fallback-banner");
-      if (target instanceof Node && bannerEl && bannerEl.contains(target)) {
-        // Pointer inside the banner — the reader is interacting with the
-        // banner's own controls (Switch to pages / Try pages again / Read in
-        // scrolling / See the original / ×). Cancel any pending
-        // scroll-dismiss so the click-action sequence completes without the
-        // banner being torn down (the PAGE-09 race). The explicit onClick
-        // handlers on the buttons handle their own dismissal.
-        cancelDismiss();
+      return target instanceof Node && bannerEl !== null && bannerEl.contains(target);
+    };
+    const dismiss = () => setFallbackFailure(null);
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (!SCROLL_KEYS.has(event.key)) return;
+      if (event.ctrlKey || event.metaKey || event.altKey) return;
+      const target = event.target;
+      if (insideBanner(target)) return;
+      if (
+        target instanceof HTMLElement &&
+        (target.isContentEditable || target.closest("input, textarea, select") !== null)
+      ) {
         return;
       }
-      // Pointer outside the banner — the reader is interacting elsewhere.
-      // Dismiss immediately (no delay — this is unambiguous intent).
-      setFallbackFailure(null);
+      dismiss();
     };
-    window.addEventListener("scroll", onScroll, { passive: true });
+    const onPointerDown = (event: PointerEvent) => {
+      if (insideBanner(event.target)) return;
+      dismiss();
+    };
+    window.addEventListener("wheel", dismiss, { passive: true });
+    window.addEventListener("touchmove", dismiss, { passive: true });
+    window.addEventListener("keydown", onKeyDown);
     window.addEventListener("pointerdown", onPointerDown, { passive: true });
     return () => {
-      cancelDismiss();
-      window.removeEventListener("scroll", onScroll);
+      window.removeEventListener("wheel", dismiss);
+      window.removeEventListener("touchmove", dismiss);
+      window.removeEventListener("keydown", onKeyDown);
       window.removeEventListener("pointerdown", onPointerDown);
     };
   }, [fallbackFailure]);

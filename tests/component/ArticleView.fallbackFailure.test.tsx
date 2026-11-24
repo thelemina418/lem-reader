@@ -190,3 +190,53 @@ describe("ArticleView pagination failure classes (issue #240)", () => {
     expect(articleEl().className).toContain("paginated-surface");
   });
 });
+
+// Issue #240 follow-up — the banner's auto-dismiss reads READER intent, never
+// a `scroll` event: the app scrolls the window itself (the mode-swap / fallback
+// flip restores the reader's passage), and treating that as reader activity
+// removed a freshly re-shown banner ~300 ms after "Switch to pages" with no
+// reader input (WebKit fallback-banner.spec.ts:170, diagnosed in #3).
+describe("ArticleView fallback banner auto-dismiss (reader intent only)", () => {
+  const heading = "An element in this article is too large to fit on one page.";
+  const pause = (ms: number) => act(() => new Promise<void>((r) => setTimeout(r, ms)));
+
+  it("the app's own window scroll never dismisses the banner", async () => {
+    await renderPaginatedArticle();
+    emitFallback("oversized-block");
+    await screen.findByText(heading);
+    act(() => {
+      window.dispatchEvent(new Event("scroll"));
+    });
+    // Well past the retired 300 ms scroll-dismiss delay.
+    await pause(450);
+    expect(screen.getByText(heading)).toBeInTheDocument();
+  });
+
+  it.each([
+    ["a wheel gesture", () => new WheelEvent("wheel", { bubbles: true, deltaY: 120 })],
+    ["a touch scroll", () => new Event("touchmove", { bubbles: true })],
+    ["a scroll key", () => new KeyboardEvent("keydown", { bubbles: true, key: "PageDown" })],
+  ])("%s outside the banner dismisses it", async (_label, make) => {
+    await renderPaginatedArticle();
+    emitFallback("oversized-block");
+    await screen.findByText(heading);
+    act(() => {
+      document.body.dispatchEvent(make());
+    });
+    await waitFor(() => {
+      expect(screen.queryByText(heading)).toBeNull();
+    });
+  });
+
+  it("keys pressed on the banner's own controls do not dismiss it", async () => {
+    await renderPaginatedArticle();
+    emitFallback("oversized-block");
+    await screen.findByText(heading);
+    const control = screen.getByRole("link", { name: /See the original/ });
+    act(() => {
+      control.dispatchEvent(new KeyboardEvent("keydown", { bubbles: true, key: " " }));
+    });
+    await pause(50);
+    expect(screen.getByText(heading)).toBeInTheDocument();
+  });
+});
