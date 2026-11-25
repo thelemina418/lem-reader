@@ -97,6 +97,27 @@ async function readDefaultSlot(page: Page): Promise<number | null> {
   });
 }
 
+/** The vertical center of the block's middle rendered line. A block's
+ * geometric middle is a line seam whenever it wraps to an even number of
+ * lines (6 lines on Linux Chromium for the first essay block), and a drag
+ * along a seam only moves a caret in Chromium — no range ever forms. Aim
+ * inside a line box instead, like a reader's pointer would. */
+async function midLineY(block: Locator): Promise<number> {
+  return block.evaluate((el) => {
+    const range = document.createRange();
+    range.selectNodeContents(el);
+    const lines = new Map<number, DOMRect>();
+    for (const rect of range.getClientRects()) {
+      if (rect.height > 0 && !lines.has(Math.round(rect.top)))
+        lines.set(Math.round(rect.top), rect);
+    }
+    const sorted = [...lines.values()].sort((a, b) => a.top - b.top);
+    const mid = sorted[Math.floor(sorted.length / 2)];
+    if (!mid) throw new Error("block has no rendered lines");
+    return (mid.top + mid.bottom) / 2;
+  });
+}
+
 /** A real pointer drag across a block's mid line (mouse down → move with
  * steps → up), like a reader shaping a selection. The block is centered in
  * the viewport first — `scrollIntoViewIfNeeded` can park it behind the
@@ -112,7 +133,7 @@ async function dragAcrossBlock(
   await page.waitForTimeout(250);
   const box = await block.boundingBox();
   if (!box) throw new Error("block not visible for dragging");
-  const y = box.y + box.height / 2;
+  const y = await midLineY(block);
   if (digit) await page.keyboard.down(digit);
   await page.mouse.move(box.x + box.width * fromFrac, y);
   await page.mouse.down();
@@ -194,7 +215,7 @@ test.describe("held-number selection (issue #197/#220)", () => {
       await block.evaluate((el) => el.scrollIntoView({ block: "center", behavior: "instant" }));
       await page.waitForTimeout(250);
       const box = (await block.boundingBox())!;
-      const y = box.y + box.height / 2;
+      const y = await midLineY(block);
 
       await page.keyboard.down("2");
       await page.mouse.move(box.x + box.width * 0.04, y);
@@ -226,7 +247,7 @@ test.describe("held-number selection (issue #197/#220)", () => {
       await block.evaluate((el) => el.scrollIntoView({ block: "center", behavior: "instant" }));
       await page.waitForTimeout(250);
       const box = (await block.boundingBox())!;
-      const y = box.y + box.height / 2;
+      const y = await midLineY(block);
 
       await page.keyboard.down("4");
       await page.mouse.move(box.x + box.width * 0.04, y);
@@ -270,7 +291,7 @@ test.describe("held-number selection (issue #197/#220)", () => {
       const block = visibleBlock(page, index);
       await block.evaluate((el) => el.scrollIntoView({ block: "center", behavior: "instant" }));
       const box = (await block.boundingBox())!;
-      const y = box.y + box.height / 2;
+      const y = await midLineY(block);
       await page.keyboard.down("2");
       await page.mouse.move(box.x + box.width * 0.04, y);
       await page.mouse.down();
