@@ -196,9 +196,7 @@ describe("HighlightTagsDialog — disclosed tag editing", () => {
     // returns focus to the input when activated again.
     const addTag = within(dialog).getByRole("button", { name: "Add tag" });
     expect(addTag.getAttribute("aria-expanded")).toBe("true");
-    expect(
-      addTag.compareDocumentPosition(input) & Node.DOCUMENT_POSITION_PRECEDING,
-    ).toBeTruthy();
+    expect(addTag.compareDocumentPosition(input) & Node.DOCUMENT_POSITION_PRECEDING).toBeTruthy();
     await userEvent.setup().click(addTag);
     expect(within(dialog).getByLabelText("Add or search a tag")).toBe(input);
     await waitFor(() => expect(document.activeElement).toBe(input));
