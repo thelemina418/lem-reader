@@ -7,7 +7,7 @@ import { annotationAction } from "./_fixtures";
 // Issue #175 reshape: the Delete ENTRY lives on the lightweight highlight
 // controls (mark activation), not inside the note editor. The confirm step
 // still runs inside the SAME dialog footprint (the editor's confirm view):
-// controls → More actions → Delete → "Delete this highlight?" replaces the editor body +
+// controls → Delete → "Delete this highlight?" replaces the editor body +
 // focus moves to Keep ([data-initial-focus]). Keep closes back to the
 // controls (nothing deleted); Delete removes the highlight + note together.
 // The no-note delete stays IMMEDIATE at the controls (issue #174).
@@ -87,12 +87,12 @@ test.describe("ANNO-03 delete confirm (05-05)", () => {
     await (await annotationAction(page, "Delete")).click();
     const dlg = page.locator("#highlight-popover");
     await expect(dlg.locator(".highlight-popover-confirm")).toBeVisible();
-    // Keep returns to the panel with focus on its More actions trigger.
+    // Keep returns to the panel with focus on its Delete icon action.
     await dlg.locator("[data-initial-focus]").click();
     await expect(dlg.locator(".highlight-popover-confirm")).toHaveCount(0);
     await expect(dlg).toBeVisible();
     await expect(highlightControls(page)).toBeVisible();
-    await expect(dlg.getByRole("button", { name: "More actions" })).toBeFocused();
+    await expect(dlg.getByRole("button", { name: "Delete highlight" })).toBeFocused();
     // The highlight is still present.
     await expect(page.locator("mark.highlight")).toHaveCount(baseline);
   });
@@ -252,7 +252,7 @@ test.describe("Issue #174 — no-note highlights delete immediately (reading mod
     expect(markBlockIndex).not.toBeNull();
 
     // KEYBOARD path: focus the mark, Enter exposes the CONTROLS (issue #175
-    // — keyboard activation moves focus into them), More actions → Delete, Enter
+    // — keyboard activation moves focus into them), the Delete icon, Enter
     // deletes — no confirm step is reachable without a note.
     await mark.focus();
     await page.keyboard.press("Enter");

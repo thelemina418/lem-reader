@@ -234,6 +234,31 @@ test.describe("Issue #176 — note editor placement beside the passage", () => {
       .toBeCloseTo(before!.height, 0);
   });
 
+  test("reopening a saved long note restores the content-sized writing surface", async ({
+    page,
+  }) => {
+    await openArticle(page, FIXTURE);
+    await createHighlight(page);
+    await openHighlightControls(page);
+    await openNoteEditorViaControls(page);
+    const textarea = noteTextarea(page);
+    const text = "A line of writing.\n".repeat(40);
+    await textarea.fill(text);
+    const before = await textarea.boundingBox();
+    expect(before!.height).toBeGreaterThan(150);
+
+    // Done saves and closes; reopening must measure the note inside the
+    // open dialog, not while it is still hidden (which collapsed it to its
+    // minimum height and forced the reader to scroll a tiny box).
+    await page.locator("#highlight-popover").getByRole("button", { name: "Done" }).click();
+    await expect(page.locator("dialog#highlight-popover")).toBeHidden();
+    await openHighlightControls(page);
+    await expect(textarea).toHaveValue(text);
+    await expect
+      .poll(async () => (await textarea.boundingBox())!.height)
+      .toBeCloseTo(before!.height, 0);
+  });
+
   test("a viewport change repositions and keeps the editor inside the viewport", async ({
     page,
   }) => {

@@ -6835,29 +6835,6 @@ dialog.annotation-panel[open] {
   max-width: 100%;
   margin-inline: 0;
 }
-.annotation-panel-tags-toggle {
-  display: inline-flex;
-  align-items: center;
-  gap: var(--space-xs);
-  margin-inline-start: auto;
-  padding-inline: var(--space-sm);
-}
-.annotation-panel-tag-count {
-  font-size: 13px;
-  font-variant-numeric: tabular-nums;
-  color: var(--ink-soft);
-}
-.annotation-panel-tag-summary {
-  margin: 0;
-  padding-inline: var(--space-sm);
-  font-size: 13px;
-  color: var(--ink-soft);
-  overflow-wrap: anywhere;
-  min-width: 0;
-}
-.annotation-panel #annotation-tags[hidden] {
-  display: none;
-}
 .highlight-slot-entry-compact .highlight-slot-picker {
   gap: 0;
   margin-block-start: 0;
@@ -6911,60 +6888,130 @@ dialog.annotation-panel[open] {
   color: var(--ink-soft);
   overflow-wrap: anywhere;
 }
-.annotation-panel-more {
-  min-width: 0;
-}
-.annotation-panel-menu,
-.annotation-panel-tags-surface {
-  position: fixed;
-  inset: auto;
-  margin: 0;
-  box-sizing: border-box;
-  overflow: auto;
-  padding: var(--space-sm);
-  border: 1px solid var(--hairline);
-  border-radius: var(--radius-md);
-  background: var(--surface-raised);
-  color: var(--ink);
-  font-family: var(--font-ui);
-}
-.annotation-panel-menu {
-  width: 160px;
-}
-.annotation-panel-menu:popover-open {
-  display: flex;
-  flex-direction: column;
-}
-.annotation-panel-menu .highlight-controls-button {
-  width: 100%;
-  justify-content: flex-start;
-  text-align: start;
-}
-.annotation-panel-tags-surface {
-  width: 320px;
-}
-.annotation-panel-tags-close {
-  display: block;
-  margin-inline-start: auto;
-}
-.annotation-panel-tags-surface .tag-entry {
-  margin: 0;
-}
 .annotation-panel .highlight-controls-button {
   white-space: normal;
   overflow-wrap: anywhere;
 }
-.annotation-panel #annotation-tags {
+/* 2026-11-25 rework — + Tag sits at the row's inline end; activating it
+   swaps the slot row for the tag field in the same 44px footprint. */
+.annotation-panel-add-tag {
+  gap: var(--space-xs);
+  margin-inline-start: auto;
+  padding-inline: var(--space-sm);
+}
+.annotation-panel .annotation-panel-organization:has(> .annotation-panel-tag-field) {
+  align-content: center;
+}
+.annotation-panel-tag-field {
+  display: flex;
+  align-items: center;
+  gap: var(--space-xs);
+  flex: 1 1 100%;
   min-width: 0;
 }
+.annotation-panel-tag-field .tag-entry {
+  flex: 1 1 auto;
+  min-width: 0;
+  margin: 0;
+  padding: 0;
+  border: 0;
+  min-inline-size: 0;
+}
+.annotation-panel-tag-field-close {
+  flex: 0 0 var(--touch);
+  min-width: var(--touch);
+  padding: 0;
+}
+.tag-picker-suggestions-floating {
+  position: fixed;
+  inset: auto;
+  z-index: 2;
+  box-sizing: border-box;
+  overflow-y: auto;
+}
+/* Tag pills: their own row between writing and the controls, rendered only
+   when tags exist. Names wrap rather than truncate. */
+.annotation-panel-tags {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-xs);
+  margin: 0 0 var(--space-xs);
+  padding: 0;
+  list-style: none;
+  flex-shrink: 0;
+}
+.annotation-panel-tags[hidden] {
+  display: none;
+}
+.annotation-panel-tag {
+  display: inline-flex;
+  align-items: center;
+  max-width: 100%;
+  min-width: 0;
+  padding-inline-start: var(--space-sm);
+  background: var(--surface);
+  border: 1px solid var(--hairline);
+  border-radius: var(--radius-pill);
+}
+.annotation-panel-tag-text {
+  min-width: 0;
+  font: 13px/1.45 var(--font-ui);
+  color: var(--ink-soft);
+  overflow-wrap: anywhere;
+}
+.annotation-panel-tag-remove {
+  display: inline-grid;
+  place-items: center;
+  flex: 0 0 auto;
+  width: 36px;
+  height: 36px;
+  padding: 0;
+  background: transparent;
+  border: 0;
+  border-radius: var(--radius-pill);
+  color: var(--ink-soft);
+  cursor: pointer;
+}
+.annotation-panel-tag-remove svg {
+  width: 16px;
+  height: 16px;
+}
+.annotation-panel-tag-remove:hover {
+  color: var(--accent);
+}
+/* Footer: two pinned groups. Copy + Delete hold the inline start, Add note +
+   Done the inline end; Add note leaving opens a gap, nothing moves. */
 .annotation-panel .annotation-panel-footer {
   flex-shrink: 0;
   align-items: center;
   gap: var(--space-xs);
   margin-top: var(--space-xs);
 }
-.annotation-panel-footer .highlight-popover-done {
+.annotation-panel-footer-start,
+.annotation-panel-footer-end {
+  display: flex;
+  align-items: center;
+  gap: var(--space-xs);
+}
+.annotation-panel-footer-end {
   margin-inline-start: auto;
+}
+.annotation-icon-action {
+  position: relative;
+  display: inline-flex;
+}
+.annotation-panel .annotation-icon-button {
+  width: var(--touch);
+  min-width: var(--touch);
+  padding: 0;
+}
+.annotation-icon-label {
+  max-width: none;
+  white-space: nowrap;
+}
+.annotation-icon-action-end .annotation-icon-label {
+  inset-inline-start: auto;
+  inset-inline-end: 0;
 }
 .annotation-panel-footer > .status {
   padding: 0;
@@ -6977,13 +7024,10 @@ dialog.annotation-panel[open] {
 }
 .annotation-panel-footer > .status:has(p:not(.highlight-popover-saved)) {
   flex-basis: 100%;
+  order: 1;
 }
 .annotation-panel-footer > .status p {
   margin: 0;
-}
-.annotation-panel-footer [aria-expanded="true"] {
-  text-decoration: underline;
-  text-underline-offset: 4px;
 }
 
 .article-notes {

@@ -183,10 +183,10 @@ describe("Unified annotation session", () => {
     expect(within(dialog).getByRole("button", { name: "Apply slot 1: Default" })).toBeTruthy();
   });
 
-  it("shows existing writing immediately, focusing the controls", async () => {
+  it("shows existing writing immediately, focusing Done rather than a destructive action", async () => {
     renderControls(true);
-    const more = await screen.findByRole("button", { name: "More actions" });
-    await waitFor(() => expect(more).toHaveFocus());
+    const done = await screen.findByRole("button", { name: "Done" });
+    await waitFor(() => expect(done).toHaveFocus());
     expect(screen.queryByRole("button", { name: /Add note|Edit note/ })).toBeNull();
     expect(screen.getByRole("textbox", { name: "Note" })).toHaveValue(mockData.noteRecord.text);
   });
@@ -201,20 +201,21 @@ describe("Unified annotation session", () => {
     expect(document.querySelector("mark")).toHaveFocus();
   });
 
-  it("disclosed tag editing preserves the note and committing keeps focus in the field", async () => {
+  it("inline tag editing preserves the note, chains commits, and keeps focus in the field", async () => {
     const user = userEvent.setup();
     renderControls(true);
-    await user.click(await screen.findByRole("button", { name: /^Tags/ }));
+    await user.click(await screen.findByRole("button", { name: "Add tag" }));
     const input = await screen.findByRole("combobox");
+    await waitFor(() => expect(input).toHaveFocus());
     expect(screen.getByRole("textbox", { name: "Note" })).toHaveValue(mockData.noteRecord.text);
-    await user.click(input);
     await user.type(input, "philosophy");
     await user.keyboard("{Enter}");
     expect(screen.getByRole("button", { name: "Remove tag philosophy" })).toBeTruthy();
     // The note stays intact and visible — tagging never collapses writing.
     expect(screen.getByRole("textbox", { name: "Note" })).toHaveValue(mockData.noteRecord.text);
+    // The field stays open, empty, and focused for the next tag.
     expect(input).toHaveFocus();
-    expect(screen.getByRole("button", { name: /^Tags/ })).toHaveAttribute("aria-expanded", "true");
+    expect(input).toHaveValue("");
   });
 
   it("new unsaved writing requires confirmation and Keep restores it", async () => {
@@ -222,19 +223,20 @@ describe("Unified annotation session", () => {
     renderControls();
     await user.click(await screen.findByRole("button", { name: "Add note" }));
     await user.type(screen.getByRole("textbox", { name: "Note" }), "Unsaved note");
-    await user.click(screen.getByRole("button", { name: "More actions" }));
-    await user.click(screen.getByRole("menuitem", { name: "Delete" }));
+    await user.click(screen.getByRole("button", { name: "Delete highlight" }));
     expect(deleteHighlightFromStore).not.toHaveBeenCalled();
     await user.click(screen.getByRole("button", { name: "Keep" }));
     expect(screen.getByRole("textbox", { name: "Note" })).toHaveValue("Unsaved note");
+    await waitFor(() =>
+      expect(screen.getByRole("button", { name: "Delete highlight" })).toHaveFocus(),
+    );
   });
 
   it("a no-note delete closes and restores focus near the passage", async () => {
     const user = userEvent.setup();
     renderControls();
     const dialog = await screen.findByRole("dialog", { name: "Highlight" });
-    await user.click(screen.getByRole("button", { name: "More actions" }));
-    await user.click(screen.getByRole("menuitem", { name: "Delete" }));
+    await user.click(screen.getByRole("button", { name: "Delete highlight" }));
     await waitFor(() => expect(dialog).not.toHaveAttribute("open"));
     expect(deleteHighlightFromStore).toHaveBeenCalledWith("hl-test-1");
     expect(document.querySelector('[data-block-index="7"]')).toHaveFocus();
@@ -244,8 +246,7 @@ describe("Unified annotation session", () => {
     vi.mocked(deleteHighlightFromStore).mockRejectedValueOnce(new Error("quota"));
     const user = userEvent.setup();
     renderControls();
-    await user.click(await screen.findByRole("button", { name: "More actions" }));
-    await user.click(screen.getByRole("menuitem", { name: "Delete" }));
+    await user.click(await screen.findByRole("button", { name: "Delete highlight" }));
     await screen.findByText("Couldn't delete this highlight. Try again.");
     expect(screen.getByRole("dialog", { name: "Highlight" })).toHaveAttribute("open");
   });
@@ -254,8 +255,7 @@ describe("Unified annotation session", () => {
     const user = userEvent.setup();
     renderControls(true);
     await user.type(await screen.findByRole("textbox", { name: "Note" }), " changed");
-    await user.click(screen.getByRole("button", { name: "More actions" }));
-    await user.click(screen.getByRole("menuitem", { name: "Delete" }));
+    await user.click(screen.getByRole("button", { name: "Delete highlight" }));
     vi.mocked(saveNote).mockRejectedValueOnce(new Error("quota"));
     await user.click(screen.getByRole("button", { name: "Delete" }));
     await screen.findByText("Couldn't save the note. Try again.");
