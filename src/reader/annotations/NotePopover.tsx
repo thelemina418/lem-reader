@@ -1159,6 +1159,11 @@ export function NotePopover(): React.ReactElement | null {
                     type="button"
                     className="highlight-controls-button annotation-panel-tag-field-close"
                     aria-label="Done adding tags"
+                    // Safari never focuses a clicked button: pressing it would
+                    // blur the empty field to nowhere, close it before this
+                    // click lands, and drop focus. Keep focus where it is; the
+                    // click closes the field and returns focus to + Tag.
+                    onMouseDown={(event) => event.preventDefault()}
                     onClick={() => closeTagField(true)}
                   >
                     <CloseIcon />
@@ -1179,6 +1184,12 @@ export function NotePopover(): React.ReactElement | null {
                 className="highlight-controls-button annotation-panel-add-tag"
                 aria-label="Add tag"
                 aria-expanded={tagFieldOpen}
+                // While the field is open, a press must not blur it closed
+                // first (Safari focuses nothing on click); the click refocuses
+                // the input.
+                onMouseDown={(event) => {
+                  if (tagFieldOpen) event.preventDefault();
+                }}
                 onClick={() => {
                   if (tagFieldOpen) {
                     // Already open: + Tag returns to the field's input.

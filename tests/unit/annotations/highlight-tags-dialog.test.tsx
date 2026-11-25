@@ -212,6 +212,27 @@ describe("HighlightTagsDialog — disclosed tag editing", () => {
     expect(within(dialog).getAllByRole("button", { name: "Remove tag essays" })).toHaveLength(1);
   });
 
+  it("pressing × or + Tag never blurs the open field first (Safari focuses nothing on click)", async () => {
+    mockData.highlightRecord.tags = [];
+    renderTagsDialog();
+    const { input, dialog } = await openTagsInput();
+    const close = within(dialog).getByRole("button", { name: "Done adding tags" });
+    const addTag = within(dialog).getByRole("button", { name: "Add tag" });
+    // fireEvent returns false when the default (focus moving) was prevented.
+    expect(fireEvent.mouseDown(addTag)).toBe(false);
+    expect(fireEvent.mouseDown(close)).toBe(false);
+    expect(document.activeElement).toBe(input);
+    await act(async () => {
+      fireEvent.click(close);
+    });
+    expect(within(dialog).queryByRole("combobox")).toBeNull();
+    await waitFor(() =>
+      expect(document.activeElement).toBe(within(dialog).getByRole("button", { name: "Add tag" })),
+    );
+    // Closed, + Tag takes focus normally on press.
+    expect(fireEvent.mouseDown(within(dialog).getByRole("button", { name: "Add tag" }))).toBe(true);
+  });
+
   it("the field closes from its × or an empty blur, returning the slot row", async () => {
     mockData.highlightRecord.tags = [];
     renderTagsDialog();
