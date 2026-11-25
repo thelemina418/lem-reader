@@ -21,8 +21,10 @@ const availableMemoryPct = readAvailableMemoryPct();
 const plannedWorkers = planWorkers(cpus().length, load1min, load5min, availableMemoryPct);
 // CI logs the decision beside its inputs so the tier thresholds can be
 // checked against real runs (worker count alone hides why it was chosen).
+// stderr, never stdout: `playwright test --list --reporter=json` consumers
+// (scripts/check-e2e-coverage.mjs) parse stdout as JSON.
 if (process.env.CI) {
-  console.log(
+  console.error(
     `[workers] ${plannedWorkers} (cores ${cpus().length}, load ${load1min.toFixed(2)}/${load5min.toFixed(2)}, ` +
       `memory available ${availableMemoryPct ?? "unknown"}%)`,
   );
