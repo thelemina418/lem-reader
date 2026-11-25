@@ -6875,6 +6875,10 @@ dialog.annotation-panel[open] {
 .annotation-panel-slot-label {
   position: absolute;
   z-index: 1;
+  /* A floating name is a passive, aria-hidden readout: it must never take
+     the click meant for the control it overlaps (a slot under a footer
+     label at 400% zoom). */
+  pointer-events: none;
   inset-inline-start: 0;
   inset-block-end: calc(100% + var(--space-xs));
   box-sizing: border-box;

@@ -11,6 +11,7 @@ import {
   installNoteSaveSabotage,
   failNextNoteSave,
   drawerTrigger,
+  pressTab,
 } from "./_fixtures";
 
 async function create(page: import("@playwright/test").Page) {
@@ -67,7 +68,7 @@ test("one session keeps slots and inline tags available; Escape closes the field
   expect(pillBox!.y).toBeGreaterThanOrEqual(addTagBox!.y + addTagBox!.height);
   expect(doneBox!.y).toBeGreaterThanOrEqual(pillBox!.y + pillBox!.height);
   await panel.getByRole("button", { name: "Add tag", exact: true }).focus();
-  await page.keyboard.press("Tab");
+  await pressTab(page);
   await expect(panel.getByRole("button", { name: "Remove tag thoughts" })).toBeFocused();
   await panel.getByRole("button", { name: "Remove tag thoughts" }).click();
   await expect(panel.getByRole("list", { name: "Highlight tags" })).toBeHidden();
@@ -124,7 +125,7 @@ for (const width of [320, 390, 1600]) {
       organizationOpen!.y + organizationOpen!.height + 1,
     );
     await panel.getByRole("button", { name: "Done adding tags" }).focus();
-    await page.keyboard.press("Tab");
+    await pressTab(page);
     await expect(addTag).toBeFocused();
     await expect(panel.getByRole("combobox")).toBeVisible();
     if (testInfo.project.name === "chromium")
@@ -141,14 +142,14 @@ test("the footer tab order runs Copy, Delete, Done after the tag control", async
   await noteTextarea(page).fill("Keep this writing open.");
   const addTag = panel.getByRole("button", { name: "Add tag", exact: true });
   await addTag.focus();
-  await page.keyboard.press("Tab");
+  await pressTab(page);
   await expect(panel.getByRole("button", { name: "Copy highlight" })).toBeFocused();
   await expect(panel.locator(".annotation-icon-label").first()).toHaveText("Copy highlight");
-  await page.keyboard.press("Tab");
+  await pressTab(page);
   await expect(panel.getByRole("button", { name: "Delete highlight" })).toBeFocused();
-  await page.keyboard.press("Tab");
+  await pressTab(page);
   await expect(panel.getByRole("button", { name: "Done" })).toBeFocused();
-  await page.keyboard.press("Shift+Tab");
+  await pressTab(page, { shift: true });
   await expect(panel.getByRole("button", { name: "Delete highlight" })).toBeFocused();
   await expect(noteTextarea(page)).toHaveValue("Keep this writing open.");
 });

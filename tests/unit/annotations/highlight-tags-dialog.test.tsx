@@ -1,6 +1,14 @@
 // Inline highlight tags: shared TagEntry persistence and keyboard behavior.
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { render, screen, waitFor, within, renderHook, act } from "@testing-library/react";
+import {
+  render,
+  screen,
+  waitFor,
+  within,
+  renderHook,
+  act,
+  fireEvent,
+} from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { useEffect } from "react";
 import {
@@ -414,6 +422,26 @@ describe("HighlightTagsDialog — disclosed tag editing", () => {
     await waitFor(() =>
       expect(document.activeElement).toBe(within(dialog).getByRole("button", { name: "Add tag" })),
     );
+  });
+
+  it("an immediate next Escape — sent from <body> before focus reaches + Tag — dismisses the panel", async () => {
+    mockData.highlightRecord.tags = [];
+    renderTagsDialog();
+
+    const { user, dialog } = await openTagsInput();
+    if (screen.queryByRole("listbox")) await user.keyboard("{Escape}");
+    // Close the field; the input unmounts and focus is momentarily on <body>.
+    await act(async () => {
+      fireEvent.keyDown(within(dialog).getByRole("combobox"), { key: "Escape" });
+    });
+    expect(within(dialog).queryByRole("combobox")).toBeNull();
+    // The next press lands outside the dialog's own keydown handler, with no
+    // task boundary in between: only the native close request reaches it.
+    await act(async () => {
+      fireEvent.keyDown(document.body, { key: "Escape" });
+      dialog.dispatchEvent(new Event("cancel", { cancelable: true }));
+    });
+    await waitFor(() => expect(dialog).not.toHaveAttribute("open"));
   });
 
   it("a native cancel (WebKit's Escape path) also closes the open tag field, not the panel", async () => {

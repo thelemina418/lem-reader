@@ -179,7 +179,10 @@ export function NotePopover(): React.ReactElement | null {
   const [tagFieldMinHeight, setTagFieldMinHeight] = useState<number | null>(null);
   const pillRowRef = useRef<HTMLUListElement>(null);
   // One Escape press closes the field; a WebKit `cancel` from the same press
-  // must not then also dismiss the panel.
+  // must not then also dismiss the panel. Scoped to that press: every new
+  // Escape keydown clears it first (document capture), so a quick next press
+  // — even one sent from <body> while focus is still moving to + Tag — always
+  // reaches guarded dismissal.
   const escapeClosedTagFieldRef = useRef(false);
   // Escape returns focus to + Tag only when it was inside the field: an
   // Escape pressed while writing the note leaves the caret in the note.
@@ -770,11 +773,16 @@ export function NotePopover(): React.ReactElement | null {
       }
       void requestDismissRef.current();
     };
+    const handleEscapePress = (event: KeyboardEvent) => {
+      if (event.key === "Escape") escapeClosedTagFieldRef.current = false;
+    };
     dlg.addEventListener("close", handleCloseEvent);
     dlg.addEventListener("cancel", handleCancelEvent);
+    document.addEventListener("keydown", handleEscapePress, true);
     return () => {
       dlg.removeEventListener("close", handleCloseEvent);
       dlg.removeEventListener("cancel", handleCancelEvent);
+      document.removeEventListener("keydown", handleEscapePress, true);
     };
   }, [flushNoteSave, setOpenPopoverFor, setConfirmDeleteFor, setControlsFor, closeTagField]);
 
@@ -785,9 +793,6 @@ export function NotePopover(): React.ReactElement | null {
     if (event.key !== "Escape" || event.defaultPrevented || !tagFieldOpenRef.current) return;
     event.preventDefault();
     escapeClosedTagFieldRef.current = true;
-    setTimeout(() => {
-      escapeClosedTagFieldRef.current = false;
-    }, 0);
     closeTagField(focusInTagField());
   };
 

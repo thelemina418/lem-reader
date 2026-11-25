@@ -1076,3 +1076,15 @@ export async function annotationAction(
 export function noteTextarea(page: Page): Locator {
   return page.getByRole("textbox", { name: "Note", exact: true });
 }
+
+/**
+ * Sequential focus navigation that reaches buttons on every engine. macOS
+ * WebKit follows Safari's default ("Press Tab to highlight each item" off):
+ * plain Tab skips buttons and only Option+Tab walks them, so the reference
+ * Mac lane presses Alt+Tab there. Every other engine/platform uses plain Tab.
+ */
+export async function pressTab(page: Page, options: { shift?: boolean } = {}): Promise<void> {
+  const macWebKit =
+    page.context().browser()?.browserType().name() === "webkit" && process.platform === "darwin";
+  await page.keyboard.press(`${options.shift ? "Shift+" : ""}${macWebKit ? "Alt+" : ""}Tab`);
+}
