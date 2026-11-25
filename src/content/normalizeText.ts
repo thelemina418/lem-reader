@@ -171,6 +171,22 @@ export interface ArticleGraphemeIndex {
 
 const articleIndexCache = new WeakMap<CanonicalArticle, ArticleGraphemeIndex>();
 
+// Second level, keyed on what the index actually READS: the `blocks` array
+// (identity), plus `footnotes` (identity) and `lang`. A shallow copy of a
+// parsed article — `{ ...article, provenanceTitle }`, the shape
+// deriveWorkStructure takes from resolveWorkStructure on every reader open —
+// is a new object (an articleIndexCache miss) but shares these, so it reuses
+// the original's index instead of re-segmenting the whole work twice (full
+// text + per block; ~45% of a giant article's open task under throttle).
+// The index is a pure function of (blocks, footnotes, lang), so a hit is
+// byte-identical to a rebuild.
+interface ContentKeyedIndex {
+  footnotes: CanonicalArticle["footnotes"];
+  lang: string;
+  index: ArticleGraphemeIndex;
+}
+const contentIndexCache = new WeakMap<CanonicalArticle["blocks"], ContentKeyedIndex[]>();
+
 /**
  * One speakable/addressable footnote body in the canonical coordinate stream
  * (issue #235). `index` is the footnote's position in `article.footnotes`
@@ -251,6 +267,13 @@ export function footnoteRows(article: CanonicalArticle): readonly FootnoteRow[] 
 export function articleGraphemeIndex(article: CanonicalArticle): ArticleGraphemeIndex {
   let index = articleIndexCache.get(article);
   if (!index) {
+    const shared = contentIndexCache
+      .get(article.blocks)
+      ?.find((e) => e.footnotes === article.footnotes && e.lang === article.lang);
+    if (shared) {
+      articleIndexCache.set(article, shared.index);
+      return shared.index;
+    }
     const normalizedText = normalizeText(article);
     const clusters = graphemeClusters(normalizedText, article.lang);
     const perBlockLengths = article.blocks.map(
@@ -273,6 +296,10 @@ export function articleGraphemeIndex(article: CanonicalArticle): ArticleGrapheme
       totalGraphemes: clusters.length,
     };
     articleIndexCache.set(article, index);
+    const siblings = contentIndexCache.get(article.blocks);
+    const entry = { footnotes: article.footnotes, lang: article.lang, index };
+    if (siblings) siblings.push(entry);
+    else contentIndexCache.set(article.blocks, [entry]);
   }
   return index;
 }
