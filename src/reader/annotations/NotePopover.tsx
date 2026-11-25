@@ -543,7 +543,7 @@ export function NotePopover(): React.ReactElement | null {
       // the sheet before its footer becomes stranded below the fold.
       panel
         .querySelectorAll(
-          ".highlight-popover-note, .annotation-panel-tags, .annotation-panel-organization, .annotation-panel-footer",
+          ".highlight-popover-note, .annotation-panel-organization, .annotation-panel-tags, .annotation-panel-footer",
         )
         .forEach((element) => boxObserver.observe(element));
     }
@@ -1104,28 +1104,6 @@ export function NotePopover(): React.ReactElement | null {
                 disabled={isUnresolved}
               />
             </div>
-            {/* Always mounted (hidden at zero) so the placement observer
-                sees the row appear and re-pins the panel above its growth. */}
-            <ul
-              className="annotation-panel-tags"
-              aria-label="Highlight tags"
-              ref={pillRowRef}
-              hidden={(resolved.record.tags ?? []).length === 0}
-            >
-              {(resolved.record.tags ?? []).map((name, index) => (
-                <li key={name} className="annotation-panel-tag">
-                  <span className="annotation-panel-tag-text">{name}</span>
-                  <button
-                    type="button"
-                    className="annotation-panel-tag-remove"
-                    aria-label={`Remove tag ${name}`}
-                    onClick={() => removeTag(index)}
-                  >
-                    <CloseIcon />
-                  </button>
-                </li>
-              ))}
-            </ul>
             <div
               ref={organizationRef}
               className="annotation-panel-organization"
@@ -1199,6 +1177,28 @@ export function NotePopover(): React.ReactElement | null {
                 </>
               )}
             </div>
+            {/* Always mounted (hidden at zero) so the placement observer
+                sees the row appear and re-pins the panel above its growth. */}
+            <ul
+              className="annotation-panel-tags"
+              aria-label="Highlight tags"
+              ref={pillRowRef}
+              hidden={(resolved.record.tags ?? []).length === 0}
+            >
+              {(resolved.record.tags ?? []).map((name, index) => (
+                <li key={name} className="annotation-panel-tag">
+                  <span className="annotation-panel-tag-text">{name}</span>
+                  <button
+                    type="button"
+                    className="annotation-panel-tag-remove"
+                    aria-label={`Remove tag ${name}`}
+                    onClick={() => removeTag(index)}
+                  >
+                    <CloseIcon />
+                  </button>
+                </li>
+              ))}
+            </ul>
             <StatusRegion>{deleteFailed && <p>{DELETE_FAILED_COPY}</p>}</StatusRegion>
             <div
               className="highlight-controls-actions annotation-panel-footer"

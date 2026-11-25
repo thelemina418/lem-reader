@@ -6935,7 +6935,7 @@ dialog.annotation-panel[open] {
   display: flex;
   flex-wrap: wrap;
   gap: var(--space-xs);
-  margin: 0 0 var(--space-xs);
+  margin: var(--space-xs) 0 0;
   padding: 0;
   list-style: none;
   flex-shrink: 0;

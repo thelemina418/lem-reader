@@ -60,6 +60,15 @@ test("one session keeps slots and inline tags available; Escape closes the field
   // Pills show without opening anything.
   await expect(panel.getByRole("list", { name: "Highlight tags" })).toHaveText("thoughts");
   await expect(panel.getByRole("button", { name: "Remove tag thoughts" })).toBeVisible();
+  // Pills sit below the slot / + Tag row and above the footer, in DOM and on screen.
+  const pillBox = await panel.getByRole("list", { name: "Highlight tags" }).boundingBox();
+  const addTagBox = await panel.getByRole("button", { name: "Add tag", exact: true }).boundingBox();
+  const doneBox = await panel.getByRole("button", { name: "Done", exact: true }).boundingBox();
+  expect(pillBox!.y).toBeGreaterThanOrEqual(addTagBox!.y + addTagBox!.height);
+  expect(doneBox!.y).toBeGreaterThanOrEqual(pillBox!.y + pillBox!.height);
+  await panel.getByRole("button", { name: "Add tag", exact: true }).focus();
+  await page.keyboard.press("Tab");
+  await expect(panel.getByRole("button", { name: "Remove tag thoughts" })).toBeFocused();
   await panel.getByRole("button", { name: "Remove tag thoughts" }).click();
   await expect(panel.getByRole("list", { name: "Highlight tags" })).toBeHidden();
   await expect(panel.getByRole("button", { name: "Add tag", exact: true })).toBeFocused();
