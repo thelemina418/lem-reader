@@ -4,7 +4,7 @@ import { cpus, loadavg, tmpdir } from "node:os";
 import { join } from "node:path";
 import { defineConfig, devices } from "@playwright/test";
 import { BASE } from "./tests/e2e/_base";
-import { planWorkers } from "./playwright.workers";
+import { planWorkers, readAvailableMemoryPct } from "./playwright.workers";
 import { E2E_READY_MESSAGE } from "./dev-server/e2e-identity.mjs";
 
 // macOS 27 protects the installed Firefox app-data directory. The bundled
@@ -17,6 +17,16 @@ if (process.platform === "darwin") mkdirSync(firefoxAppDataHome, { recursive: tr
 // The quiet-load-aware worker cap reads load once, at config evaluation —
 // load at startup is the best predictor of the window a full run lands in.
 const [load1min, load5min] = loadavg();
+const availableMemoryPct = readAvailableMemoryPct();
+const plannedWorkers = planWorkers(cpus().length, load1min, load5min, availableMemoryPct);
+// CI logs the decision beside its inputs so the tier thresholds can be
+// checked against real runs (worker count alone hides why it was chosen).
+if (process.env.CI) {
+  console.log(
+    `[workers] ${plannedWorkers} (cores ${cpus().length}, load ${load1min.toFixed(2)}/${load5min.toFixed(2)}, ` +
+      `memory available ${availableMemoryPct ?? "unknown"}%)`,
+  );
+}
 
 export default defineConfig({
   testDir: "./tests/e2e",
@@ -49,8 +59,10 @@ export default defineConfig({
   // the shape that ran for months before the cap with no starvation on a
   // quiet box. Rationale and the recorded dispatch loads:
   // playwright.workers.ts; the operating points are pinned by
-  // tests/unit/worker-cap.test.ts.
-  workers: planWorkers(cpus().length, load1min, load5min),
+  // tests/unit/worker-cap.test.ts. 2026-11-25: a MODERATE tier (4 workers
+  // at both load averages under 6) and a memory guard on both raised tiers
+  // — the box is the owner's working machine; see playwright.workers.ts.
+  workers: plannedWorkers,
   // The same moving-target starvation class the worker cap above records
   // (full-suite load on the reference machine starves a DIFFERENT handful
   // of tail specs per run — two full runs, six distinct one-off sites,

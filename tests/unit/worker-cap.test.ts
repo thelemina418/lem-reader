@@ -22,11 +22,22 @@
 // held for the whole suite). A ~16-30m run spans the 5-minute average, so
 // quiet requires BOTH the 1- and 5-minute averages under the threshold —
 // the 2026-10-14 03:26 gate dispatched at 1-min 2.89 with the 5-min still
-// at 3.26 (a settling window, not a quiet one) and must stay at 3 workers.
+// at 3.26 (a settling window, not a quiet one) and must not get the quiet 5.
+//
+// 2026-11-25 — MODERATE (4) and the memory guard. Agents moved off the
+// reference Mac; its remaining load is the owner's desktop use plus the
+// previous queued suite's tail. Both averages under 6 (strictly below the
+// recorded 6–10 starvation band) with memory known and ≥ 40% available
+// earns 4; a raised tier is never taken with memory tight, and MODERATE is
+// never granted with memory unknown. The existing 3-argument operating
+// points (memory unknown) are unchanged.
 import { describe, expect, test } from "vitest";
 import {
   LOADED_WORKERS,
   MAX_QUIET_WORKERS,
+  MIN_AVAILABLE_MEMORY_PCT,
+  MODERATE_LOAD_THRESHOLD,
+  MODERATE_WORKERS,
   planWorkers,
   QUIET_LOAD_THRESHOLD,
 } from "../../playwright.workers";
@@ -62,5 +73,41 @@ describe("planWorkers — the reference suite's quiet-load-aware cap", () => {
   test("the loaded cap also respects cores/2 on small boxes", () => {
     expect(LOADED_WORKERS).toBe(3);
     expect(planWorkers(4, 12.0, 12.0)).toBe(2);
+  });
+
+  test("moderate load with memory to spare runs 4 (2026-11-22..25 dispatch loads)", () => {
+    expect(MODERATE_WORKERS).toBe(4);
+    expect(MODERATE_LOAD_THRESHOLD).toBe(6);
+    expect(planWorkers(10, 3.85, 3.96, 55)).toBe(4); // 2026-11-23 18:59 main
+    expect(planWorkers(10, 5.85, 4.85, 55)).toBe(4); // 2026-11-23 16:52 main
+    expect(planWorkers(10, 3.68, 2.85, 55)).toBe(4); // 2026-11-22 20:26 PR
+    // The settling window gets MODERATE, never the quiet 5.
+    expect(planWorkers(10, 2.89, 3.26, 55)).toBe(4);
+  });
+
+  test("the recorded 6–10 starvation band and a hot 5-min average stay at 3", () => {
+    expect(planWorkers(10, 6.2, 6.31, 70)).toBe(3); // 2026-11-25 17:30 main
+    expect(planWorkers(10, 7.65, 6.81, 70)).toBe(3); // 2026-11-25 18:20 #14
+    expect(planWorkers(10, 4.38, 12.18, 70)).toBe(3); // previous suite's tail
+    expect(planWorkers(10, MODERATE_LOAD_THRESHOLD, 2.0, 70)).toBe(3); // strict <
+  });
+
+  test("tight memory never takes a raised tier — quiet or moderate", () => {
+    expect(MIN_AVAILABLE_MEMORY_PCT).toBe(40);
+    expect(planWorkers(10, 2.3, 2.1, 39)).toBe(3);
+    expect(planWorkers(10, 3.85, 3.96, 39)).toBe(3);
+    expect(planWorkers(10, 2.3, 2.1, MIN_AVAILABLE_MEMORY_PCT)).toBe(5); // at threshold is enough
+    expect(planWorkers(4, 1.0, 1.0, 10)).toBe(2); // the small-box bound still holds
+  });
+
+  test("unknown memory keeps the pre-guard behavior: quiet 5, never moderate", () => {
+    expect(planWorkers(10, 2.3, 2.1, undefined)).toBe(5);
+    expect(planWorkers(10, 3.85, 3.96, undefined)).toBe(3);
+    expect(planWorkers(10, 3.85, 3.96, Number.NaN)).toBe(3);
+  });
+
+  test("moderate respects cores/2 on small boxes", () => {
+    expect(planWorkers(4, 4.0, 4.0, 80)).toBe(2);
+    expect(planWorkers(6, 4.0, 4.0, 80)).toBe(3);
   });
 });
