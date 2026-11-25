@@ -13,6 +13,8 @@ Reference work: https://marxist.com/the-stalin-school-of-falsification/all-pages
 
 Language: [GLOSSARY.md](../../GLOSSARY.md). Identity and ownership rationale: [ADR 0011](../adr/0011-reading-identity-and-collection-ownership.md). Engineering sequence: [long-work implementation plan](long-work-implementation-plan.md).
 
+Follow-up scope: [PDF heading integrity and safe structural repair](pdf-structure-repair.md) records the confirmed bookmark-to-prose heading defect, navigation safeguards, and explicit, reversible repair requirements for existing saved works.
+
 ## 1. Works, chapters, and reading parts
 
 - A collection organizes separate readings; chapters divide a single work. The reference work remains one library item with chapters, not a flood of independent article rows.
@@ -87,6 +89,7 @@ Language: [GLOSSARY.md](../../GLOSSARY.md). Identity and ownership rationale: [A
 - Progress/completion is shared with ordinary reading and across entries targeting the same work or chapter. Previously finished targets count as finished in a new plan.
 - A chapter entry's completion must reflect that chapter, not merely visiting a later chapter. Do not treat a later saved location alone as proof that skipped chapters were read.
 - Readers can explicitly mark a reading finished or unfinished without erasing its saved position.
+- Revised 2026-11-25: explicit chapter finished/unfinished correction appears only on collection detail rows — not in the table of contents or a library dialog (see Feedback revisions). Whole-reading read/unread stays a direct library action.
 - No separate per-plan reading attempts or completion history initially.
 
 ## 7. Export, import, and conflicts
@@ -140,6 +143,34 @@ Language: [GLOSSARY.md](../../GLOSSARY.md). Identity and ownership rationale: [A
 
 - [ ] Preserve semantic HTML, keyboard and screen-reader access, visible focus, reduced motion, and reader mode choice.
 - [ ] Meet the repository's existing browser and user-approved performance gates. Do not invent new numeric budgets or relax existing ones to ship this feature.
+
+## 9a. Feedback revisions (2026-11-25)
+
+Confirmed in a follow-up design interview after the first collections delivery. These revise the sections above where they conflict.
+
+### Import directly into a collection
+
+- The collection page offers an **Import into collection** action beside **Add readings**. It opens the ordinary import flow (URL, paste, file); it does not stack inside the Add readings dialog.
+- A successful import saves the reading to the library as usual and appends it to the end of this collection as a **whole-reading** entry. A multi-chapter work or EPUB becomes one whole-work entry; particular chapters can be added afterwards through Add readings.
+- If the import is already in the library, the collection references the existing reading; no duplicate library item is created. If this collection already contains that exact target, say so and add nothing.
+- Readings admitted with visible limits are added, with the same limit notes shown. Refused imports add nothing.
+- After success the reader stays on the collection page with focus on the new entry and a status such as "Saved to your library and added to ‹collection›."
+- If the library save succeeds but adding the entry fails, report it plainly ("Saved to your library, but it couldn't be added to ‹collection›.") and keep the saved reading; never roll back a successful save or claim the entry was added.
+
+### Add readings: chapters collapsed by default
+
+- Every reading with chapters starts collapsed as one row; the whole reading stays addable from that row.
+- A real disclosure button (`aria-expanded`, e.g. "Show 14 chapters") reveals its chapters as individually addable rows. Expansion state persists while the dialog stays open.
+- A collapsed row notes how many of its chapters are already in the collection (e.g. "2 chapters added"), included in the row's accessible name.
+- Search also matches chapter titles: a chapter match auto-expands its parent and shows only the matching chapters beneath it.
+
+### Chapter completion only in collection context
+
+- The table of contents shows no chapter "Finished" marks and no "Mark finished/unfinished" controls, in any reading context (including readings opened from a collection).
+- Explicit chapter finished/unfinished correction lives only on collection detail rows, where the chapter is already an entry.
+- The library **Reading status** dialog (shipped with [reading-experience recovery](reading-experience-recovery.md)) is retired. The library reading-state action returns to directly marking the whole reading read/unread for every reading, chaptered or not. This reverses the 2026-11-12 placement approval.
+- Chapter completion is still recorded in the background from ordinary reading, so previously finished chapters count as finished when later added to a collection (Section 6 is unchanged on that point).
+- EPUB chapter rows in the library keep their existing whole-article Mark as read controls; this revision does not touch them.
 
 ## 10. Implementation planning boundary
 

@@ -1,6 +1,6 @@
 # Reading-experience regression investigation — 2026-11-12
 
-Investigation authorized by the reader after the design interview in [reading-experience recovery](../specs/reading-experience-recovery.md). The investigation sections below record the pre-fix evidence. The reader subsequently approved implementation, including the proposed Reading status dialog placement; see [Implementation and local verification](#implementation-and-local-verification).
+Investigation authorized by the reader after the design interview in [reading-experience recovery](../specs/reading-experience-recovery.md). The investigation sections below record the pre-fix evidence. The reader subsequently approved implementation, including the proposed Reading status dialog placement; see [Implementation and local verification](#implementation-and-local-verification). That placement was later reversed (2026-11-25, [collections and long works § 9a](../specs/collections-and-long-works.md)); this report remains the record of what was verified at the time.
 
 ## Conclusions
 

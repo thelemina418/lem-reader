@@ -13,6 +13,8 @@ Issues and specs for this repo live as GitHub issues. Use the `gh` CLI for all o
 
 Infer the repo from `git remote -v`; `gh` does this automatically when run inside a clone.
 
+The tracker is `thelemina418/lem-reader`. It was created on 2026-11-22 without migrating the retired predecessor repository's issues, and numbering restarted. Issue/PR numbers cited in docs written before that date (ADR "Decided in #23", spike headers, `#246`-style code comments) refer to the predecessor's history, even where a link has since been rewritten to `thelemina418` — that link is dead or points at an unrelated new issue. Treat those numbers as historical context; don't "fix" them by renumbering.
+
 ## Pull requests as a triage surface
 
 **PRs as a request surface: no.** _(Set to `yes` if this repo treats external PRs as feature requests; `/triage` reads this flag.)_
