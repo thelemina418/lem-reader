@@ -1,8 +1,8 @@
 // scripts/lib/heavy-lease.mjs
 // Issue #255 — the explicit heavy-test lease for the shared reference Mac.
 //
-// CONTEXT: CI's reference jobs already serialize with each other
-// (job-level concurrency group `reference-mac-functional`), but nothing
+// CONTEXT: CI's reference jobs already serialize with each other (one
+// `reference` runner, which queues jobs), but nothing
 // coordinates INDEPENDENT local heavy sessions (T3 agent sessions running
 // Playwright suites, calibrate, perf) against those jobs or each other on
 // the same box. This lease is that coordination: an explicit, visible,
