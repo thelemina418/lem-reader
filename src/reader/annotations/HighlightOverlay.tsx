@@ -333,7 +333,9 @@ export function HighlightOverlayProvider({
   const [confirmDeleteFor, setConfirmDeleteFor] = useState<string | null>(null);
   // Issue #195 — the slot configuration the annotation panel reads through
   // this context (shipped fallback when the host wires no settings).
-  const resolvedSlots = highlightSlots ?? defaultHighlightSlots();
+  // Memoized: a fresh fallback array per render would change the context
+  // value (below) on every owner render.
+  const resolvedSlots = useMemo(() => highlightSlots ?? defaultHighlightSlots(), [highlightSlots]);
 
   // Latest-highlights ref so the captureCurrentSelection closure reads the
   // freshest resolved set without re-creating on every state change (mirrors
