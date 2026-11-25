@@ -61,11 +61,11 @@ jobs:
     runs-on: [self-hosted, macOS, reference]
     timeout-minutes: 90
     # Same shared reference box as e2e-reference in ci.yml — queue, never
-    # collide. No workflow-level concurrency here: evidence dispatches are
-    # never canceled mid-flight (a canceled run is lost evidence).
-    concurrency:
-      group: reference-mac-functional
-      cancel-in-progress: false
+    # collide. The single `reference` runner queues jobs without
+    # canceling any; see the e2e-reference note in ci.yml for why there is
+    # no job-level concurrency group (it dropped queued runs). No
+    # workflow-level concurrency here either: evidence dispatches are never
+    # canceled mid-flight (a canceled run is lost evidence).
     env:
       LEM_E2E_BASE: http://localhost:15173
     steps:

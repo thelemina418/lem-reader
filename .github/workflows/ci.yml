@@ -39,20 +39,28 @@ jobs:
   e2e-reference:
     runs-on: [self-hosted, macOS, reference]
     timeout-minutes: 90
-    # The reference box runs the PR gate AND manual/nightly exhaustive runs.
-    # The workflow-level group above is per-event+ref, so a pull_request run
-    # and a workflow_dispatch run could start the SAME SECOND on the one Mac
-    # (observed 2026-10-13: runs 38480319853 + 38480324742, load > 40,
-    # 3.4x first-attempt inflation on both). This shared job-level group
-    # queues reference runs serially instead — clean-load timing is what
-    # makes the issue #185 before/after comparison valid. The tradeoff is
-    # accepted deliberately for this low-traffic repo: a PR gate waits for an
-    # in-flight nightly rather than colliding with it, and cancel-in-progress
-    # is false so evidence runs are never killed mid-flight (a canceled run
-    # is lost evidence, not saved time).
-    concurrency:
-      group: reference-mac-functional
-      cancel-in-progress: false
+    # The reference box runs the PR gate AND nightly/manual exhaustive runs,
+    # and they must never overlap (2026-10-13: runs 38480319853 +
+    # 38480324742 started the same second, load > 40, 3.4x first-attempt
+    # inflation on both). Serialization comes from the box itself: exactly
+    # ONE runner (`lem-reference`) carries the `reference` label, and GitHub
+    # holds every job routed to a busy self-hosted runner in its queue
+    # (up to 24h) without canceling any of them.
+    #
+    # There is deliberately NO job-level concurrency group. The former shared
+    # `reference-mac-functional` group (cancel-in-progress: false) kept at
+    # most ONE pending job: each newly queued reference job canceled the one
+    # already waiting ("Canceling since a higher priority waiting request …
+    # exists"), so with two PRs open the older PR's gate — or a nightly — was
+    # silently dropped (5 of the last 25 runs, 2026-11-22..25). The
+    # workflow-level group above still cancels a superseded run of the SAME
+    # ref, which is wanted.
+    #
+    # Second line of defense: the heavy-test lease step below. If a second
+    # `reference` runner is ever registered on this box, overlapping suites
+    # still cannot run — the later job waits up to 15 minutes for the lease
+    # and then FAILS loudly with the holder's identity. Registering a second
+    # runner here therefore needs its own serialization design first.
     env:
       # Reserve a port separate from local development on Vite's default.
       # Keep CI's checked-out server isolated; never reuse that dev server.
@@ -71,7 +79,7 @@ jobs:
       # Hold the heavy-test lease (issue #255) while the suite runs: CI shares
       # the reference Mac with local agent sessions — the lease file lives in
       # the user cache dir, shared across checkouts and visible to local
-      # `heavy-lease.mjs status|run`. Job-level concurrency above already
+      # `heavy-lease.mjs status|run`. The single reference runner already
       # serializes CI's own reference runs; this layer coordinates them with
       # everything else. Contention QUEUES up to 15 minutes (a local targeted
       # run finishing) and only then fails with the holder's identity; a

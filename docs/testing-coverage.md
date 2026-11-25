@@ -80,9 +80,12 @@ evidence).
 The 2026-10-13 PR (38480319853) and manual exhaustive (38480324742) runs
 started the same second on the shared reference Mac and inflated each other
 ~3.4x (e.g. WebKit no-overflow-invariant: 243.5s vs 66.6s first-attempt for
-identical tests). Both reference jobs now share a job-level concurrency group
-(`reference-mac-functional`) and queue serially — treat any timing from
-overlapping runs as void.
+identical tests). Reference jobs now queue serially on the single
+`reference` runner (GitHub's queue for a busy self-hosted runner, which
+never cancels a waiting job), with the heavy-test lease as a backstop — treat
+any timing from overlapping runs as void. The former shared job-level
+concurrency group (`reference-mac-functional`) was removed: it kept at most
+one pending job and canceled the older one whenever another queued.
 
 ## Observable readiness (settle waits)
 
