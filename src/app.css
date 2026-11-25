@@ -6893,7 +6893,8 @@ dialog.annotation-panel[open] {
   overflow-wrap: anywhere;
 }
 /* 2026-11-25 rework — + Tag sits at the row's inline end; activating it
-   swaps the slot row for the tag field in the same 44px footprint. */
+   swaps the slot row for the tag field in the same 44px footprint, and
+   + Tag stays beside the field. */
 .annotation-panel-add-tag {
   gap: var(--space-xs);
   margin-inline-start: auto;
@@ -6906,7 +6907,7 @@ dialog.annotation-panel[open] {
   display: flex;
   align-items: center;
   gap: var(--space-xs);
-  flex: 1 1 100%;
+  flex: 1 1 12rem;
   min-width: 0;
 }
 .annotation-panel-tag-field .tag-entry {
@@ -6929,8 +6930,9 @@ dialog.annotation-panel[open] {
   box-sizing: border-box;
   overflow-y: auto;
 }
-/* Tag pills: their own row between writing and the controls, rendered only
-   when tags exist. Names wrap rather than truncate. */
+/* Tag pills: their own row below the slot / tag field + Tag row and above
+   the footer, rendered only when tags exist. Names wrap rather than
+   truncate. */
 .annotation-panel-tags {
   display: flex;
   flex-wrap: wrap;
@@ -6963,8 +6965,8 @@ dialog.annotation-panel[open] {
   display: inline-grid;
   place-items: center;
   flex: 0 0 auto;
-  width: 36px;
-  height: 36px;
+  width: var(--touch);
+  height: var(--touch);
   padding: 0;
   background: transparent;
   border: 0;

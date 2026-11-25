@@ -126,6 +126,11 @@ export const NOTE_RECOVERED_DRAFT_COPY = "Recovered draft";
 export const COPY_OK_COPY = "Copied.";
 export const COPY_FAILED_COPY = "Couldn't copy. Select the highlighted text and copy it manually.";
 
+/** A rejected pill removal: the tag stays (the write rolled back), and the
+ *  failure is announced rather than swallowed — the tag field's own commit
+ *  failure carries the same register. */
+export const TAG_REMOVE_FAILED_COPY = "Couldn't remove tag. Try again.";
+
 export function NotePopover(): React.ReactElement | null {
   const {
     article,
@@ -158,8 +163,11 @@ export function NotePopover(): React.ReactElement | null {
   const [panelFor, setPanelFor] = useState<string | null>(null);
   const [noteExpanded, setNoteExpanded] = useState(false);
   // The inline tag field: + Tag swaps the slot row for the field in the
-  // same footprint; Escape, the field's × and an empty blur swap it back.
+  // same footprint (+ Tag itself stays, keeping the tab order writing →
+  // field → + Tag → pills); Escape, the field's × and an empty blur swap
+  // it back.
   const [tagFieldOpen, setTagFieldOpen] = useState(false);
+  const [tagRemoveFailed, setTagRemoveFailed] = useState(false);
   const tagFieldOpenRef = useRef(false);
   tagFieldOpenRef.current = tagFieldOpen;
   const addTagRef = useRef<HTMLButtonElement>(null);
@@ -355,6 +363,7 @@ export function NotePopover(): React.ReactElement | null {
       // id) and the save-state register resets to idle (a prior session's
       // saved/error phase never leaks into the fresh editor).
       setDeleteFailed(false);
+      setTagRemoveFailed(false);
       setCopyStatus({ phase: "idle", attempt: ++copyAttemptRef.current });
       sessionIdRef.current = activeId;
       dismissalPendingRef.current = false;
@@ -786,20 +795,22 @@ export function NotePopover(): React.ReactElement | null {
    *  tag entry point (the open field's input, or + Tag). Focus lands after
    *  the tag list re-renders without the removed pill. */
   const pendingPillFocusRef = useRef<number | null>(null);
+  const highlightTags = resolved?.record.tags ?? [];
+  const tagsKey = highlightTags.join("\u0000");
   const removeTag = (index: number) => {
     if (!resolved) return;
-    const tags = resolved.record.tags ?? [];
-    const name = tags[index];
+    const name = highlightTags[index];
     if (name === undefined) return;
     pendingPillFocusRef.current = index;
+    setTagRemoveFailed(false);
     void updateHighlightTags(
       resolved.record.id,
-      tags.filter((t) => t !== name),
+      highlightTags.filter((t) => t !== name),
     ).catch(() => {
       pendingPillFocusRef.current = null;
+      setTagRemoveFailed(true);
     });
   };
-  const tagsKey = (resolved?.record.tags ?? []).join("\u0000");
   useLayoutEffect(() => {
     const index = pendingPillFocusRef.current;
     if (index === null) return;
@@ -1112,24 +1123,23 @@ export function NotePopover(): React.ReactElement | null {
                   ? { minHeight: `${tagFieldMinHeight}px` }
                   : undefined
               }
+              onBlur={(event) => {
+                // Focus leaving the field and + Tag closes an empty field.
+                // Blur never commits and never discards: uncommitted text
+                // keeps the field open for the reader to finish or clear.
+                if (!tagFieldOpenRef.current) return;
+                if (event.currentTarget.contains(event.relatedTarget as Node | null)) return;
+                const draft =
+                  tagFieldRef.current?.querySelector<HTMLInputElement>("input")?.value ?? "";
+                if (draft.trim().length === 0) closeTagField(false);
+              }}
             >
               {tagFieldOpen ? (
-                <div
-                  ref={tagFieldRef}
-                  className="annotation-panel-tag-field"
-                  onBlur={(event) => {
-                    const field = event.currentTarget;
-                    if (field.contains(event.relatedTarget as Node | null)) return;
-                    // Blur never commits and never discards: uncommitted text
-                    // keeps the field open for the reader to finish or clear.
-                    const draft = field.querySelector<HTMLInputElement>("input")?.value ?? "";
-                    if (draft.trim().length === 0) closeTagField(false);
-                  }}
-                >
+                <div ref={tagFieldRef} className="annotation-panel-tag-field">
                   <TagEntry
                     key={`${activeId}-${session}`}
                     recordId={resolved.record.id}
-                    tags={resolved.record.tags ?? []}
+                    tags={highlightTags}
                     saveTags={(next) => updateHighlightTags(resolved.record.id, next)}
                     inputId="highlight-tags-input"
                     dismissSuggestionsOnEscape
@@ -1150,32 +1160,36 @@ export function NotePopover(): React.ReactElement | null {
                   </button>
                 </div>
               ) : (
-                <>
-                  <HighlightSlotEntry
-                    key={`${activeId}-${session}`}
-                    compact
-                    slots={highlightSlots}
-                    bases={bases}
-                    onApply={(slot) => applyHighlightSlot(resolved.record.id, slot)}
-                  />
-                  <button
-                    ref={addTagRef}
-                    type="button"
-                    className="highlight-controls-button annotation-panel-add-tag"
-                    aria-label="Add tag"
-                    onClick={() => {
-                      const row = organizationRef.current;
-                      setTagFieldMinHeight(
-                        row ? row.getBoundingClientRect().height / effectiveZoom() : null,
-                      );
-                      setTagFieldOpen(true);
-                    }}
-                  >
-                    <PlusIcon />
-                    Tag
-                  </button>
-                </>
+                <HighlightSlotEntry
+                  key={`${activeId}-${session}`}
+                  compact
+                  slots={highlightSlots}
+                  bases={bases}
+                  onApply={(slot) => applyHighlightSlot(resolved.record.id, slot)}
+                />
               )}
+              <button
+                ref={addTagRef}
+                type="button"
+                className="highlight-controls-button annotation-panel-add-tag"
+                aria-label="Add tag"
+                aria-expanded={tagFieldOpen}
+                onClick={() => {
+                  if (tagFieldOpen) {
+                    // Already open: + Tag returns to the field's input.
+                    tagFieldRef.current?.querySelector<HTMLInputElement>("input")?.focus();
+                    return;
+                  }
+                  const row = organizationRef.current;
+                  setTagFieldMinHeight(
+                    row ? row.getBoundingClientRect().height / effectiveZoom() : null,
+                  );
+                  setTagFieldOpen(true);
+                }}
+              >
+                <PlusIcon />
+                Tag
+              </button>
             </div>
             {/* Always mounted (hidden at zero) so the placement observer
                 sees the row appear and re-pins the panel above its growth. */}
@@ -1183,9 +1197,9 @@ export function NotePopover(): React.ReactElement | null {
               className="annotation-panel-tags"
               aria-label="Highlight tags"
               ref={pillRowRef}
-              hidden={(resolved.record.tags ?? []).length === 0}
+              hidden={highlightTags.length === 0}
             >
-              {(resolved.record.tags ?? []).map((name, index) => (
+              {highlightTags.map((name, index) => (
                 <li key={name} className="annotation-panel-tag">
                   <span className="annotation-panel-tag-text">{name}</span>
                   <button
@@ -1199,7 +1213,10 @@ export function NotePopover(): React.ReactElement | null {
                 </li>
               ))}
             </ul>
-            <StatusRegion>{deleteFailed && <p>{DELETE_FAILED_COPY}</p>}</StatusRegion>
+            <StatusRegion>
+              {deleteFailed && <p>{DELETE_FAILED_COPY}</p>}
+              {tagRemoveFailed && <p>{TAG_REMOVE_FAILED_COPY}</p>}
+            </StatusRegion>
             <div
               className="highlight-controls-actions annotation-panel-footer"
               role="group"

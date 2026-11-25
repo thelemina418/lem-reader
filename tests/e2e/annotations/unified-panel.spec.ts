@@ -113,6 +113,20 @@ for (const width of [320, 390, 1600]) {
     const field = await panel.locator(".annotation-panel-tag-field").boundingBox();
     expect(field!.x).toBeGreaterThanOrEqual(0);
     expect(field!.x + field!.width).toBeLessThanOrEqual(width);
+    // + Tag stays beside the open field, inside the held footprint, and
+    // follows it in tab order without closing the field.
+    await expect(addTag).toBeVisible();
+    await expect(addTag).toHaveAttribute("aria-expanded", "true");
+    const addTagOpen = await addTag.boundingBox();
+    const organizationOpen = await organization.boundingBox();
+    expect(addTagOpen!.y).toBeGreaterThanOrEqual(organizationOpen!.y - 1);
+    expect(addTagOpen!.y + addTagOpen!.height).toBeLessThanOrEqual(
+      organizationOpen!.y + organizationOpen!.height + 1,
+    );
+    await panel.getByRole("button", { name: "Done adding tags" }).focus();
+    await page.keyboard.press("Tab");
+    await expect(addTag).toBeFocused();
+    await expect(panel.getByRole("combobox")).toBeVisible();
     if (testInfo.project.name === "chromium")
       await page.screenshot({ path: testInfo.outputPath("tag-field.png") });
     await panel.getByRole("button", { name: "Done adding tags" }).click();

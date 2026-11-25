@@ -192,7 +192,16 @@ describe("HighlightTagsDialog — disclosed tag editing", () => {
     await waitFor(() => expect(document.activeElement).toBe(input));
     expect(within(dialog).getByText("Tags", { selector: "legend" })).toHaveClass("visually-hidden");
     expect(within(dialog).queryByRole("button", { name: /^Apply slot/ })).toBeNull();
-    expect(within(dialog).queryByRole("button", { name: "Add tag" })).toBeNull();
+    // + Tag stays beside the field (tab order: field → + Tag → pills) and
+    // returns focus to the input when activated again.
+    const addTag = within(dialog).getByRole("button", { name: "Add tag" });
+    expect(addTag.getAttribute("aria-expanded")).toBe("true");
+    expect(
+      addTag.compareDocumentPosition(input) & Node.DOCUMENT_POSITION_PRECEDING,
+    ).toBeTruthy();
+    await userEvent.setup().click(addTag);
+    expect(within(dialog).getByLabelText("Add or search a tag")).toBe(input);
+    await waitFor(() => expect(document.activeElement).toBe(input));
     // The picker's own chip list is suppressed: one remove control per tag.
     expect(within(dialog).getAllByRole("button", { name: "Remove tag essays" })).toHaveLength(1);
   });
@@ -330,6 +339,19 @@ describe("HighlightTagsDialog — disclosed tag editing", () => {
     // The host's StatusRegion (polite live region) announces the failure
     // locally — the StorageBanner behind the modal backdrop is not enough.
     await screen.findByText("Couldn't save tag.");
+  });
+
+  it("a failed pill removal keeps the pill and announces the failure", async () => {
+    mockData.highlightRecord.tags = ["essays"];
+    const { setHighlightTags } = await import("../../../src/ingestion/library/tagsStore");
+    vi.mocked(setHighlightTags).mockRejectedValueOnce(new Error("QuotaExceededError"));
+    const user = userEvent.setup();
+    renderTagsDialog();
+
+    await user.click(await screen.findByRole("button", { name: "Remove tag essays" }));
+
+    await screen.findByText("Couldn't remove tag. Try again.");
+    expect(screen.getByRole("button", { name: "Remove tag essays" })).toBeTruthy();
   });
 
   it("Done closes the dialog; the editor carries exactly ONE tag field (no note tag set)", async () => {
