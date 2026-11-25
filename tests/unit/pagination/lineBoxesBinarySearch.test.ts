@@ -57,6 +57,9 @@ export interface MockHandle {
   restore: () => void;
   /** Number of getClientRects invocations since install. */
   probeCount: () => number;
+  /** Total rects returned across all getClientRects invocations — the probe
+   * COST (a real engine lays out one fragment per covered line). */
+  rectCount: () => number;
 }
 
 /**
@@ -72,6 +75,7 @@ function installScheduleMock(
 ): MockHandle {
   const realCreateRange = document.createRange.bind(document);
   let probes = 0;
+  let rectsReturned = 0;
   const state = {
     node: null as Text | null,
     start: 0,
@@ -102,6 +106,7 @@ function installScheduleMock(
           rects.push(new DOMRect(0, lines[li]!.top, 100, lines[li]!.height) as DOMRect);
         }
       }
+      rectsReturned += rects.length;
       return rects as unknown as DOMRectList;
     }) as Range["getClientRects"],
   } as unknown as Range;
@@ -111,6 +116,7 @@ function installScheduleMock(
       document.createRange = realCreateRange;
     },
     probeCount: () => probes,
+    rectCount: () => rectsReturned,
   };
 }
 
@@ -233,6 +239,36 @@ describe("readLineBoxes — O(lines × log L) probe bound", () => {
       const bound = lines.length * Math.ceil(Math.log2(text.length)) + lines.length + 2;
       expect(mock.probeCount()).toBeGreaterThan(0);
       expect(mock.probeCount()).toBeLessThanOrEqual(bound);
+    } finally {
+      mock.restore();
+    }
+  });
+});
+
+// ── Probe COST bound: rects per probe stay ~one line, not lines-so-far ─────
+
+describe("readLineBoxes — probe cost stays linear in lines", () => {
+  it("a 400-line node with irregular lines returns O(lines) rects in total and equals the oracle", () => {
+    // Deterministic irregular line lengths (8–71 units), plus a 300-unit
+    // line after short ones so the bounded window must gallop to find it.
+    const offsets: number[] = [0];
+    for (let i = 1; i < 400; i++) {
+      const prevLen = i === 200 ? 300 : 8 + ((i * 37) % 64);
+      offsets.push(offsets[i - 1]! + prevLen);
+    }
+    const text = "x".repeat(offsets[offsets.length - 1]! + 40);
+    const perNode = new Map([[text, intSchedule(offsets)]]);
+    const { actual } = expectEquivalent(makeParagraphEl(text), text, perNode);
+    expect(actual).toHaveLength(400);
+
+    const mock = installScheduleMock(perNode);
+    try {
+      readLineBoxes(makeParagraphEl(text), text, new AbortController().signal);
+      // [0, i) probes return one rect per line ABOVE i — O(lines² × log L),
+      // ~600k rects here. Line-start probes in a bounded window return a
+      // few rects each: the first line's unbounded search is O(lines) once,
+      // every later search is ~log2(window) probes of 1–3 rects.
+      expect(mock.rectCount()).toBeLessThanOrEqual(32 * offsets.length);
     } finally {
       mock.restore();
     }

@@ -81,6 +81,9 @@ export function charOffsetToGrapheme(text: string, charOffset: number, locale: s
   return clusters.length;
 }
 
+/** Smallest bounded search window (UTF-16 units) once a line length is known. */
+const MIN_SEARCH_SPAN = 16;
+
 /**
  * Read every CSS line box of a block's text as a LineBox[].
  *
@@ -171,37 +174,61 @@ export function readLineBoxes(el: HTMLElement, fullText: string, signal: AbortSi
     // merge). Binary search over a monotone predicate therefore finds the
     // same minimal i the former per-character linear scan found — the probe
     // count drops from O(L) to O(lines × log L) per text node.
+    //
+    // Probe COST, not just count: Range.getClientRects returns (and lays out)
+    // one rect per line the range covers, so a [0, i) probe deep in a long
+    // node costs O(lines so far) and the walk was O(lines² × log L) — ~2.8s
+    // of a 3.2s restore for one 800-sentence heading in Chromium, past the
+    // 5s expect window in Linux WebKit. Two changes keep every probe to ~1–2
+    // lines without changing which i is found:
+    //   - probes start at the CURRENT line's first char (`lineStart`), not 0.
+    //     The last rect is the fragment holding char i-1 either way, so its
+    //     top/bottom are unchanged, and the range always contains the char
+    //     that opened the line, so it is non-empty whenever [0, i) was.
+    //   - after the node's first line, each search window is bounded to
+    //     twice the previous line's length and doubled (galloping) until it
+    //     contains the boundary. The predicate is false everywhere below the
+    //     window's end when the window misses, so resuming at end + 1 and
+    //     binary-searching the next window yields the same minimal i.
     let cur = 0;
+    let lineStart = 0;
+    let span = 0; // 0 = unbounded: no line length observed yet in this node
     for (;;) {
       if (cur >= localLen) break; // no offsets remain in this text node
       let lo = cur + 1;
-      let hi = localLen;
+      let windowSpan = span;
       let boundary = -1;
       let boundaryRects: DOMRectList | null = null;
-      while (lo <= hi) {
-        // Check cancel before every probe — the probe count is now
-        // ~lines × log L per node, so cancellation latency drops, but the
-        // mid-walk AbortError contract is preserved. (The function-entry
-        // check above covers the pre-aborted case; every binary-search
-        // probe sits at globalBase + mid ≥ 1, matching the old walk's
-        // abort-check condition.)
-        if (signal.aborted) throw new AbortError();
-        const mid = (lo + hi) >> 1;
-        range.setStart(textNode, 0);
-        range.setEnd(textNode, mid);
-        const rects = range.getClientRects();
-        if (rects.length > 0) {
-          const lastRect = rects[rects.length - 1]!;
-          if (Number.isNaN(lastTop) || Math.round(lastRect.top) !== Math.round(lastTop)) {
-            // Predicate holds at mid — the boundary is at mid or earlier.
-            boundary = mid;
-            boundaryRects = rects;
-            hi = mid - 1;
-            continue;
+      for (;;) {
+        const hi = windowSpan > 0 ? Math.min(localLen, cur + windowSpan) : localLen;
+        let searchHi = hi;
+        while (lo <= searchHi) {
+          // Check cancel before every probe — the mid-walk AbortError
+          // contract is preserved. (The function-entry check above covers the
+          // pre-aborted case; every probe sits at globalBase + mid ≥ 1,
+          // matching the old walk's abort-check condition.)
+          if (signal.aborted) throw new AbortError();
+          const mid = (lo + searchHi) >> 1;
+          range.setStart(textNode, lineStart);
+          range.setEnd(textNode, mid);
+          const rects = range.getClientRects();
+          if (rects.length > 0) {
+            const lastRect = rects[rects.length - 1]!;
+            if (Number.isNaN(lastTop) || Math.round(lastRect.top) !== Math.round(lastTop)) {
+              // Predicate holds at mid — the boundary is at mid or earlier.
+              boundary = mid;
+              boundaryRects = rects;
+              searchHi = mid - 1;
+              continue;
+            }
           }
+          // Predicate fails at mid — the boundary (if any) is later.
+          lo = mid + 1;
         }
-        // Predicate fails at mid — the boundary (if any) is later.
-        lo = mid + 1;
+        if (boundary >= 0 || hi >= localLen) break;
+        // The window held no boundary: the predicate is false through hi.
+        lo = hi + 1;
+        windowSpan *= 2;
       }
       if (boundary < 0) break; // no further boundary in this text node
       // New line detected. Line 1 always starts at charOffset 0; later
@@ -218,6 +245,13 @@ export function readLineBoxes(el: HTMLElement, fullText: string, signal: AbortSi
       const charOffset = isFirst ? 0 : globalBase + boundary - 1;
       boxes.push({ charOffset, topPx: top, bottomPx: lastRect.bottom });
       lastTop = top;
+      const nextLineStart = boundary - 1;
+      // Bound the next search only once a real line length is known (the
+      // first box opens at offset 0 with no length behind it yet).
+      if (nextLineStart > lineStart) {
+        span = Math.max(MIN_SEARCH_SPAN, 2 * (nextLineStart - lineStart));
+      }
+      lineStart = nextLineStart;
       cur = boundary;
     }
     globalBase += localLen;
