@@ -5,6 +5,22 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>Lem Reader</title>
     <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
+    <!--
+      Reading-voice faces (src/app.css @font-face). The browser otherwise
+      requests them only when article text first renders, and pagination
+      waits on document.fonts.ready, so the first article open paid the
+      whole ~175 KB download. Preloading starts it at app load instead.
+      crossorigin is required: font fetches are CORS-mode, and a preload
+      without it is not reused.
+    -->
+    <link rel="preload" href="/fonts/literata-var.woff2" as="font" type="font/woff2" crossorigin />
+    <link
+      rel="preload"
+      href="/fonts/literata-italic-var.woff2"
+      as="font"
+      type="font/woff2"
+      crossorigin
+    />
     <script>
       // Settings-mirror paint hint (POLISH-01, D13-01/D13-02). Before React
       // mounts, apply the persisted ReaderSettings tokens to :root so a cold
