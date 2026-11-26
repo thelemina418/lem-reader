@@ -7542,6 +7542,9 @@ dialog.add-reading {
   overflow-y: auto;
   scrollbar-gutter: stable;
 }
+.add-reading-group {
+  display: grid;
+}
 .add-reading-row {
   display: flex;
   align-items: center;
@@ -7580,6 +7583,39 @@ dialog.add-reading {
   min-width: 0;
   display: flex;
   flex-direction: column;
+  align-items: flex-start;
+}
+/* Issue #16 — chapters collapse under their reading; the nested list is
+ * the controlled disclosure region ([hidden] while collapsed). */
+.add-reading-chapters {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  gap: var(--space-xs);
+}
+.add-reading-chapters[hidden] {
+  display: none;
+}
+.add-reading-disclosure {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-xs);
+  margin-block-start: var(--space-xs);
+  margin-inline-start: calc(-1 * var(--space-sm));
+  font-size: 13px;
+}
+.add-reading-chevron {
+  display: inline-block;
+  line-height: 1;
+}
+.add-reading-disclosure[aria-expanded="true"] .add-reading-chevron {
+  transform: rotate(90deg);
+}
+@media (prefers-reduced-motion: no-preference) {
+  .add-reading-chevron {
+    transition: transform 160ms ease;
+  }
 }
 .add-reading-row-title {
   overflow-wrap: anywhere;

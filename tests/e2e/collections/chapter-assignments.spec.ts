@@ -359,7 +359,29 @@ test.describe("Chapter assignments (issue #244)", () => {
     await page.getByRole("button", { name: "Add readings" }).click();
     const dialog = page.getByRole("dialog");
 
-    // The work's chapter rows (structure titles) sit under the work's row.
+    // Issue #16 — chapters start COLLAPSED under their reading; a real
+    // disclosure button reveals them and keeps keyboard focus.
+    await page.fill("#add-reading-search", "The Tide Ledger");
+    const chapterRow = dialog.getByRole("button", {
+      name: "Add Opening Arguments (Chapter · The Tide Ledger)",
+      exact: true,
+    });
+    await expect(chapterRow).toHaveCount(0);
+    const disclosure = dialog.getByRole("button", {
+      name: /^Show \d+ chapters? of The Tide Ledger$/,
+    });
+    await expect(disclosure).toHaveAttribute("aria-expanded", "false");
+    await disclosure.focus();
+    await page.keyboard.press("Enter");
+    const hide = dialog.getByRole("button", { name: /^Hide \d+ chapters? of The Tide Ledger$/ });
+    await expect(hide).toHaveAttribute("aria-expanded", "true");
+    await expect(hide).toBeFocused();
+    await expect(chapterRow).toBeVisible();
+    await page.keyboard.press("Enter");
+    await expect(chapterRow).toHaveCount(0);
+
+    // The work's chapter rows (structure titles) sit under the work's row;
+    // a chapter-title search auto-expands the parent.
     await page.fill("#add-reading-search", "Opening Arguments");
     await expect(
       dialog.getByRole("button", {
@@ -391,6 +413,19 @@ test.describe("Chapter assignments (issue #244)", () => {
       })
       .click();
     await expect(dialog.getByText("Added", { exact: true }).first()).toBeVisible();
+    // The activated control stays mounted and focused across the add.
+    await expect(
+      dialog.getByRole("button", {
+        name: "Added Opening Arguments (Chapter · The Tide Ledger)",
+        exact: true,
+      }),
+    ).toBeFocused();
+    // Collapsed (search cleared), the work's row counts its added chapter
+    // in the whole-reading control's accessible name.
+    await page.fill("#add-reading-search", "The Tide Ledger");
+    await expect(
+      dialog.getByRole("button", { name: "Add The Tide Ledger (1 chapter added)", exact: true }),
+    ).toBeVisible();
     await page.fill("#add-reading-search", "Book Chapter 1");
     await dialog
       .getByRole("button", {
