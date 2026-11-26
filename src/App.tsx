@@ -33,6 +33,7 @@ import { useDeferredLibrarySnapshot } from "./ingestion/library/useDeferredLibra
 import { invalidateLibrarySnapshot } from "./ingestion/library/librarySnapshotBus";
 // Type-only (erased — no fetch): the tag-stats shape for the memo below.
 import type { TagStat } from "./ingestion/library/tagStats";
+import type { CollectionImportDestination } from "./routes/collections/importIntoCollection";
 
 const LibraryView = lazy(() =>
   import("./ingestion/library/LibraryView").then((m) => ({ default: m.LibraryView })),
@@ -405,11 +406,17 @@ function AppInner() {
   // confirmation (a fresh add session must not show last session's
   // "Saved to your library." behind the refusal copy).
   const [addSavedNotice, setAddSavedNotice] = useState<string | null>(null);
-  const openAdd = useCallback(() => {
+  // Issue #15 — the collection an open session imports into (set by the
+  // collection page's "Import into collection"; null for the ordinary
+  // library add from either Add trigger). The SAME dialog serves both.
+  const [addDestination, setAddDestination] = useState<CollectionImportDestination | null>(null);
+  const openAddSession = useCallback((destination: CollectionImportDestination | null) => {
     setAddDialogReady(true);
     setAddSavedNotice(null);
+    setAddDestination(destination);
     setAddOpen(true);
   }, []);
+  const openAdd = useCallback(() => openAddSession(null), [openAddSession]);
   // Issue #163 — the unchecked-success landing: the dialog hands the
   // confirmation copy here, the library's status region announces it (a
   // live region inside the closing dialog could not), and — when the
@@ -621,7 +628,8 @@ function AppInner() {
         destination={destination}
         readTarget={readTarget ? { articleId: readTarget.articleId } : null}
         openArticleId={view.name === "article" ? view.id : null}
-        addOpen={addOpen}
+        // Issue #15 — a collection import is not the header trigger's session.
+        addOpen={addOpen && addDestination === null}
         onOpenAdd={openAdd}
       />
       <SettingsPanel open={settingsOpen} onClose={() => setSettingsOpen(false)} />
@@ -649,6 +657,7 @@ function AppInner() {
             // library's status region (see handleQuietSave).
             onQuietSave={handleQuietSave}
             tagStats={addTagStats}
+            destination={addDestination}
           />
         </Suspense>
       ) : null}
@@ -677,7 +686,11 @@ function AppInner() {
         ) : view.name === "collections" ? (
           <CollectionsView hasAppHistory={hasAppHistory} />
         ) : view.name === "collection" ? (
-          <CollectionDetailView collectionId={view.id} hasAppHistory={hasAppHistory} />
+          <CollectionDetailView
+            collectionId={view.id}
+            hasAppHistory={hasAppHistory}
+            onImportIntoCollection={openAddSession}
+          />
         ) : (
           <ArticleView
             articleId={view.id}

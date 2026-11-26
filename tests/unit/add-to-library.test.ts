@@ -525,7 +525,7 @@ describe("addToLibrary — book path (epub)", () => {
     expect(outcome.firstChapterArticleId).toBe("epub-c01");
   });
 
-  it("book dedupe-refuse: hasBook=true → refused already-in-library, saveBook NEVER called", async () => {
+  it("book dedupe-refuse: hasBook=true → refused already-in-library with the existing book id, saveBook NEVER called", async () => {
     hasBookMock.mockResolvedValue(true);
     ingestEpubMock.mockResolvedValue(bookSuccess());
     const outcome = await addToLibrary({
@@ -533,7 +533,14 @@ describe("addToLibrary — book path (epub)", () => {
       file: new File(["PK"], "book.epub"),
     });
 
-    expect(outcome).toEqual({ outcome: "refused", reason: "already-in-library" });
+    // Issue #15 — the refusal names the book ALREADY in the library (the
+    // content-hash id it just checked) so a collection import can reference
+    // it instead of failing without an id.
+    expect(outcome).toEqual({
+      outcome: "refused",
+      reason: "already-in-library",
+      existingBookId: "book-id",
+    });
     expect(saveBookMock).not.toHaveBeenCalled();
   });
 
