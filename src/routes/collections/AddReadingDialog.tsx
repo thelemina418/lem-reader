@@ -30,7 +30,7 @@
 // Five-part dialog grammar cloned verbatim from EditMetadataDialog
 // (showModal sync, [data-initial-focus], preventDefault cancel/scrim,
 // in-flight dismissal gate, Pitfall 1 trigger-focus restore).
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useId, useMemo, useRef, useState } from "react";
 import type { FormEvent } from "react";
 import { StatusRegion } from "../../ui/StatusRegion";
 import { effectiveTitle } from "../../ingestion/library/effectiveMetadata";
@@ -64,13 +64,28 @@ interface PickerRow {
   /** "chapter" rows render indented under their parent with the parent
    * named in the meta line; parent rows keep their own Add button. */
   kind: "article" | "book" | "chapter";
-  id: string;
   title: string;
   target: CollectionEntryTarget;
   meta: string;
-  /** True for the indented chapter rows (the CSS hook + the sortable
-   * grouping key). */
-  chapterOfParentKey?: string;
+}
+
+/** One reading and its addable chapters (issue #16: collapsed by default). */
+interface PickerGroup {
+  parent: PickerRow;
+  chapters: readonly PickerRow[];
+}
+
+/** A group as shown: `chapters` null while collapsed; `searchMatched`
+ * when the query matched chapter titles (auto-expanded, filtered). */
+interface VisibleGroup {
+  group: PickerGroup;
+  chapters: readonly PickerRow[] | null;
+  searchMatched?: boolean;
+}
+
+/** "1 chapter" / "14 chapters". */
+function chapterCount(n: number): string {
+  return `${n} ${n === 1 ? "chapter" : "chapters"}`;
 }
 
 function outcomeMessage(outcome: AddCollectionEntryOutcome, title: string): string {
@@ -100,9 +115,13 @@ export function AddReadingDialog({
   const ref = useRef<HTMLDialogElement>(null);
   const triggerRef = useRef<HTMLElement | null>(null);
   const searchRef = useRef<HTMLInputElement>(null);
+  const idPrefix = useId();
   const [query, setQuery] = useState("");
   const [pendingKey, setPendingKey] = useState<string | null>(null);
   const [message, setMessage] = useState<string | null>(null);
+  // Which readings the reader has expanded — persists while the dialog
+  // stays open, reset on each fresh open (issue #16).
+  const [expandedKeys, setExpandedKeys] = useState<ReadonlySet<string>>(() => new Set());
   // Live mirror rewritten EVERY render: the long-lived cancel/scrim
   // listeners must read the CURRENT pending state, not a stale capture.
   const pendingRef = useRef(false);
@@ -119,6 +138,7 @@ export function AddReadingDialog({
       setQuery("");
       setPendingKey(null);
       setMessage(null);
+      setExpandedKeys(new Set());
       const initial =
         dlg.querySelector<HTMLElement>("[data-initial-focus]") ??
         dlg.querySelector<HTMLElement>(
@@ -157,14 +177,12 @@ export function AddReadingDialog({
     };
   }, [onCancel]);
 
-  // The rows: standalone articles + books — each followed by its validated
-  // chapter rows in structure/TOC order (issue #244) — grouped under their
-  // alphabetized parent (calm, stable: a plan is assembled by name, not by
-  // recency). One pass; membership via the ONE comparison.
-  const rows = useMemo<PickerRow[]>(() => {
+  // The groups: standalone articles + books, alphabetized (calm, stable: a
+  // plan is assembled by name, not by recency), each carrying its
+  // validated chapter rows in structure/TOC order (issue #244). Membership
+  // via the ONE comparison.
+  const groups = useMemo<PickerGroup[]>(() => {
     if (!collection) return [];
-    // Parents alphabetized together (the issue #242 order), so chapter
-    // rows slot directly beneath their own parent.
     const parents = [
       ...articles.map((a) => ({
         key: `article-${a.id}`,
@@ -182,25 +200,16 @@ export function AddReadingDialog({
       })),
     ];
     parents.sort((a, b) => a.title.localeCompare(b.title));
-    const rows: PickerRow[] = [];
-    for (const parent of parents) {
-      rows.push({
-        key: parent.key,
-        kind: parent.book === null ? "article" : "book",
-        id: parent.book === null ? parent.article!.id : parent.book.id,
-        title: parent.title,
-        target: parent.target,
-        meta: parent.book === null ? "Article" : "Book",
-      });
+    return parents.map((parent) => {
+      const chapters: PickerRow[] = [];
       if (parent.book === null) {
         // Work chapters: the validated chapter destinations of the
         // article's structure (the ONE resolution — a chapter offered here
         // is a chapter the reader and the store both resolve).
         for (const destination of listWorkChapterTargets(parent.article!)) {
-          rows.push({
+          chapters.push({
             key: `work-chapter-${parent.key}-${destination.id}`,
             kind: "chapter",
-            id: destination.id,
             title: destination.title,
             target: {
               kind: "work-chapter",
@@ -208,7 +217,6 @@ export function AddReadingDialog({
               destinationId: destination.id,
             },
             meta: `Chapter · ${parent.title}`,
-            chapterOfParentKey: parent.key,
           });
         }
       } else {
@@ -217,10 +225,9 @@ export function AddReadingDialog({
         // fold).
         const live = chaptersByBook.get(parent.book.id) ?? [];
         for (const chapter of orderedLiveChapters(parent.book, live)) {
-          rows.push({
+          chapters.push({
             key: `book-chapter-${parent.key}-${chapter.id}`,
             kind: "chapter",
-            id: chapter.id,
             title: effectiveTitle(chapter),
             target: {
               kind: "book-chapter",
@@ -228,12 +235,20 @@ export function AddReadingDialog({
               articleId: chapter.id,
             },
             meta: `Chapter · ${parent.title}`,
-            chapterOfParentKey: parent.key,
           });
         }
       }
-    }
-    return rows;
+      return {
+        parent: {
+          key: parent.key,
+          kind: parent.book === null ? "article" : "book",
+          title: parent.title,
+          target: parent.target,
+          meta: parent.book === null ? "Article" : "Book",
+        },
+        chapters,
+      };
+    });
   }, [articles, books, chaptersByBook, collection]);
 
   // The membership marks read the LIVE collection (the host replaces it
@@ -241,21 +256,48 @@ export function AddReadingDialog({
   const addedKeys = useMemo(() => {
     if (!collection) return new Set<string>();
     const keys = new Set<string>();
-    for (const row of rows) {
-      if (collection.entries.some((entry) => sameCollectionTarget(entry.target, row.target))) {
-        keys.add(row.key);
+    const isMember = (row: PickerRow) =>
+      collection.entries.some((entry) => sameCollectionTarget(entry.target, row.target));
+    for (const group of groups) {
+      for (const row of [group.parent, ...group.chapters]) {
+        if (isMember(row)) keys.add(row.key);
       }
     }
     return keys;
-  }, [collection, rows]);
+  }, [collection, groups]);
 
   const lower = query.trim().toLowerCase();
-  const visible = useMemo(
-    () => (lower.length === 0 ? rows : rows.filter((r) => r.title.toLowerCase().includes(lower))),
-    [rows, lower],
-  );
+  // Search matches readings AND chapter titles. A chapter match shows its
+  // parent with ONLY the matching chapters beneath it (auto-expanded — the
+  // reader's own disclosure state is untouched and returns with the
+  // cleared search). A parent-only match keeps the reader's disclosure.
+  const visible = useMemo<VisibleGroup[]>(() => {
+    const out: VisibleGroup[] = [];
+    for (const group of groups) {
+      if (lower.length === 0) {
+        out.push({ group, chapters: expandedKeys.has(group.parent.key) ? group.chapters : null });
+        continue;
+      }
+      const matching = group.chapters.filter((c) => c.title.toLowerCase().includes(lower));
+      if (matching.length > 0) {
+        out.push({ group, chapters: matching, searchMatched: true });
+      } else if (group.parent.title.toLowerCase().includes(lower)) {
+        out.push({ group, chapters: expandedKeys.has(group.parent.key) ? group.chapters : null });
+      }
+    }
+    return out;
+  }, [groups, lower, expandedKeys]);
   // The honest no-match line: a non-empty query that matched nothing.
   const showNoMatch = lower.length > 0 && visible.length === 0;
+
+  function toggleExpanded(key: string) {
+    setExpandedKeys((prev) => {
+      const next = new Set(prev);
+      if (next.has(key)) next.delete(key);
+      else next.add(key);
+      return next;
+    });
+  }
 
   // The ONLY add write site — fires ONLY from a row button's onClick,
   // never in a catch block or effect. Storage failures keep the dialog
@@ -275,6 +317,28 @@ export function AddReadingDialog({
       pendingRef.current = false;
       setPendingKey(null);
     }
+  }
+
+  // ONE Add control per row. It stays mounted when the row flips to
+  // "Added" so keyboard focus survives the membership update.
+  function addButton(row: PickerRow, note: string | null) {
+    const added = addedKeys.has(row.key);
+    const pending = pendingKey === row.key;
+    const suffix = row.kind === "chapter" ? ` (${row.meta})` : note !== null ? ` (${note})` : "";
+    return (
+      <button
+        type="button"
+        className={`btn btn-quiet add-reading-add-button${added ? " add-reading-added" : ""}`}
+        aria-disabled={added || pendingKey !== null}
+        aria-busy={pending || undefined}
+        onClick={() => {
+          if (!added) void handleAdd(row);
+        }}
+        aria-label={`${added ? "Added" : "Add"} ${row.title}${suffix}`}
+      >
+        {added ? "Added" : "Add"}
+      </button>
+    );
   }
 
   function handleFormSubmit(e: FormEvent<HTMLFormElement>) {
@@ -312,34 +376,60 @@ export function AddReadingDialog({
             </p>
           ) : (
             <ul className="add-reading-list">
-              {visible.map((row) => {
-                const added = addedKeys.has(row.key);
-                const pending = pendingKey === row.key;
+              {visible.map(({ group, chapters, searchMatched }) => {
+                const { parent } = group;
+                const count = group.chapters.length;
+                const addedChapters = group.chapters.filter((c) => addedKeys.has(c.key)).length;
+                // The collapsed row's honest membership note (issue #16).
+                const note = addedChapters > 0 ? `${chapterCount(addedChapters)} added` : null;
+                const expanded = chapters !== null;
+                // Keyed by the reading (never list position) so the aria-controls
+                // target is stable while search filters the list.
+                const chaptersId = `${idPrefix}-chapters-${parent.key}`;
+                const disclosureText = `${expanded ? "Hide" : "Show"} ${chapterCount(count)}`;
                 return (
-                  <li
-                    key={row.key}
-                    className={
-                      row.kind === "chapter"
-                        ? "add-reading-row add-reading-row-chapter"
-                        : "add-reading-row"
-                    }
-                  >
-                    <div className="add-reading-row-main">
-                      <span className="add-reading-row-title">{row.title}</span>
-                      <span className="meta">{row.meta}</span>
+                  <li key={parent.key} className="add-reading-group">
+                    <div className="add-reading-row">
+                      <div className="add-reading-row-main">
+                        <span className="add-reading-row-title">{parent.title}</span>
+                        <span className="meta">
+                          {parent.meta}
+                          {note !== null && ` · ${note}`}
+                        </span>
+                        {count > 0 && !searchMatched && (
+                          <button
+                            type="button"
+                            className="btn btn-quiet add-reading-disclosure"
+                            aria-expanded={expanded}
+                            aria-controls={chaptersId}
+                            aria-label={`${disclosureText} of ${parent.title}`}
+                            onClick={() => toggleExpanded(parent.key)}
+                          >
+                            <span className="add-reading-chevron" aria-hidden="true">
+                              ›
+                            </span>
+                            {disclosureText}
+                          </button>
+                        )}
+                      </div>
+                      {addButton(parent, note)}
                     </div>
-                    <button
-                      type="button"
-                      className={`btn btn-quiet add-reading-add-button${added ? " add-reading-added" : ""}`}
-                      aria-disabled={added || pendingKey !== null}
-                      aria-busy={pending || undefined}
-                      onClick={() => {
-                        if (!added) void handleAdd(row);
-                      }}
-                      aria-label={`${added ? "Added" : "Add"} ${row.title}${row.kind === "chapter" ? ` (${row.meta})` : ""}`}
-                    >
-                      {added ? "Added" : "Add"}
-                    </button>
+                    {/* The controlled region stays in the DOM so
+                        aria-controls resolves in both states (the BookRow
+                        precedent); its rows mount only while expanded. */}
+                    {count > 0 && (
+                      <ul id={chaptersId} className="add-reading-chapters" hidden={!expanded}>
+                        {(chapters ?? []).map((row) => (
+                          <li key={row.key} className="add-reading-row add-reading-row-chapter">
+                            <div className="add-reading-row-main">
+                              <span className="add-reading-row-title">{row.title}</span>
+                              <span className="meta">{row.meta}</span>
+                            </div>
+                            {addButton(row, null)}
+                          </li>
+                        ))}
+                      </ul>
+                    )}
                   </li>
                 );
               })}

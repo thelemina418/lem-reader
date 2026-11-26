@@ -256,9 +256,47 @@ describe("add-reading dialog chapter rows (issue #244)", () => {
     return { onOutcome };
   }
 
+  it("starts every chaptered reading collapsed, its whole reading still addable", () => {
+    renderDialogWithChapters();
+    const dialog = screen.getByRole("dialog");
+    expect(within(dialog).queryByText("Opening")).toBeNull();
+    expect(within(dialog).queryByText("Chapter 1")).toBeNull();
+    expect(within(dialog).getByRole("button", { name: "Add The Long Work" })).toBeTruthy();
+    expect(within(dialog).getByRole("button", { name: "Add Harbor" })).toBeTruthy();
+    const disclosure = within(dialog).getByRole("button", {
+      name: "Show 2 chapters of The Long Work",
+    });
+    expect(disclosure).toHaveAttribute("aria-expanded", "false");
+  });
+
+  it("a disclosure reveals one reading's chapters and stays open while the dialog does", () => {
+    renderDialogWithChapters();
+    const dialog = screen.getByRole("dialog");
+    const disclosure = within(dialog).getByRole("button", {
+      name: "Show 2 chapters of The Long Work",
+    });
+    fireEvent.click(disclosure);
+    expect(disclosure).toHaveAttribute("aria-expanded", "true");
+    expect(within(dialog).getByText("Opening")).toBeTruthy();
+    // Only the toggled reading expands.
+    expect(within(dialog).queryByText("Chapter 1")).toBeNull();
+    // A search round-trip does not forget the reader's expansion.
+    const input = within(dialog).getByLabelText("Search your readings");
+    fireEvent.change(input, { target: { value: "Harbor" } });
+    fireEvent.change(input, { target: { value: "" } });
+    expect(within(dialog).getByText("Opening")).toBeTruthy();
+    const hide = within(dialog).getByRole("button", { name: "Hide 2 chapters of The Long Work" });
+    expect(hide).toHaveAttribute("aria-expanded", "true");
+    fireEvent.click(hide);
+    expect(hide).toHaveAttribute("aria-expanded", "false");
+    expect(within(dialog).queryByText("Opening")).toBeNull();
+  });
+
   it("lists chapter rows under each parent with the parent named in the meta", () => {
     renderDialogWithChapters();
     const dialog = screen.getByRole("dialog");
+    fireEvent.click(within(dialog).getByRole("button", { name: /^Show 2 chapters of The Long/ }));
+    fireEvent.click(within(dialog).getByRole("button", { name: /^Show 2 chapters of Harbor/ }));
     // Work chapters (structure titles) + book chapters (existing rows).
     expect(within(dialog).getByText("Opening")).toBeTruthy();
     expect(within(dialog).getByText("Following")).toBeTruthy();
@@ -273,6 +311,7 @@ describe("add-reading dialog chapter rows (issue #244)", () => {
     vi.mocked(addCollectionEntry).mockResolvedValue({ outcome: "added", collection });
     const { onOutcome } = renderDialogWithChapters();
     const dialog = screen.getByRole("dialog");
+    fireEvent.click(within(dialog).getByRole("button", { name: /^Show 2 chapters of The Long/ }));
     fireEvent.click(
       within(dialog).getByRole("button", { name: "Add Opening (Chapter · The Long Work)" }),
     );
@@ -289,6 +328,7 @@ describe("add-reading dialog chapter rows (issue #244)", () => {
     vi.mocked(addCollectionEntry).mockResolvedValue({ outcome: "added", collection });
     const { onOutcome } = renderDialogWithChapters();
     const dialog = screen.getByRole("dialog");
+    fireEvent.click(within(dialog).getByRole("button", { name: /^Show 2 chapters of Harbor/ }));
     fireEvent.click(
       within(dialog).getByRole("button", { name: "Add Chapter 2 (Chapter · Harbor)" }),
     );
@@ -347,6 +387,15 @@ describe("add-reading dialog chapter rows (issue #244)", () => {
     );
     render(<Host />);
     const dialog = screen.getByRole("dialog");
+    // Collapsed, the book's row states its chapter membership — visibly
+    // and in the whole-reading Add control's accessible name.
+    expect(within(dialog).getByText("Book · 1 chapter added")).toBeTruthy();
+    expect(
+      within(dialog).getByRole("button", { name: "Add Harbor (1 chapter added)" }),
+    ).toBeTruthy();
+    expect(within(dialog).getByText("Article")).toBeTruthy();
+    fireEvent.click(within(dialog).getByRole("button", { name: /^Show 1 chapter of Harbor/ }));
+    fireEvent.click(within(dialog).getByRole("button", { name: /^Show 2 chapters of The Long/ }));
     expect(within(dialog).getByText("Added")).toBeTruthy();
     expect(
       within(dialog).queryByRole("button", { name: "Add Chapter 1 (Chapter · Harbor)" }),
@@ -356,14 +405,32 @@ describe("add-reading dialog chapter rows (issue #244)", () => {
     ).toBeTruthy();
   });
 
-  it("search finds chapters by their own title", () => {
+  it("search auto-expands a chapter match under its parent, showing only matching chapters", () => {
     renderDialogWithChapters();
     const dialog = screen.getByRole("dialog");
     const input = within(dialog).getByLabelText("Search your readings");
     fireEvent.change(input, { target: { value: "Following" } });
-    expect(within(dialog).getByText("Following")).toBeTruthy();
+    expect(within(dialog).getByText("The Long Work")).toBeTruthy();
+    expect(
+      within(dialog).getByRole("button", { name: "Add Following (Chapter · The Long Work)" }),
+    ).toBeTruthy();
     expect(within(dialog).queryByText("Opening")).toBeNull();
-    expect(within(dialog).queryByText("The Long Work")).toBeNull();
+    expect(within(dialog).queryByText("Harbor")).toBeNull();
+    // Clearing the search returns the reader's own (collapsed) state.
+    fireEvent.change(input, { target: { value: "" } });
+    expect(within(dialog).queryByText("Following")).toBeNull();
+  });
+
+  it("a parent-only search match keeps its chapters collapsed", () => {
+    renderDialogWithChapters();
+    const dialog = screen.getByRole("dialog");
+    const input = within(dialog).getByLabelText("Search your readings");
+    fireEvent.change(input, { target: { value: "Long Work" } });
+    expect(within(dialog).getByRole("button", { name: "Add The Long Work" })).toBeTruthy();
+    expect(within(dialog).queryByText("Opening")).toBeNull();
+    expect(
+      within(dialog).getByRole("button", { name: "Show 2 chapters of The Long Work" }),
+    ).toBeTruthy();
   });
 
   it("a chapterless work offers no chapter rows", () => {
