@@ -406,12 +406,15 @@ test.describe("Chapter assignments (issue #244)", () => {
     // and the STORE refuses the exact same chapter again (the mark is the
     // refusal's UI face — re-searching shows the mark, no second Add).
     await page.fill("#add-reading-search", "Opening Arguments");
+    // KEYBOARD activation: the focus guarantee is a keyboard one (WebKit
+    // never focuses a button on pointer click, by platform convention).
     await dialog
       .getByRole("button", {
         name: "Add Opening Arguments (Chapter · The Tide Ledger)",
         exact: true,
       })
-      .click();
+      .focus();
+    await page.keyboard.press("Enter");
     await expect(dialog.getByText("Added", { exact: true }).first()).toBeVisible();
     // The activated control stays mounted and focused across the add.
     await expect(
