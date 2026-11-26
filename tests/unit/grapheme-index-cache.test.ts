@@ -204,6 +204,46 @@ describe("WeakMap identity keying — each parsed article object gets its own in
   });
 });
 
+describe("content keying — a shallow copy reuses the index of the article it copies", () => {
+  it("{ ...article, provenanceTitle } (resolveWorkStructure's derive input) hits the same index", () => {
+    const article = parseArticle({
+      ...baseArticle,
+      blocks: [
+        { kind: "paragraph", content: [{ text: "Alpha body text." }] },
+        { kind: "code-block", source: "  a\n  b" },
+      ],
+    });
+    const original = articleGraphemeIndex(article);
+    const copy = { ...article, provenanceTitle: article.provenance.title };
+    // Same object, not merely equal: no second segmentation of the work.
+    expect(articleGraphemeIndex(copy)).toBe(original);
+  });
+
+  it("a copy with different footnotes or lang gets its own, correct index", () => {
+    const article = parseArticle({
+      ...baseArticle,
+      blocks: [{ kind: "paragraph", content: [{ text: "Alpha body text." }] }],
+    });
+    const original = articleGraphemeIndex(article);
+    const withFootnotes = parseArticle({
+      ...baseArticle,
+      blocks: [{ kind: "paragraph", content: [{ text: "Alpha body text." }] }],
+      footnotes: [{ id: "fn-1", content: [{ text: "A note.", marks: [] }] }],
+    });
+    // Shares no blocks array → independent; and a same-blocks copy whose
+    // footnotes differ must not reuse the footnote-less index.
+    const sameBlocksOtherFootnotes = { ...article, footnotes: withFootnotes.footnotes };
+    const footnoted = articleGraphemeIndex(sameBlocksOtherFootnotes);
+    expect(footnoted).not.toBe(original);
+    expect(footnoted.normalizedText).toBe(normalizeText(sameBlocksOtherFootnotes));
+    expect(footnoted.totalGraphemes).toBeGreaterThan(original.totalGraphemes);
+
+    const otherLang = { ...article, lang: "fr" };
+    expect(articleGraphemeIndex(otherLang)).not.toBe(original);
+    expect(articleGraphemeIndex(otherLang).normalizedText).toBe(original.normalizedText);
+  });
+});
+
 // ── Task 2: O(1) page anchors + findAllOccurrences fast path ─────────────────
 
 /** Hand-built PageFragment fixture (progress-formula.test.ts conventions). */

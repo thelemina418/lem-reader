@@ -40,7 +40,7 @@
 // landed note, or older than a newer landed write) so recovery never
 // resurrects retired writing and never attaches a draft to another
 // highlight.
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { CanonicalArticle } from "../../content/types";
 import type {
   HighlightColor,
@@ -1098,19 +1098,44 @@ export function useAnnotationState(
     [updateHighlightTags, updateHighlightColor],
   );
 
-  return {
-    highlights,
-    createHighlight,
-    deleteHighlight,
-    updateNote,
-    flushNoteSave,
-    ensureNoteSaved,
-    restoreNoteDraft,
-    noteSavePhase,
-    resetNoteSaveState,
-    updateHighlightTags,
-    updateHighlightColor,
-    applyHighlightSlot,
-    storageState,
-  };
+  // Referentially stable result: HighlightOverlayProvider memoizes its
+  // context value on this object, and every context consumer — including
+  // the memoized ArticleBody (the whole block tree) — re-renders when that
+  // value changes. A fresh literal per render made every owner re-render
+  // (ArticleView's per-scroll progress ratio, the per-turn page state)
+  // re-render the entire article: ~570 blocks, 250–600 ms on the giant
+  // article under CPU throttle (longtask-smoke giant flow). Every field is
+  // useState state or a useCallback, so this changes only when one does.
+  return useMemo(
+    () => ({
+      highlights,
+      createHighlight,
+      deleteHighlight,
+      updateNote,
+      flushNoteSave,
+      ensureNoteSaved,
+      restoreNoteDraft,
+      noteSavePhase,
+      resetNoteSaveState,
+      updateHighlightTags,
+      updateHighlightColor,
+      applyHighlightSlot,
+      storageState,
+    }),
+    [
+      highlights,
+      createHighlight,
+      deleteHighlight,
+      updateNote,
+      flushNoteSave,
+      ensureNoteSaved,
+      restoreNoteDraft,
+      noteSavePhase,
+      resetNoteSaveState,
+      updateHighlightTags,
+      updateHighlightColor,
+      applyHighlightSlot,
+      storageState,
+    ],
+  );
 }
