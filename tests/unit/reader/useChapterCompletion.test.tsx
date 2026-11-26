@@ -92,16 +92,12 @@ describe("useChapterCompletion callback ownership and failures", () => {
     vi.mocked(recordCompletion).mockRejectedValue(new Error("Storage unavailable"));
     const { result } = renderHook(() => useChapterCompletion(a, structureA));
     await waitFor(() => expect(loadAllCompletions).toHaveBeenCalledTimes(1));
-    let outcome: unknown;
     await act(async () => {
-      outcome = result.current.completeChapter(chapter.id);
-      // Drain the old rejecting implementation without leaking a test rejection.
-      await Promise.resolve(outcome).catch(() => {});
+      result.current.completeChapter(chapter.id);
     });
-    expect(outcome).toBeUndefined();
-    expect(result.current.saveFailed).toBe(true);
+    await waitFor(() => expect(result.current.saveFailed).toBe(true));
     await act(async () => {
-      await Promise.resolve(result.current.completeChapter(chapter.id)).catch(() => {});
+      result.current.completeChapter(chapter.id);
     });
     expect(recordCompletion).toHaveBeenCalledTimes(2);
   });

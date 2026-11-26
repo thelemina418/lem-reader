@@ -1,9 +1,9 @@
 // src/content/completion.ts
 // Issue #246 — the ONE shared-completion algebra. Every completion surface
 // consumes THESE definitions so they cannot disagree: the collection detail
-// view's entry rows + progress line, the reader's chapter-transition
-// recorder, and the TOC finished marks (issue #246 AC — shared completion
-// across collections and ordinary reading).
+// view's entry rows + progress line and the reader's chapter-transition
+// recorder (issue #246 AC — shared completion across collections and
+// ordinary reading).
 //
 // Pure functions, zero React, zero Dexie (the store-seam discipline — the
 // caller passes the folds; this module owns the algebra over them).

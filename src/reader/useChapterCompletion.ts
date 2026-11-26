@@ -8,7 +8,8 @@
 //
 // The hook owns NO derivation: chapter-target completion is RECORD-ONLY
 // (content/completion.ts — no fabricated coverage from saved positions),
-// so the map here is exactly the records' truth for this article. Whole-
+// so the finished set here only mirrors the records to skip redundant
+// writes. Whole-
 // article and book completion never pass through here — they keep the
 // canonical-location contract (ADR 0001).
 //
@@ -114,44 +115,31 @@ export function useChapterCompletion(
 
   // THE one write path, guarded once per mount (a reader jiggling at a
   // chapter's end fires one write, not one per scroll event).
-  const writeChapter = useCallback(
-    (destinationId: string): Promise<void> => {
-      if (articleId === null || ownerRef.current !== owner) return Promise.resolve();
+  const completeChapter = useCallback(
+    (destinationId: string): void => {
+      if (articleId === null || ownerRef.current !== owner) return;
       // The destination must belong to THIS article's structure — a stale
       // or foreign id never writes.
       const chapter = chapters.find((c) => c.id === destinationId);
-      if (chapter === undefined) return Promise.resolve();
-      if (completedRef.current.has(destinationId)) return Promise.resolve();
-      if (finishedIds.has(destinationId)) {
-        completedRef.current.add(destinationId);
-        return Promise.resolve();
-      }
+      if (chapter === undefined) return;
+      if (completedRef.current.has(destinationId)) return;
       completedRef.current.add(destinationId);
-      return recordCompletion({ kind: "work-chapter", articleId, destinationId }, true, "reading")
+      if (finishedIds.has(destinationId)) return;
+      void recordCompletion({ kind: "work-chapter", articleId, destinationId }, true, "reading")
         .then(() => {
           if (ownerRef.current !== owner) return;
           setFinishedIds((prev) => new Set(prev).add(destinationId));
         })
-        .catch((e: unknown) => {
+        .catch(() => {
           // Honest failure, non-blocking: clear the once-guard so a later
           // genuine transition can retry; the route announces the failure.
           if (ownerRef.current === owner) {
             completedRef.current.delete(destinationId);
             setSaveFailed(true);
           }
-          throw e;
         });
     },
     [articleId, owner, chapters, finishedIds],
-  );
-
-  const completeChapter = useCallback(
-    (destinationId: string): void => {
-      // writeChapter already discloses the failure and releases the retry
-      // guard. Automatic reading callers have no promise to handle.
-      void writeChapter(destinationId).catch(() => {});
-    },
-    [writeChapter],
   );
 
   return { completeChapter, saveFailed };
