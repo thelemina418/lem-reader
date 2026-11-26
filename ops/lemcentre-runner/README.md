@@ -203,14 +203,16 @@ runner to report online. The old runner directory is preserved at
 ## Enforced trusted revision and update procedure
 
 The pin (`lemfleet-rev`) currently records lemfleet
-`476c41f85b51bddef945f660a5c8994cff1655c8`: the merge of lemfleet#7, the
-browser-harness fixes from #2 acceptance attempt 1. A timed-out step keeps
-its output and still reports exit 5. `browser-nightly` consumes every
-phase's spool outputs, and the evidence bundle's `verdicts/phases.json`
-covers the whole chain. The previous pin was `b06493f…` (lemfleet main
-after the repository move, the rewritten twin of `e9ac0e6…`), and before
-that `3c8682b…` (lemfleet#12, F5 — the revision that took over
-`factory-validation`, lemfleet ADR-0012).
+`75c383ebc6c225674cfc0f6c2c48a52cc320f72f`: the merge of lemfleet#8, which
+runs the PR browser suite as Playwright shards (`browser-suite
+--shard=i/n`, lem-reader#2 item 4) and stages the read-only fingerprint
+comparison's fresh result for the calibration bundle. The previous pin was
+`476c41f…` (lemfleet#7, the browser-harness fixes from #2 acceptance
+attempt 1: a timed-out step keeps its output and still reports exit 5, and
+`browser-nightly` consumes every phase's spool outputs), before that
+`b06493f…` (lemfleet main after the repository move, the rewritten twin of
+`e9ac0e6…`), and before that `3c8682b…` (lemfleet#12, F5 — the revision
+that took over `factory-validation`, lemfleet ADR-0012).
 
 Moving this pin also re-provisions the browser guest. The environment
 receipt records the lemfleet revision that built the image, and every

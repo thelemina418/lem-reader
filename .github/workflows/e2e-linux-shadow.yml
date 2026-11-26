@@ -71,18 +71,33 @@ permissions:
   contents: read
 
 jobs:
-  e2e-linux-shadow:
+  # SHARDED (#2 item 4, owner decision 2026-11-25): the whole three-engine
+  # PR suite outlived the guest harness's 3300 s step limit on the
+  # 6-vCPU/12-GiB profile (acceptance attempt 1, run 45518518559), so the
+  # suite runs as Playwright shards i/n — one guest boot, one lease hold,
+  # one verified bundle per shard, one shard at a time (max-parallel 1;
+  # the shared host heavy-test lease serializes them anyway). The
+  # e2e-linux-shadow job below merges the shard reports, proves they add
+  # up to one complete run (merge-shard-reports.mjs), and carries the
+  # lane's check name and report artifact exactly as before.
+  e2e-linux-shadow-shard:
+    name: e2e-linux-shadow shard ${{ matrix.shard }}/${{ strategy.job-total }}
     if: github.ref_name != 'main'
     runs-on: [self-hosted, lemcentre]
+    strategy:
+      fail-fast: false
+      max-parallel: 1
+      matrix:
+        shard: [1, 2, 3]
     # Outer catch-all only: the wrapper's own whole-wait deadline bounds
     # the inner path (lease admission wait 600 s + offline npm ci + guest
-    # boot + the three-engine suite on the 6-vCPU/12-GiB profile; the Mac
-    # uses 90 min for the same suite on 10 CPUs) and surfaces its own
-    # visible timeout (exit 5). 150 min keeps a wedged lane from holding
-    # the runner forever without cutting a healthy run short.
+    # boot + one shard of the three-engine suite on the 6-vCPU/12-GiB
+    # profile) and surfaces its own visible timeout (exit 5). 150 min
+    # keeps a wedged lane from holding the runner forever without cutting
+    # a healthy run short.
     timeout-minutes: 150
     concurrency:
-      group: e2e-linux-shadow
+      group: e2e-linux-shadow-shard-${{ matrix.shard }}
       cancel-in-progress: false
     steps:
       - uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
@@ -107,10 +122,11 @@ jobs:
             echo "This lane stays visibly red (exit 34) until then — never silently green." >&2
             exit 34
           fi
-      - name: Run the full PR browser suite inside the confined guest
+      - name: Run one shard of the PR browser suite inside the confined guest
         id: launch
         env:
           HEAD_SHA: ${{ github.sha }}
+          SHARD: ${{ matrix.shard }}/${{ strategy.job-total }}
         run: |
           set -uo pipefail
           # Exit codes (the frozen launcher contract):
@@ -120,7 +136,7 @@ jobs:
           #   not grantable within the bounded admission wait — owner
           #   prefix factory-shadow/<short-sha>).
           code=0
-          /usr/local/libexec/factory-ci/browser-suite "$HEAD_SHA" "$GITHUB_WORKSPACE" || code=$?
+          /usr/local/libexec/factory-ci/browser-suite "--shard=$SHARD" "$HEAD_SHA" "$GITHUB_WORKSPACE" || code=$?
           echo "exit=$code" >> "$GITHUB_OUTPUT"
           echo "e2e-linux-shadow: launcher exit $code"
       - name: Verify the exported diagnostics bundle
@@ -164,16 +180,16 @@ jobs:
         if: always() && steps.bundle.outputs.verified == 'true'
         uses: actions/upload-artifact@v4
         with:
-          name: e2e-linux-shadow-diagnostics
+          name: e2e-linux-shadow-diagnostics-shard-${{ matrix.shard }}
           include-hidden-files: true
           path: .guest-diagnostics/
           retention-days: 7
           if-no-files-found: error
-      - name: Upload the suite report (the compare-shadow data source)
+      - name: Upload the shard report (merged by the e2e-linux-shadow job)
         if: always() && steps.report.outputs.present == 'true'
         uses: actions/upload-artifact@v4
         with:
-          name: e2e-linux-shadow-report
+          name: e2e-linux-shadow-report-shard-${{ matrix.shard }}
           include-hidden-files: true
           path: .guest-reports/e2e-pr.json
           retention-days: 7
@@ -283,4 +299,79 @@ jobs:
             echo "the uploaded bundle's cap-drop record if it repeats." >&2
             exit 1
           fi
-          echo "e2e-linux-shadow: shadow run complete — suite green inside the pinned guest; diagnostics verified; per-engine results recorded in the summary."
+          echo "e2e-linux-shadow: shard complete — green inside the pinned guest; diagnostics verified; per-engine results recorded in the summary."
+
+  e2e-linux-shadow:
+    # The lane's check name (compare-shadow.mjs and acceptance-collect.mjs
+    # read exactly this name and the e2e-linux-shadow-report artifact).
+    # Green only when EVERY shard concluded green and the shard reports
+    # merge into one complete run: shards 1..n each present exactly once,
+    # no test in two shards (merge-shard-reports.mjs refuses otherwise).
+    needs: e2e-linux-shadow-shard
+    if: always() && github.ref_name != 'main'
+    runs-on: [self-hosted, lemcentre]
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
+        with:
+          ref: ${{ github.sha }}
+      - name: Download the shard reports
+        if: always()
+        uses: actions/download-artifact@v4
+        with:
+          pattern: e2e-linux-shadow-report-shard-*
+          path: .guest-shards
+      - name: Merge the shard reports into the PR-suite report
+        id: merge
+        if: always()
+        run: |
+          set -uo pipefail
+          NODE_BIN=node
+          if [ -x /opt/factory/node/bin/node ]; then NODE_BIN=/opt/factory/node/bin/node; fi
+          mkdir -p .guest-reports
+          mapfile -t reports < <(find .guest-shards -name e2e-pr.json -type f 2>/dev/null | sort)
+          code=0
+          "$NODE_BIN" ops/lemcentre-runner/merge-shard-reports.mjs \
+            --out .guest-reports/e2e-pr.json "${reports[@]}" || code=$?
+          if [ "$code" -eq 0 ]; then
+            echo "present=true" >> "$GITHUB_OUTPUT"
+          fi
+      - name: Upload the suite report (the compare-shadow data source)
+        if: always() && steps.merge.outputs.present == 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: e2e-linux-shadow-report
+          include-hidden-files: true
+          path: .guest-reports/e2e-pr.json
+          retention-days: 7
+          if-no-files-found: error
+      - name: Render per-engine results for the whole suite in the summary
+        if: always() && steps.merge.outputs.present == 'true'
+        run: |
+          set -euo pipefail
+          NODE_BIN=node
+          if [ -x /opt/factory/node/bin/node ]; then NODE_BIN=/opt/factory/node/bin/node; fi
+          {
+            echo "## e2e-linux-shadow (merged shard run, non-authoritative)"
+            echo
+            echo '```'
+            "$NODE_BIN" scripts/summarize-e2e.mjs .guest-reports/e2e-pr.json
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+      - name: Conclude honestly (green only when every shard is green and the shards add up)
+        if: always()
+        env:
+          SHARDS_RESULT: ${{ needs.e2e-linux-shadow-shard.result }}
+          MERGED: ${{ steps.merge.outputs.present }}
+        run: |
+          set -euo pipefail
+          if [ "$SHARDS_RESULT" != "success" ]; then
+            echo "e2e-linux-shadow: at least one shard did not conclude green ($SHARDS_RESULT) — see the shard jobs for the launcher exit." >&2
+            exit 1
+          fi
+          if [ "$MERGED" != "true" ]; then
+            echo "e2e-linux-shadow: every shard was green but their reports did not merge into one complete run" >&2
+            echo "(a shard report missing, repeated, or overlapping) — an infrastructure failure, never a silent green." >&2
+            exit 1
+          fi
+          echo "e2e-linux-shadow: shadow run complete — every shard green inside the pinned guest; merged report covers the whole PR suite."

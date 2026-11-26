@@ -191,6 +191,7 @@ raise SystemExit(1 if invalid else 0)
 interface Envelope {
   lane?: string;
   diagnostics?: boolean;
+  shard?: unknown;
 }
 
 function enqueue(spool: string, envelope: Envelope): string {
@@ -201,6 +202,7 @@ function enqueue(spool: string, envelope: Envelope): string {
     checkout: join(spool, "..", "runner-work", "pr-1"),
     ...(envelope.lane === undefined ? {} : { lane: envelope.lane }),
     ...(envelope.diagnostics === undefined ? {} : { diagnostics: envelope.diagnostics }),
+    ...(envelope.shard === undefined ? {} : { shard: envelope.shard }),
   };
   const job = join(spool, `${id}.job`);
   writeFileSync(job, `${JSON.stringify(body)}\n`);
@@ -330,6 +332,26 @@ describe("driver-process lane routing (issue #282)", () => {
     },
   );
 
+  test("a browser-suite shard reaches the browser entry as --shard (#2 item 4)", () => {
+    const fakes = makeFakes();
+    enqueue(fakes.spool, { lane: "browser-suite", shard: "2/3" });
+    const runResult = run(makeDriver(fakes));
+    expect(runResult.status, runResult.stderr).toBe(0);
+    expect(result(fakes.spool)).toBe(0);
+    const calls = logLines(fakes.browserLog) as Array<{ argv: string[] }>;
+    const args = calls[0]!.argv;
+    expect(args[args.indexOf("--mode") + 1]).toBe("pr");
+    expect(args[args.indexOf("--shard") + 1]).toBe("2/3");
+  });
+
+  test("an unsharded browser-suite envelope passes no --shard", () => {
+    const fakes = makeFakes();
+    enqueue(fakes.spool, { lane: "browser-suite" });
+    run(makeDriver(fakes));
+    const calls = logLines(fakes.browserLog) as Array<{ argv: string[] }>;
+    expect(calls[0]!.argv).not.toContain("--shard");
+  });
+
   test("browser-lane verdicts propagate unchanged (33 provisioning, 8 the gate)", () => {
     for (const exit of [33, 8, 2]) {
       const fakes = makeFakes();
@@ -363,6 +385,13 @@ describe("driver-process lane routing (issue #282)", () => {
     ["a non-string lane", { lane: 5 }],
     ["an empty lane string", { lane: "" }],
     ["lane with diagnostics not exactly true", { lane: "browser-suite", diagnostics: "yes" }],
+    ["a shard beyond its total", { lane: "browser-suite", shard: "4/3" }],
+    ["a zero shard", { lane: "browser-suite", shard: "0/3" }],
+    ["a shard total over 8", { lane: "browser-suite", shard: "1/10" }],
+    ["a non-string shard", { lane: "browser-suite", shard: 2 }],
+    ["a shard with trailing text", { lane: "browser-suite", shard: "1/3; rm" }],
+    ["a shard on a non-suite lane", { lane: "browser-nightly", shard: "1/2" }],
+    ["a shard on the unit lane", { shard: "1/2" }],
   ])("refuses %s fail-closed: exit 3, nothing executed", (_name, envelope) => {
     const fakes = makeFakes();
     enqueue(fakes.spool, envelope as Envelope);

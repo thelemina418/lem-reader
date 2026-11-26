@@ -207,6 +207,16 @@ ok_head = re.fullmatch(r"[0-9a-f]{40}", head)
 # absent/false (legacy) or exactly true; nothing else
 ok_diag = diagnostics is False or diagnostics is True
 ok_lane = lane in ALLOWED_LANES  # absent (legacy/unit) or a reviewed lane
+# #2 item 4: the PR suite may run as Playwright shard i/n (one guest boot
+# per shard). Absent, or EXACTLY "i/n" with 1 <= i <= n <= 8 on the
+# browser-suite lane; anything else refuses the envelope.
+shard = envelope.get("shard")
+ok_shard = shard is None or (
+    lane == "browser-suite"
+    and isinstance(shard, str)
+    and re.fullmatch(r"[1-8]/[1-8]", shard) is not None
+    and int(shard[0]) <= int(shard[2])
+)
 if lane != "unit":
     ok_id = ok_id and ident == sys.argv[2]  # bind the cancellation path to this envelope
 try:
@@ -214,7 +224,7 @@ try:
     ok_checkout = real.startswith("/var/lib/lem-ci/runner-work/")
 except Exception:
     ok_checkout = False
-if ok_id and ok_head and ok_checkout and ok_diag and ok_lane:
+if ok_id and ok_head and ok_checkout and ok_diag and ok_lane and ok_shard:
     print("OK:%s:%s" % (lane, "true" if diagnostics is True else "false"))
 else:
     print("MALFORMED")
@@ -274,6 +284,11 @@ PYEOF
       fi
       if [ "$diag" = true ]; then
         browser_args+=("--diagnostics")
+      fi
+      # The validated shard (browser-suite only; checked above).
+      shard="$(python3 -B -c 'import json,sys; print(json.load(open(sys.argv[1])).get("shard") or "")' "$running")"
+      if [ -n "$shard" ]; then
+        browser_args+=("--shard" "$shard")
       fi
       if env -i HOME="$SCRATCH" LC_ALL=C \
           PATH="/opt/factory/node/bin:/usr/bin:/bin" \
