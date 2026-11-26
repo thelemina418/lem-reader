@@ -152,6 +152,11 @@ export type AddToLibraryOutcome =
       /** The already-saved article's canonical id (article-path
        * `already-in-library` only — see the module header). */
       existingArticleId?: string;
+      /** Issue #15 — the already-saved book's content-hash id (EPUB-path
+       * `already-in-library` only). Same display-metadata contract as
+       * existingArticleId: it lets a collection import reference the
+       * existing book; it never re-saves or overwrites. */
+      existingBookId?: string;
     };
 
 /**
@@ -364,7 +369,7 @@ async function addEpubBook(file: File, tags: readonly string[]): Promise<AddToLi
   const result = await ingestEpub(bytesToBase64(bytes), file.name);
 
   if (await hasBook(result.book.id)) {
-    return { outcome: "refused", reason: "already-in-library" };
+    return { outcome: "refused", reason: "already-in-library", existingBookId: result.book.id };
   }
 
   await saveBook(

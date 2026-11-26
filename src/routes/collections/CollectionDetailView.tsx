@@ -42,6 +42,14 @@
 //     accidental Enter must not remove the next entry), else the previous
 //     row, else — the collection just emptied — the stable Add affordance
 //     (the ReviewView focusNearRemovedRow shape, retargeted to links).
+//
+// Issue #15 — "Import into collection" beside Add readings opens the app's
+// ONE ordinary import dialog (never stacked inside Add readings) aimed at
+// this collection. The landed outcome comes back here: the page owns the
+// status announcement (the closing dialog's region cannot announce) and the
+// focus handoff to the new entry. A NEW save waits for the invalidated
+// library snapshot before it is shown, so the fresh row never flashes the
+// "No longer in your library" honesty line it does not deserve.
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { setDocumentTitle } from "../../ingestion/library/pageMeta";
 import { StatusRegion } from "../../ui/StatusRegion";
@@ -77,15 +85,23 @@ import { continueCollectionTarget, entryResolverFrom } from "./continueCollectio
 import { collectionContextSuffix } from "../../reader/readerHistory";
 import { useNavigationIntent } from "../../reader/useNavigationIntent";
 import { AddReadingDialog } from "./AddReadingDialog";
+import { collectionImportAnnouncement } from "./collectionImportCopy";
+import type {
+  AddDialogCollectionDestination,
+  LandedCollectionImport,
+} from "../../ingestion/AddDialog";
 
 type LoadStatus = "loading" | "ready" | "missing" | "error";
 
 export function CollectionDetailView({
   collectionId,
   hasAppHistory,
+  onImportIntoCollection,
 }: {
   collectionId: string;
   hasAppHistory: boolean;
+  /** Issue #15 — opens the app's import dialog aimed at this collection. */
+  onImportIntoCollection?: (destination: AddDialogCollectionDestination) => void;
 }) {
   // The ONE library read model — titles, book resume pointers, and the
   // add-picker's rows all read the same settled snapshot.
@@ -185,7 +201,9 @@ export function CollectionDetailView({
   // The ONE polite register for membership outcomes (moves, removals,
   // failures) — the same region the load states use (it pre-exists, so
   // the announcement is heard; idle it collapses via :empty).
-  const [announcement, setAnnouncement] = useState<string | null>(null);
+  // Issue #15 — an import announcement is several lines (the outcome, then
+  // any visible-limit notes), so the register holds one or more lines.
+  const [announcement, setAnnouncement] = useState<string | readonly string[] | null>(null);
   // The in-flight register: while ONE membership write runs, every row's
   // edit controls are disabled (a calm, serial editing session — a
   // collection put is a few milliseconds; no reader-visible queueing).
@@ -201,6 +219,7 @@ export function CollectionDetailView({
   type FocusHandoff =
     | { kind: "move"; entryId: string; direction: "up" | "down" }
     | { kind: "removed" }
+    | { kind: "imported"; entryId: string }
     | { kind: "retry"; trigger: HTMLButtonElement };
   const [focusHandoff, setFocusHandoff] = useState<FocusHandoff | null>(null);
   // The removal focus handoff (the ReviewView removedRowNeighborsRef
@@ -254,6 +273,14 @@ export function CollectionDetailView({
       target?.focus();
     } else if (focusHandoff.kind === "removed") {
       focusNearRemovedEntry();
+    } else if (focusHandoff.kind === "imported") {
+      // Issue #15 — the newly imported entry: its title link (or, when the
+      // library could not be read, its honest unlinked line).
+      document
+        .querySelector<HTMLElement>(
+          `li.collection-entry[data-entry-id="${focusHandoff.entryId}"] :is(a.collection-entry-link, .collection-entry-unavailable)`,
+        )
+        ?.focus();
     } else {
       const { trigger } = focusHandoff;
       // Disabling the pressed control can blur it to body. Restore only
@@ -368,6 +395,45 @@ export function CollectionDetailView({
     });
   }
 
+  // ── Import into collection (issue #15) ────────────────────────────────
+  // A landed import waits here until the library snapshot can show it: a
+  // NEW save is shown once the invalidated snapshot lands (or resolves the
+  // target already); an existing reading is resolvable at once. A library
+  // read failure shows it anyway (the page's own error line explains it).
+  type PendingImport = { outcome: LandedCollectionImport; snapshotAtLanding: unknown };
+  const [pendingImport, setPendingImport] = useState<PendingImport | null>(null);
+  // The snapshot CURRENT when the import lands (a live mirror, rewritten
+  // every render — the dialog session may span other snapshot reloads).
+  const liveSnapshotRef = useRef(snapshot);
+  liveSnapshotRef.current = snapshot;
+  useEffect(() => {
+    if (pendingImport === null || collection === null) return;
+    const { outcome } = pendingImport;
+    if (outcome.outcome === "added") {
+      const entry = outcome.collection.entries.find((e) => e.id === outcome.entryId);
+      const showable =
+        !outcome.saved ||
+        libraryStatus === "error" ||
+        snapshot !== pendingImport.snapshotAtLanding ||
+        (entry !== undefined && resolveCollectionEntry(entry, lookup).href !== null);
+      if (!showable) return;
+      setCollection(outcome.collection);
+      setFocusHandoff({ kind: "imported", entryId: outcome.entryId });
+    }
+    setAnnouncement(collectionImportAnnouncement(outcome, collection.name));
+    setPendingImport(null);
+  }, [pendingImport, collection, snapshot, lookup, libraryStatus]);
+
+  function handleOpenImport(): void {
+    if (!collection || !onImportIntoCollection) return;
+    onImportIntoCollection({
+      collectionId: collection.id,
+      collectionName: collection.name,
+      onImported: (outcome) =>
+        setPendingImport({ outcome, snapshotAtLanding: liveSnapshotRef.current }),
+    });
+  }
+
   // The memo keeps the array identity stable across announcement re-renders
   // (the progress useMemo below lists it — the exhaustive-deps rule).
   const entries = useMemo(() => collection?.entries ?? [], [collection]);
@@ -477,7 +543,10 @@ export function CollectionDetailView({
       <StatusRegion>
         {/* Membership outcomes announce FIRST (moves, removals, failures —
             the load states below render nothing once ready). */}
-        {announcement !== null && <p>{announcement}</p>}
+        {announcement !== null &&
+          (typeof announcement === "string" ? [announcement] : announcement).map((line, i) => (
+            <p key={i}>{line}</p>
+          ))}
         {loadStatus === "loading" && <p>Opening this collection…</p>}
         {loadStatus === "ready" && libraryStatus === "loading" && <p>Checking your readings…</p>}
         {loadStatus === "missing" && (
@@ -534,15 +603,30 @@ export function CollectionDetailView({
                 </button>
               )
             ) : null}
-            <button
-              type="button"
-              ref={addButtonRef}
-              className="btn btn-primary collection-add-button"
-              onClick={() => setAddOpen(true)}
-              aria-haspopup="dialog"
-            >
-              Add readings
-            </button>
+            {/* Issue #15 — the two ways in sit together: pick from the
+                library (Add readings) or bring in something new (Import
+                into collection — the ordinary import flow). */}
+            <div className="collection-add-actions">
+              <button
+                type="button"
+                ref={addButtonRef}
+                className="btn btn-primary collection-add-button"
+                onClick={() => setAddOpen(true)}
+                aria-haspopup="dialog"
+              >
+                Add readings
+              </button>
+              {onImportIntoCollection !== undefined && (
+                <button
+                  type="button"
+                  className="btn btn-quiet collection-import-button"
+                  onClick={handleOpenImport}
+                  aria-haspopup="dialog"
+                >
+                  Import into collection
+                </button>
+              )}
+            </div>
           </div>
           {entries.length === 0 ? (
             /* No-content state — the stable Add affordance above invites

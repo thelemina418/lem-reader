@@ -100,7 +100,19 @@ import { mapReasonToCopy, skippedChaptersCopy } from "./ingestCopy";
 // Issue #4 — the ingest-and-persist policy service; ONE call per
 // submission arm.
 import { addToLibrary } from "./addToLibrary";
-import type { AddToLibraryOutcome, SavedArticleResult, SavedBookResult } from "./addToLibrary";
+import type {
+  AddToLibraryInput,
+  AddToLibraryOutcome,
+  SavedArticleResult,
+  SavedBookResult,
+} from "./addToLibrary";
+// Issue #15 — the collection-destination mode submits through the ONE
+// import-into-collection composition (library save, then a whole-reading
+// entry) and renders its outcome union beside addToLibrary's.
+// The service itself loads on the first collection submission only (it
+// carries the collections store; the library-only dialog never needs it).
+import type { CollectionImportOutcome } from "../routes/collections/importIntoCollection";
+import { collectionImportAnnouncement } from "../routes/collections/collectionImportCopy";
 // Issue #75 (decision #71) — the ONE shared tag picker + its suggestion
 // currency. The optional "Tags (optional)" fieldset captures tags at
 // import; they ride the saved record through the service (never a
@@ -122,6 +134,26 @@ import { BusyButton } from "../ui/BusyButton";
 import { extractYouTubeVideoId } from "./youtube";
 
 type IngestStatus = "idle" | "submitting" | "success" | "error";
+
+/** The landed collection-import outcomes the destination page renders. */
+export type LandedCollectionImport = Extract<
+  CollectionImportOutcome,
+  { outcome: "added" | "not-added" }
+>;
+
+/**
+ * Issue #15 — "Import into collection": the SAME dialog (the ordinary
+ * import flow — never stacked inside Add readings) aimed at one collection.
+ * A landed import closes the dialog and hands the outcome to the collection
+ * page, which owns focus on the new entry and the status announcement (a
+ * live region inside the closing dialog could not announce). The reader
+ * stays on the collection, so the "Open after adding" choice is absent.
+ */
+export type AddDialogCollectionDestination = {
+  collectionId: string;
+  collectionName: string;
+  onImported: (outcome: LandedCollectionImport) => void;
+};
 
 /** The selected intake source (D16-05). Reset to "url" on every open. */
 export type AddDialogSource = "url" | "paste" | "file";
@@ -164,6 +196,8 @@ export type AddDialogProps = {
    * library rows render from, so suggestion order cannot drift.
    */
   tagStats: TagStat[];
+  /** Issue #15 — when set, the import also lands in this collection. */
+  destination?: AddDialogCollectionDestination | null;
 };
 
 /**
@@ -177,7 +211,14 @@ const SOURCE_SUBMIT_LABEL: Record<AddDialogSource, string> = {
   file: "Add file",
 };
 
-export function AddDialog({ open, onCancel, onSaved, onQuietSave, tagStats }: AddDialogProps) {
+export function AddDialog({
+  open,
+  onCancel,
+  onSaved,
+  onQuietSave,
+  tagStats,
+  destination = null,
+}: AddDialogProps) {
   const dialogRef = useRef<HTMLDialogElement>(null);
   // Capture the previously-focused element (the Add button) on open so
   // the close handler can restore focus (Pitfall 1 — same discipline as
@@ -357,8 +398,15 @@ export function AddDialog({ open, onCancel, onSaved, onQuietSave, tagStats }: Ad
     const dlg = dialogRef.current;
     if (!dlg) return;
     const handleClose = () => {
-      // Pitfall 1 / A11Y-02: restore focus to the captured trigger.
-      triggerRef.current?.focus();
+      // Pitfall 1 / A11Y-02: restore focus to the captured trigger — unless
+      // the host already moved focus somewhere deliberate outside the
+      // dialog (issue #15: the collection page focuses the newly imported
+      // entry). Focus left on <body> or inside the closed dialog is lost
+      // focus, and the trigger takes it back as before.
+      const active = document.activeElement;
+      if (active === null || active === document.body || dlg.contains(active)) {
+        triggerRef.current?.focus();
+      }
     };
     const handleDialogCancel = (e: Event) => {
       // Esc on an open <dialog> fires `cancel` then `close`. ALWAYS
@@ -433,10 +481,30 @@ export function AddDialog({ open, onCancel, onSaved, onQuietSave, tagStats }: Ad
    *     copy for the library's status region (the saved item stays
    *     Unread), then onCancel runs the close-prop mirror.
    */
-  function applyOutcome(outcome: AddToLibraryOutcome) {
+  function applyOutcome(outcome: AddToLibraryOutcome | CollectionImportOutcome) {
     if (outcome.outcome === "refused") {
       setStatus("error");
       setMessage(mapReasonToCopy(outcome.reason));
+      return;
+    }
+    // Issue #15 — the collection-destination outcomes. Already in this
+    // collection is a calm in-place no (nothing added, the input kept for
+    // a different import); a landed import closes onto the collection page,
+    // which focuses the new entry and announces (incl. the kept-save-but-
+    // not-added honesty line). onSaved fires only for a NEW library item.
+    if (outcome.outcome === "already-in-collection") {
+      if (outcome.saved) onSaved();
+      setStatus("error");
+      setMessage(
+        collectionImportAnnouncement(outcome, destination?.collectionName ?? "").join(" "),
+      );
+      return;
+    }
+    if (outcome.outcome === "added" || outcome.outcome === "not-added") {
+      setStatus("success");
+      if (outcome.saved) onSaved();
+      onCancel();
+      destination?.onImported(outcome);
       return;
     }
     setStatus("success");
@@ -458,12 +526,32 @@ export function AddDialog({ open, onCancel, onSaved, onQuietSave, tagStats }: Ad
    * the dialog wedged open; it surfaces as the calm catch-all copy, the
    * same surface the pre-service arms' catch blocks gave it.
    */
-  function renderOutcome(outcome: AddToLibraryOutcome) {
+  function renderOutcome(outcome: AddToLibraryOutcome | CollectionImportOutcome) {
     try {
       applyOutcome(outcome);
     } catch {
       setStatus("error");
       setMessage(mapReasonToCopy("server-error"));
+    }
+  }
+
+  /**
+   * submit — the ONE service dispatch every arm calls: the plain library
+   * add, or (issue #15) the import-into-collection composition when the
+   * dialog was opened from a collection. Both return a refusal of the same
+   * shape, so refusal copy and the transcript fallback are unchanged.
+   */
+  async function submit(
+    input: AddToLibraryInput,
+    tags: readonly string[],
+  ): Promise<AddToLibraryOutcome | CollectionImportOutcome> {
+    if (destination === null) return addToLibrary(input, tags);
+    try {
+      const { importIntoCollection } = await import("../routes/collections/importIntoCollection");
+      return await importIntoCollection(destination.collectionId, input, tags);
+    } catch {
+      // A failed chunk load saved nothing — the calm catch-all refusal.
+      return { outcome: "refused", reason: "server-error" };
     }
   }
 
@@ -485,7 +573,7 @@ export function AddDialog({ open, onCancel, onSaved, onQuietSave, tagStats }: Ad
         : ({ kind: "paste", html: htmlValue } as const);
     // Issue #75 — the import-time tags ride the saved record (post-save
     // application is the SERVICE's atomic save, not a follow-up write).
-    const outcome = await addToLibrary(input, tagsValue);
+    const outcome = await submit(input, tagsValue);
     // The fallback offer: the bot-check refusal for an actual YouTube URL
     // (the server returns youtube-bot-check ONLY from the YouTube branch;
     // the extractor guard keeps the offer honest when the reason ever
@@ -548,7 +636,7 @@ export function AddDialog({ open, onCancel, onSaved, onQuietSave, tagStats }: Ad
     setStatus("submitting");
     setMessage("Adding transcript…");
     renderOutcome(
-      await addToLibrary(
+      await submit(
         {
           kind: "transcript-paste",
           text: transcriptValue,
@@ -603,7 +691,7 @@ export function AddDialog({ open, onCancel, onSaved, onQuietSave, tagStats }: Ad
     setMessage("Reading file…");
     // Issue #75 — the import-time tags ride the saved record here too (the
     // epub arm lands them on the BOOK record, D12-04).
-    const outcome = await addToLibrary({ kind: "file", file }, tagsValue);
+    const outcome = await submit({ kind: "file", file }, tagsValue);
     // Uniform reset contract (G2) — the pick clears at every terminal
     // outcome of this arm.
     resetFilePick();
@@ -617,7 +705,16 @@ export function AddDialog({ open, onCancel, onSaved, onQuietSave, tagStats }: Ad
   return (
     <dialog ref={dialogRef} className="add-dialog" aria-labelledby="add-dialog-title">
       <div className="add-dialog-inner">
-        <h2 id="add-dialog-title">Add to your library</h2>
+        <h2 id="add-dialog-title">
+          {destination !== null
+            ? `Import into ${destination.collectionName}`
+            : "Add to your library"}
+        </h2>
+        {destination !== null && (
+          <p className="meta add-dialog-destination">
+            Saves to your library and adds it to the end of this collection.
+          </p>
+        )}
 
         {/* Issue #84 (decision #70) — the ONE status region now sits
             ABOVE the form (the one-anatomy order: status card → content
@@ -892,17 +989,21 @@ export function AddDialog({ open, onCancel, onSaved, onQuietSave, tagStats }: Ad
             SettingsContext — remembered across sessions and dialog
             reopens, never reset by D16-08). Disabled while a submission
             is in flight, matching the tags fieldset's gate. */}
-        <div className="add-open-after">
-          <label className="add-open-after-row">
-            <input
-              type="checkbox"
-              checked={openAfterAdd}
-              disabled={submitting}
-              onChange={(e) => update({ openAfterAdd: e.target.checked })}
-            />
-            <span>Open after adding</span>
-          </label>
-        </div>
+        {/* Issue #15 — absent in collection mode: the reader stays on the
+            collection page, focused on the new entry. */}
+        {destination === null && (
+          <div className="add-open-after">
+            <label className="add-open-after-row">
+              <input
+                type="checkbox"
+                checked={openAfterAdd}
+                disabled={submitting}
+                onChange={(e) => update({ openAfterAdd: e.target.checked })}
+              />
+              <span>Open after adding</span>
+            </label>
+          </div>
+        )}
 
         <div className="dialog-actions add-dialog-actions">
           {/* D16-10 — the Cancel control is inert while a submission is in

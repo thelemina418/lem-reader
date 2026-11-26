@@ -514,3 +514,114 @@ describe("collection detail Continue collection (issue #247)", () => {
     );
   });
 });
+
+describe("import into collection (issue #15)", () => {
+  const importedCollection = CollectionSchema.parse({
+    ...collection,
+    entries: [
+      ...collection.entries,
+      {
+        id: "entry-new",
+        target: { kind: "article", articleId: secondArticle.id },
+        addedAt: "2026-11-25T00:00:00.000Z",
+      },
+    ],
+  });
+  const withSecond = {
+    ...EMPTY_LIBRARY_SNAPSHOT,
+    articles: [article, secondArticle],
+    standaloneArticles: [article, secondArticle],
+  };
+  const withoutSecond = {
+    ...EMPTY_LIBRARY_SNAPSHOT,
+    articles: [article],
+    standaloneArticles: [article],
+  };
+
+  type Destination = Parameters<
+    NonNullable<Parameters<typeof CollectionDetailView>[0]["onImportIntoCollection"]>
+  >[0];
+
+  async function openImport(): Promise<Destination> {
+    const onImportIntoCollection = vi.fn<(destination: Destination) => void>();
+    const utils = render(
+      <CollectionDetailView
+        collectionId={collection.id}
+        hasAppHistory={false}
+        onImportIntoCollection={onImportIntoCollection}
+      />,
+    );
+    const button = await screen.findByRole("button", { name: "Import into collection" });
+    expect(button).toHaveAttribute("aria-haspopup", "dialog");
+    fireEvent.click(button);
+    expect(onImportIntoCollection).toHaveBeenCalledTimes(1);
+    const destination = onImportIntoCollection.mock.calls[0]![0];
+    expect(destination).toMatchObject({
+      collectionId: collection.id,
+      collectionName: collection.name,
+    });
+    return Object.assign(destination, { rerender: utils.rerender });
+  }
+
+  it("offers Import into collection beside Add readings and opens the import flow with this collection", async () => {
+    vi.mocked(useLibrarySnapshot).mockReturnValue({ status: "ready", snapshot: withSecond });
+    await openImport();
+    expect(screen.getByRole("button", { name: "Add readings" })).toBeInTheDocument();
+  });
+
+  it("a landed import shows the new entry, focuses it, and announces the save + limit notes", async () => {
+    vi.mocked(useLibrarySnapshot).mockReturnValue({ status: "ready", snapshot: withSecond });
+    const destination = await openImport();
+    act(() =>
+      destination.onImported({
+        outcome: "added",
+        saved: true,
+        collection: importedCollection,
+        entryId: "entry-new",
+        notes: ["A table was left out."],
+      }),
+    );
+    const link = await screen.findByRole("link", { name: "Second reading" });
+    await waitFor(() => expect(link).toHaveFocus());
+    expect(
+      screen.getByText("Saved to your library and added to Reading queue."),
+    ).toBeInTheDocument();
+    expect(screen.getByText("A table was left out.")).toBeInTheDocument();
+  });
+
+  it("waits for the refreshed library before showing a new save — never a false 'No longer in your library'", async () => {
+    vi.mocked(useLibrarySnapshot).mockReturnValue({ status: "ready", snapshot: withoutSecond });
+    const destination = await openImport();
+    act(() =>
+      destination.onImported({
+        outcome: "added",
+        saved: true,
+        collection: importedCollection,
+        entryId: "entry-new",
+        notes: [],
+      }),
+    );
+    expect(screen.queryByText("No longer in your library")).not.toBeInTheDocument();
+    // The invalidated snapshot lands with the new reading.
+    vi.mocked(useLibrarySnapshot).mockReturnValue({ status: "ready", snapshot: withSecond });
+    (destination as unknown as { rerender: (ui: React.ReactElement) => void }).rerender(
+      <CollectionDetailView
+        collectionId={collection.id}
+        hasAppHistory={false}
+        onImportIntoCollection={vi.fn()}
+      />,
+    );
+    const link = await screen.findByRole("link", { name: "Second reading" });
+    await waitFor(() => expect(link).toHaveFocus());
+  });
+
+  it("a kept save whose entry failed says so plainly and claims no entry", async () => {
+    vi.mocked(useLibrarySnapshot).mockReturnValue({ status: "ready", snapshot: withSecond });
+    const destination = await openImport();
+    act(() => destination.onImported({ outcome: "not-added", saved: true }));
+    expect(
+      await screen.findByText("Saved to your library, but it couldn't be added to Reading queue."),
+    ).toBeInTheDocument();
+    expect(screen.queryByRole("link", { name: "Second reading" })).not.toBeInTheDocument();
+  });
+});

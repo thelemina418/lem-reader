@@ -7205,6 +7205,13 @@ dialog.annotation-panel[open] {
 .collection-entries-head h2 {
   margin-block: 0;
 }
+/* Issue #15 — Add readings + Import into collection travel as one group
+   (wrapping together under the heading on tight bands). */
+.collection-add-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-sm);
+}
 /* Issue #246 — the completion progress line rides the entries head (the
    heading's honest "N of M finished", the ONLY collection-progress
    metric). Quiet meta register, tabular numerals so counts stop moving. */
