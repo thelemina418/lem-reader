@@ -276,10 +276,7 @@ export async function openEdgeDestination(page: Page, destination: EdgeDestinati
     // Issue #121 — the real navigation path (the shell-nav Discover link,
     // never a bare deep link); the wiped library shows the no-content
     // state under the always-visible subscribe form.
-    await page
-      .getByRole("navigation", { name: "Primary" })
-      .getByRole("link", { name: "Discover" })
-      .click();
+    await clickShellDestination(page, "Discover");
     await expect(page.getByRole("heading", { level: 1, name: "Discover" })).toBeVisible();
     await expect(page.getByRole("heading", { name: "No subscriptions yet." })).toBeVisible();
     return;
@@ -299,10 +296,7 @@ export async function openEdgeDestination(page: Page, destination: EdgeDestinati
       articles: [article],
       highlights: [highlightRow("edge-dest-review", anchor, "hl-edge-dest-review-1")],
     });
-    await page
-      .getByRole("navigation", { name: "Primary" })
-      .getByRole("link", { name: "Annotations" })
-      .click();
+    await clickShellDestination(page, "Annotations");
     await expect(page.getByRole("heading", { level: 1, name: "Annotations" })).toBeVisible();
     await expect(page.getByRole("link", { name: /^Go to highlight:/ }).first()).toBeVisible();
     return;
@@ -319,6 +313,18 @@ export interface DestinationInvariantOptions {
   destination: EdgeDestination;
   /** The edge-condition label, e.g. "forced-colors" (used in messages). */
   condition: string;
+}
+
+/**
+ * Activate a Primary nav destination the way a reader does at the current
+ * width: below 640px the destinations sit behind the Menu disclosure
+ * (issue #19), so open it first when it is showing.
+ */
+async function clickShellDestination(page: Page, name: string): Promise<void> {
+  const nav = page.getByRole("navigation", { name: "Primary" });
+  const menu = nav.getByRole("button", { name: "Menu" });
+  if (await menu.isVisible()) await menu.click();
+  await nav.getByRole("link", { name }).click();
 }
 
 /**
@@ -339,7 +345,10 @@ export async function assertDestinationInvariant(
 
   // Destination identity sentinel — prove the wrapper is asserting on the
   // intended destination before clause (b) means anything.
-  const required: Array<{ desc: string; locator: Locator }> = [];
+  // shellNav entries are the Primary nav destinations: below 640px they sit
+  // behind the Menu disclosure (issue #19), so reachability there means
+  // "one Menu activation reveals them".
+  const required: Array<{ desc: string; locator: Locator; shellNav?: true }> = [];
   if (destination === "library") {
     await expect(
       page.getByRole("heading", { level: 1, name: "Saved articles" }),
@@ -372,6 +381,7 @@ export async function assertDestinationInvariant(
       },
       {
         desc: "shell-nav Highlights link",
+        shellNav: true,
         locator: page
           .getByRole("navigation", { name: "Primary" })
           .getByRole("link", { name: "Annotations" }),
@@ -398,12 +408,14 @@ export async function assertDestinationInvariant(
       },
       {
         desc: "shell-nav Library link",
+        shellNav: true,
         locator: page
           .getByRole("navigation", { name: "Primary" })
           .getByRole("link", { name: "Library" }),
       },
       {
         desc: "shell-nav Highlights link",
+        shellNav: true,
         locator: page
           .getByRole("navigation", { name: "Primary" })
           .getByRole("link", { name: "Annotations" }),
@@ -433,6 +445,7 @@ export async function assertDestinationInvariant(
       },
       {
         desc: "shell-nav Library link",
+        shellNav: true,
         locator: page
           .getByRole("navigation", { name: "Primary" })
           .getByRole("link", { name: "Library" }),
@@ -463,8 +476,33 @@ export async function assertDestinationInvariant(
 
   // (b) Required functions reachable — every canonical control is present
   // and visible (native focusable controls; A11Y-01/02 substrate).
-  for (const { desc, locator } of required) {
+  for (const { desc, locator } of required.filter((r) => !r.shellNav)) {
     await expect(locator, `${label}: required function unreachable — ${desc}`).toBeVisible();
+  }
+  const shellNav = required.filter((r) => r.shellNav);
+  if (shellNav.length > 0) {
+    const menu = page
+      .getByRole("navigation", { name: "Primary" })
+      .getByRole("button", { name: "Menu" });
+    const viaMenu = await menu.isVisible();
+    if (viaMenu) {
+      await menu.click();
+      await expect(menu, `${label}: the Menu disclosure opens`).toHaveAttribute(
+        "aria-expanded",
+        "true",
+      );
+    }
+    for (const { desc, locator } of shellNav) {
+      await expect(
+        locator,
+        `${label}: required function unreachable — ${desc}${viaMenu ? " (via the Menu)" : ""}`,
+      ).toBeVisible();
+    }
+    if (viaMenu) {
+      // Close it so clause (c) measures the band as a reader meets it.
+      await page.keyboard.press("Escape");
+      await expect(menu).toHaveAttribute("aria-expanded", "false");
+    }
   }
 
   // (c) No layout overflow clips or overlaps content — the WCAG 1.4.10

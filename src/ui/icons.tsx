@@ -48,6 +48,15 @@ export function GearIcon(props: IconProps) {
   );
 }
 
+/** Menu — the narrow-width destination disclosure (issue #19). */
+export function MenuIcon(props: IconProps) {
+  return (
+    <Svg size={20} {...props}>
+      <path d="M4 7h16M4 12h16M4 17h16" />
+    </Svg>
+  );
+}
+
 /** Highlighter — annotations trigger. */
 export function HighlighterIcon(props: IconProps) {
   return (

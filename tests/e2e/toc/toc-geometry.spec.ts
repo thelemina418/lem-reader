@@ -415,76 +415,37 @@ test.describe("TOC geometry (18-04 — ORNT-05 edge matrix)", () => {
     ).toEqual([]);
   });
 
-  test("staged collapse in Reader (below 640px — the phone band contract): clipped destinations stay keyboard-reachable and un-clip on focus", async ({
+  test("Menu in Reader (below 640px — issue #19): the destinations stay one keyboard step away", async ({
     page,
   }) => {
     await page.setViewportSize({ width: 320, height: 640 });
     await openArticle(page, FIXTURE);
 
-    // CLIPPED: the shell-nav links receive the visually-hidden clip —
-    // position:absolute out of flex flow, 1px box, never display:none.
-    const clipped = await page.evaluate(() => {
-      const link = document.querySelector('.app-header[data-destination="reader"] .shell-nav a');
-      if (!link) return null;
-      const r = link.getBoundingClientRect();
-      const style = getComputedStyle(link);
-      return { width: r.width, position: style.position };
-    });
-    expect(clipped).not.toBeNull();
-    expect(clipped!.width).toBeLessThanOrEqual(1.5);
-    expect(clipped!.position).toBe("absolute");
+    const nav = page.getByRole("navigation", { name: "Primary" });
+    const menu = nav.getByRole("button", { name: "Menu" });
+    // Closed: the band holds the Menu + the reading tools; the destination
+    // links are not rendered until the disclosure opens.
+    await expect(menu).toBeVisible();
+    await expect(menu).toHaveAttribute("aria-expanded", "false");
+    await expect(nav.getByRole("link", { name: "Library" })).toBeHidden();
 
-    // KEYBOARD-REACHABLE + FOCUS UN-CLIP. Walking forward from body focus is
-    // engine-unreliable (firefox starts mid-document; webkit's body-focus
-    // Tab stalls — probed on this matrix), so the walk is ANCHORED: a
-    // reverse Shift+Tab walk from the contents trigger (the DOM-order
-    // successor of the shell-nav group) steps onto the collapsed
-    // destinations. WebKit skips clipped targets in sequential navigation
-    // (probed: BOTH directions land on body) — the back-nav.spec.ts webkit
-    // precedent applies: programmatic focusability carries the reachability
-    // claim (display:none would remove it from the a11y tree entirely).
-    const browserName = test.info().project.name;
-    if (browserName === "webkit") {
-      const st = await page.evaluate(() => {
-        const link = document.querySelector<HTMLElement>(
-          '.app-header[data-destination="reader"] .shell-nav a',
-        );
-        if (!link) return null;
-        link.focus();
-        const took = document.activeElement === link;
-        const focusVisible = took && link.matches(":focus-visible");
-        return { took, focusVisible, width: link.getBoundingClientRect().width };
-      });
-      expect(st).not.toBeNull();
-      expect(
-        st!.took,
-        "the collapsed destination must stay focusable (in the a11y tree — never display:none)",
-      ).toBe(true);
-      if (st!.focusVisible) {
-        expect(st!.width, "a :focus-visible collapsed destination must un-clip").toBeGreaterThan(
-          10,
-        );
-      }
+    // KEYBOARD-REACHABLE: the Menu is the DOM-order predecessor of the
+    // contents trigger, so one Shift+Tab from it lands on the Menu (WebKit's
+    // sequential navigation is engine-divergent — the back-nav precedent:
+    // programmatic focus carries the claim there).
+    if (test.info().project.name === "webkit") {
+      await menu.focus();
     } else {
       await tocTrigger(page).focus();
-      let reachedWidth: number | null = null;
-      for (let i = 0; i < 3 && reachedWidth === null; i++) {
-        await page.keyboard.press("Shift+Tab");
-        reachedWidth = await page.evaluate(() => {
-          const el = document.activeElement;
-          if (!el || !el.matches(".app-header .shell-nav a")) return null;
-          return el.getBoundingClientRect().width;
-        });
-      }
-      expect(
-        reachedWidth !== null,
-        "Shift+Tab must step onto the collapsed shell-nav destinations (they stay in the tab order)",
-      ).toBe(true);
-      expect(
-        reachedWidth!,
-        "the focused destination must un-clip (:focus-visible — never an invisible focus target)",
-      ).toBeGreaterThan(10);
+      await page.keyboard.press("Shift+Tab");
     }
+    await expect(menu).toBeFocused();
+    await page.keyboard.press("Enter");
+    await expect(menu).toHaveAttribute("aria-expanded", "true");
+    await expect(nav.getByRole("link", { name: "Library" })).toBeVisible();
+    await page.keyboard.press("Escape");
+    await expect(menu).toHaveAttribute("aria-expanded", "false");
+    await expect(menu).toBeFocused();
   });
 
   test("a11y: the open panel (320 sheet geometry) has zero serious/critical WCAG violations", async ({
