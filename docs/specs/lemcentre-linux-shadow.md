@@ -91,13 +91,27 @@ checkers and the root-owned launcher:
 5. **Identity recording**: the step summary records the candidate SHA +
    ref + run/attempt and the environment identity (receipt fields + the
    enforced lemfleet revision), so every archived run is self-describing.
-6. **Honest conclusion**: green only for launcher exit 0 **and** a
+6. **Sharding** (#2 item 4, owner decision 2026-11-25): the whole
+   three-engine suite outlived the guest harness's 3300 s step limit on
+   the 6-vCPU/12-GiB profile (acceptance attempt 1), so steps 3–5 run
+   once per Playwright shard `i/n` in the `e2e-linux-shadow-shard` matrix
+   job (`browser-suite --shard=i/n`; the envelope's `shard` key, which the
+   driver plane validates fail-closed and passes as `--shard`), one shard
+   at a time. Each shard's report goes up as
+   `e2e-linux-shadow-report-shard-<i>`. The `e2e-linux-shadow` job then
+   merges them with `ops/lemcentre-runner/merge-shard-reports.mjs`, which
+   refuses a missing, repeated or foreign shard and any test that ran in
+   two shards. The merged report is uploaded as `e2e-linux-shadow-report`
+   under the unchanged check name, so the comparison and acceptance tools
+   read one complete run exactly as before.
+7. **Honest conclusion**: green only for launcher exit 0 **and** a
    verified uploaded bundle **and** the exported per-engine report; any
    other exit is re-raised verbatim with its name — 2 suite red (the
    shadow verdict), 3 preparation failure, 4 boundary/pin refusal, 5
    wrapper timeout, 6 lease admission refused. A green launcher run
    whose per-engine report is missing/unreadable/cap-dropped fails as an
-   infrastructure error.
+   infrastructure error. The `e2e-linux-shadow` check is green only when
+   every shard concluded green and the shard reports merged.
 
 Exit-code summary: **0** green · **non-zero suite exits propagated** ·
 **33** browser guest not provisioned · **34** diagnostics transport not

@@ -17,7 +17,10 @@ const workflowPath = join(repoRoot, ".github", "workflows", "e2e-linux-shadow.ym
 const text = readFileSync(workflowPath, "utf8");
 const doc = parseYaml(text);
 
-const job = doc.jobs["e2e-linux-shadow"];
+// The suite runs as Playwright shards (#2 item 4): every shard job keeps
+// the single-run lane contract; the e2e-linux-shadow job merges them.
+const job = doc.jobs["e2e-linux-shadow-shard"];
+const aggregate = doc.jobs["e2e-linux-shadow"];
 
 function stepNames(): string[] {
   return job.steps.map(
@@ -28,7 +31,9 @@ function stepNames(): string[] {
 describe("e2e-linux-shadow lane contract", () => {
   it("produces a check name distinct from the authoritative e2e-reference", () => {
     expect(doc.name).toBe("e2e-linux-shadow");
-    expect(job.name ?? "e2e-linux-shadow").toBe("e2e-linux-shadow");
+    expect(aggregate.name ?? "e2e-linux-shadow").toBe("e2e-linux-shadow");
+    expect(String(job.name)).not.toBe("e2e-linux-shadow");
+    expect(String(job.name)).not.toBe("e2e-reference");
     expect(doc.name).not.toBe("e2e-reference");
   });
 
@@ -50,6 +55,42 @@ describe("e2e-linux-shadow lane contract", () => {
     expect(job["runs-on"]).toEqual(["self-hosted", "lemcentre"]);
     expect(job["timeout-minutes"]).toBeGreaterThan(0);
     expect(job.concurrency?.["cancel-in-progress"]).toBe(false);
+    expect(String(aggregate.if).replace(/\s+/g, " ")).toBe("always() && github.ref_name != 'main'");
+    expect(aggregate["runs-on"]).toEqual(["self-hosted", "lemcentre"]);
+  });
+
+  it("runs the suite as every shard i/n of one total, one at a time", () => {
+    expect(job.strategy?.["fail-fast"]).toBe(false);
+    expect(job.strategy?.["max-parallel"]).toBe(1);
+    const shards: number[] = job.strategy?.matrix?.shard;
+    expect(shards).toEqual(shards.map((_: number, i: number) => i + 1));
+    expect(shards.length).toBeGreaterThan(1);
+    // the total is the matrix size itself, never a second literal
+    const launch = job.steps.find((step: { id?: string }) => step.id === "launch");
+    expect(launch.env.SHARD).toBe("${{ matrix.shard }}/${{ strategy.job-total }}");
+    // a per-shard concurrency group: one shared group would let a queued
+    // shard replace its pending sibling
+    expect(String(job.concurrency?.group)).toContain("${{ matrix.shard }}");
+  });
+
+  it("merges the shard reports and is green only when every shard is green and they add up", () => {
+    expect(aggregate.needs).toBe("e2e-linux-shadow-shard");
+    const merge = aggregate.steps.find((step: { id?: string }) => step.id === "merge");
+    expect(String(merge.run)).toContain("merge-shard-reports.mjs");
+    const upload = aggregate.steps.find(
+      (step: { uses?: string; with?: { name?: string } }) =>
+        step.uses?.startsWith("actions/upload-artifact") &&
+        step.with?.name === "e2e-linux-shadow-report",
+    );
+    expect(upload?.with?.path).toBe(".guest-reports/e2e-pr.json");
+    expect(upload?.with?.["retention-days"]).toBe(7);
+    const conclude = aggregate.steps.find((step: { name?: string }) =>
+      /conclude/i.test(String(step.name)),
+    );
+    expect(conclude?.if).toBe("always()");
+    expect(conclude?.env?.SHARDS_RESULT).toBe("${{ needs.e2e-linux-shadow-shard.result }}");
+    expect(String(conclude?.run)).toMatch(/SHARDS_RESULT" != "success"/);
+    expect(String(conclude?.run)).toMatch(/MERGED" != "true"/);
   });
 
   it("keeps the two prior lanes' trust shape: receipt-vs-pin BEFORE any launcher step", () => {
@@ -77,7 +118,9 @@ describe("e2e-linux-shadow lane contract", () => {
 
   it("invokes the trusted launcher with the head SHA and the checkout dir", () => {
     const launch = job.steps.find((step: { run?: string }) =>
-      /browser-suite "\$HEAD_SHA" "\$GITHUB_WORKSPACE"/.test(String(step.run ?? "")),
+      /browser-suite "--shard=\$SHARD" "\$HEAD_SHA" "\$GITHUB_WORKSPACE"/.test(
+        String(step.run ?? ""),
+      ),
     );
     expect(launch).toBeTruthy();
     // The launch step must CAPTURE the exit code (set -uo pipefail, || code=$?)
