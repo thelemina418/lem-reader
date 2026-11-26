@@ -22,7 +22,9 @@
 //
 // Exit codes:
 //   0 — no regression (or no committed fingerprint to diff against; first run)
-//   1 — a previously-eligible (engine, kind) is now ineligible (REGRESSION)
+//   1 — a previously-eligible (engine, kind) is now ineligible (REGRESSION),
+//       or the fresh run measured a different fixture set than the baseline
+//       (COVERAGE MISMATCH: the comparison would not be like for like)
 //
 // Usage in CI:
 //   - On a PR: `npm run calibrate` then `node tests/e2e/calibration/fingerprint.compare.ts`
@@ -252,6 +254,29 @@ function main(): void {
   if (!committed || !committed.engines) {
     console.log("[calibration] no committed fingerprint to diff against (first run); exit 0");
     process.exit(0);
+  }
+
+  // Like-for-like guard: eligibility is aggregated per (engine, kind) over
+  // every measured cell, so a run over different fixtures is a different
+  // experiment, not a pass or a regression. The harness once shrank to the
+  // one starter-library article for months without the gate noticing.
+  const coverage: string[] = [];
+  for (const engine of ["chromium", "firefox", "webkit"]) {
+    const want = Object.keys(committed.engines[engine] ?? {}).sort();
+    const got = Object.keys(freshByEngine[engine] ?? {}).sort();
+    if (want.join("\n") !== got.join("\n")) {
+      coverage.push(`  - ${engine}: baseline [${want.join(", ")}], fresh [${got.join(", ")}]`);
+    }
+  }
+  if (coverage.length > 0) {
+    console.error(
+      "[calibration] D3-10 COVERAGE MISMATCH — the fresh run measured a different fixture set than the baseline:",
+    );
+    for (const line of coverage) console.error(line);
+    console.error(
+      "Restore the harness corpus (CALIBRATION_FIXTURE_IDS), or regenerate the baseline with owner approval (npm run calibrate:rebaseline).",
+    );
+    process.exit(1);
   }
 
   const regressions: Array<{ engine: string; kind: string }> = [];

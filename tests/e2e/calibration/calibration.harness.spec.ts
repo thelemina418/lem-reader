@@ -32,10 +32,11 @@
 import { test, expect, type Page } from "@playwright/test";
 import { writeFileSync, mkdirSync } from "node:fs";
 import { resolve } from "node:path";
-import { fixtures } from "../../../src/fixtures";
+import { bundledFixtures } from "../../../src/fixtures";
 import { FONT_STACKS, SPACING_PRESETS } from "../../../src/settings/tokens";
 import {
   ACTIVE_MATRIX,
+  CALIBRATION_FIXTURE_IDS,
   DEFAULT_CALIBRATION_SETTINGS,
   settingsForVariant,
   variantKey,
@@ -184,6 +185,15 @@ test.beforeEach(async ({ page }) => {
 // compare script (run after the Playwright job completes) merges them.
 const engineResults: BlockResult[] = [];
 
+// The corpus the committed fingerprint was measured on (see
+// CALIBRATION_FIXTURE_IDS). A missing id is a harness error, never a
+// smaller run.
+const calibrationFixtures = CALIBRATION_FIXTURE_IDS.map((id) => {
+  const fixture = bundledFixtures.find((f) => f.id === id);
+  if (!fixture) throw new Error(`calibration fixture ${id} is not bundled`);
+  return fixture;
+});
+
 test(`calibration: measure fixtures × typography matrix (per-engine)`, async ({
   page,
   browserName,
@@ -193,7 +203,7 @@ test(`calibration: measure fixtures × typography matrix (per-engine)`, async ({
   // round-trip). Worst case ~60s on webkit (slowest engine). 300s gives
   // generous headroom; CI machines vary.
   test.setTimeout(300_000);
-  for (const fixture of fixtures) {
+  for (const fixture of calibrationFixtures) {
     for (const variant of ACTIVE_MATRIX) {
       const settings = settingsForVariant(variant);
       // domcontentloaded + the explicit h1 budget: the article's h1 IS the
@@ -206,7 +216,18 @@ test(`calibration: measure fixtures × typography matrix (per-engine)`, async ({
       await applyVariant(page, settings);
       // D3-06 — fonts must settle before measuring.
       await page.evaluate(() => document.fonts.ready);
-      const ARTICLE = "article";
+      // Measure the article's content blocks, not the reader chrome: since
+      // long-work pagination (4c7fd2c9, 2026-11-02) `article h1` is the
+      // compact header title (14px, one line), which no reader typography
+      // drives. The hidden full-flow measurement body (.article-body-
+      // measurement, ArticleView) holds the blocks the measurement engine
+      // and Pretext model; a missing body is a harness error, never a
+      // silent fallback to other elements.
+      const ARTICLE = "article .article-body-measurement";
+      await expect(
+        page.locator(ARTICLE),
+        `${fixture.id} ${variantKey(variant)}: no measurement body`,
+      ).toHaveCount(1);
       for (const t of blockTargets(2)) {
         const selector = t.selector(ARTICLE);
         const exists = await page.evaluate((sel) => {
