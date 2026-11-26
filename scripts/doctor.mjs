@@ -77,7 +77,7 @@ const runtime = {
   miseRepoPin: misePin || "(mise unavailable)",
   message: runtimeCheck.ok
     ? `Node ${process.version} — supported (repo pin resolves ${misePin || "?"}).`
-    : `Node ${process.version} — NOT supported. Expensive scripts are gated by scripts/preflight.mjs. Fix: mise exec -- <command>.`,
+    : `Node ${process.version} — NOT supported. Expensive scripts are gated by scripts/preflight.mjs. Fix: PATH="$(mise where node)/bin:$PATH" <command> (see docs/setup.md "Node runtime").`,
 };
 
 // ── Host lane: real launch probes ───────────────────────────────────────────

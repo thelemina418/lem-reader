@@ -34,10 +34,17 @@ container/provisioning steps live in ["Container lane"](#container-lane-three-en
   major it fails fast with the fix instead of burning minutes and producing
   misleading failures (jsdom/localStorage breakage that does not exist under
   Node 22).
-- Wrong runtime (e.g. the machine's global Node 26 in an old shell): run the
-  command under the pin — `mise exec -- <command>` — or start a fresh shell
-  in the repo. If Node 22 is missing: `mise install`. Never change the
-  global default for this repo.
+- Wrong runtime (e.g. the machine's global Node 26): run the command with the
+  pin prepended — `PATH="$(mise where node)/bin:$PATH" <command>` — or start a
+  fresh interactive shell in the repo. If Node 22 is missing: `mise install`.
+  Never change the global default for this repo.
+- Why not `mise exec -- <command>`: it resolves the _named_ command under the
+  pin, but does not move a mise path that is already on `PATH` ahead of
+  `/usr/bin`. In an already-activated shell where a system Node precedes it
+  (observed on lemcentre with mise 2026.11.0: Arch's `nodejs` 26 at
+  `/usr/bin/node`, as in agent sessions), `mise exec -- npm …` still runs npm,
+  npx and the vitest workers under Node 26: 164 jsdom `localStorage`
+  failures. Check with `mise exec -- bash -c 'node -v'`.
 - Bumping the pin: edit `.mise.toml`, run `mise install`, re-run `npm run doctor`.
 
 ## Verifying a session: the doctor
@@ -169,16 +176,16 @@ installed test runner.
 
 ## Recovery cookbook
 
-| Symptom                                                        | Fix                                                                                         |
-| -------------------------------------------------------------- | ------------------------------------------------------------------------------------------- |
-| Preflight rejects the runtime (`Node v26.x is not supported…`) | `mise exec -- <command>`, or a fresh shell in the repo; `mise install` if Node 22 is absent |
-| Doctor: `not-installed` on host                                | `npx playwright install <browser>` (matches the installed Playwright version)               |
-| Doctor: `launch-blocked` (missing system libraries) on host    | expected for WebKit on Arch — run that engine via `npm run test:e2e:container`              |
-| Wrapper: `docker daemon unreachable`                           | `node scripts/bootstrap-machine.mjs` — it names the exact remaining prerequisite            |
-| Wrapper: registry tag not available                            | the installed Playwright/Node pin has no published image/tag — see "Upgrading Playwright"   |
-| Wrapper: image runs wrong Node                                 | rebuild: the command is printed verbatim by the wrapper                                     |
-| Managed server: port already in use                            | `ss -ltnp 'sport = :<port>'`; kill a leftover lane server or pin `LEM_E2E_BASE`             |
-| Container tests fail with odd permissions on deps              | `node scripts/container-test.mjs --rebuild-deps`                                            |
+| Symptom                                                        | Fix                                                                                                                            |
+| -------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------ |
+| Preflight rejects the runtime (`Node v26.x is not supported…`) | `PATH="$(mise where node)/bin:$PATH" <command>`, or a fresh interactive shell in the repo; `mise install` if Node 22 is absent |
+| Doctor: `not-installed` on host                                | `npx playwright install <browser>` (matches the installed Playwright version)                                                  |
+| Doctor: `launch-blocked` (missing system libraries) on host    | expected for WebKit on Arch — run that engine via `npm run test:e2e:container`                                                 |
+| Wrapper: `docker daemon unreachable`                           | `node scripts/bootstrap-machine.mjs` — it names the exact remaining prerequisite                                               |
+| Wrapper: registry tag not available                            | the installed Playwright/Node pin has no published image/tag — see "Upgrading Playwright"                                      |
+| Wrapper: image runs wrong Node                                 | rebuild: the command is printed verbatim by the wrapper                                                                        |
+| Managed server: port already in use                            | `ss -ltnp 'sport = :<port>'`; kill a leftover lane server or pin `LEM_E2E_BASE`                                                |
+| Container tests fail with odd permissions on deps              | `node scripts/container-test.mjs --rebuild-deps`                                                                               |
 
 ## Boundaries
 

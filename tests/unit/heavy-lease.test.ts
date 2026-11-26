@@ -107,9 +107,23 @@ describe("heavy-test lease acquisition (issue #255)", () => {
   });
 
   it("the default lease file lives in the user cache dir (shared across checkouts on one host)", () => {
-    const file = defaultLeaseFile();
-    expect(file).toMatch(/lem-reader/);
-    expect(file.endsWith("heavy-test.lease.json")).toBe(true);
+    // Without the host-owned shared dir (issue #280). A provisioned host has
+    // the real /run/lem-heavy-lease, so name a missing dir explicitly rather
+    // than depend on which machine runs the suite.
+    const previousFile = process.env.LEM_HEAVY_LEASE_FILE;
+    const previousDir = process.env.LEM_HEAVY_LEASE_SHARED_DIR;
+    delete process.env.LEM_HEAVY_LEASE_FILE;
+    process.env.LEM_HEAVY_LEASE_SHARED_DIR = join(tmpdir(), "heavy-lease-absent-shared-dir");
+    try {
+      const file = defaultLeaseFile();
+      expect(file).toMatch(/lem-reader/);
+      expect(file.endsWith("heavy-test.lease.json")).toBe(true);
+    } finally {
+      if (previousFile === undefined) delete process.env.LEM_HEAVY_LEASE_FILE;
+      else process.env.LEM_HEAVY_LEASE_FILE = previousFile;
+      if (previousDir === undefined) delete process.env.LEM_HEAVY_LEASE_SHARED_DIR;
+      else process.env.LEM_HEAVY_LEASE_SHARED_DIR = previousDir;
+    }
   });
 
   it("refuses while a live holder owns the lease, naming the owner (contention)", async () => {
