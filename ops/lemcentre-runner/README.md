@@ -203,11 +203,22 @@ runner to report online. The old runner directory is preserved at
 ## Enforced trusted revision and update procedure
 
 The pin (`lemfleet-rev`) currently records lemfleet
-`b06493f8a8fbc2cc7c68c23c95721c1f426100d5`: `thelemina418/lemfleet` main
-after the move from `wvanderen`. It is the rewritten twin of the previous
-pin `e9ac0e6…` (the merge of the old lemfleet PR #34), and differs from it
-only by the owner rename. The pin before that was `3c8682b…` (lemfleet#12,
-F5 — the revision that took over `factory-validation`, lemfleet ADR-0012).
+`476c41f85b51bddef945f660a5c8994cff1655c8`: the merge of lemfleet#7, the
+browser-harness fixes from #2 acceptance attempt 1. A timed-out step keeps
+its output and still reports exit 5. `browser-nightly` consumes every
+phase's spool outputs, and the evidence bundle's `verdicts/phases.json`
+covers the whole chain. The previous pin was `b06493f…` (lemfleet main
+after the repository move, the rewritten twin of `e9ac0e6…`), and before
+that `3c8682b…` (lemfleet#12, F5 — the revision that took over
+`factory-validation`, lemfleet ADR-0012).
+
+Moving this pin also re-provisions the browser guest. The environment
+receipt records the lemfleet revision that built the image, and every
+browser lane refuses a receipt whose revision differs from the enforced
+pin. Rebuild the image with lemfleet `browser_guest.py build-image` under
+the new pin, from the same browser-payload set, then install the image
+and its receipt (lemfleet `proof/f4a/README.md`, owner-gated runbook).
+Reinstall the `browser-*` launchers from the new harness checkout as well.
 **A clean checkout is not a
 pin**: the wrapper compares the harness checkout's HEAD against the pin
 file on every run and refuses mismatches (exit 4), so an outdated, advanced
