@@ -3904,7 +3904,6 @@ export function ArticleView({
             open={tocOpen}
             mode={isPaginated ? "paginated" : "scrolling"}
             onActivate={handleTocJump}
-            chapterMarks={chapterCompletion.marksByBlockIndex}
           />
           {/* Phase 5 Plan 05-03 Task 2: AnnotationsDrawer — native <dialog>
             reading-order list + empty-state + navigate-back. Reads highlights

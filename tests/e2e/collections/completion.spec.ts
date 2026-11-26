@@ -4,8 +4,8 @@
 // scroll geometry, real speech, and cross-route truth):
 //
 //   - DISC-246-01 — ordinary whole-work paginated reading that TURNS PAST a
-//     chapter's end completes that chapter: the TOC marks it Finished, the
-//     collection referencing it shows the Finished row + honest progress,
+//     chapter's end completes that chapter: the collection referencing it
+//     shows the Finished row + honest progress (the TOC shows no status),
 //     and the record survives a reload (shared across ordinary reading and
 //     collections; never page-weighted).
 //   - DISC-246-02 — reading a chapter ASSIGNMENT to its true end completes
@@ -34,9 +34,10 @@
 //   - DISC-246-08 — Home/End navigation glides complete nothing; genuine
 //     wheel traversal through a chapter credits that chapter, never
 //     bulk-fabricated coverage from navigation.
-//   - DISC-246-09 — an UNCOLLECTED work is correctable through Reading
-//     status, not the TOC: the chapter correction writes the same ONE
-//     shared record (and survives a reload).
+//   - DISC-246-09 — outside collections there is no chapter status
+//     (issue #17): the library action toggles the whole reading directly,
+//     the TOC shows no finished labels or controls, and a chapter finished
+//     in ordinary reading still counts once a collection references it.
 //
 // Harness (REUSE-DO-NOT-FORK): BASE + wipeDatabase (annotations/_fixtures)
 // + seedStoreRows (library) + the pagination DEV-harness readiness waits +
@@ -45,7 +46,12 @@
 // (deriveWorkStructure/articleGraphemeIndex/chunkArticleForSpeech) — never
 // hand-counted literals.
 import { test, expect, type Page } from "@playwright/test";
-import { ArticleSchema, BookSchema, CollectionSchema } from "../../../src/content/schema";
+import {
+  ArticleSchema,
+  BookSchema,
+  CollectionSchema,
+  CompletionRecordSchema,
+} from "../../../src/content/schema";
 import type { CanonicalArticle, Book, CollectionEntryTarget } from "../../../src/content/schema";
 import {
   normalizeText,
@@ -368,11 +374,12 @@ test("ordinary whole-work reading past a chapter's end completes it for the coll
   const savedMid = await expectSavedLocation(page, WORK.id);
   expect(savedMid).toBeLessThan(WORK_TOTAL);
 
-  // The TOC marks the traversed chapter — and ONLY that chapter.
+  // Issue #17 — the ToC shows no chapter status, even for a work a
+  // collection references (status lives on the collection rows).
   await page.getByRole("button", { name: "Table of contents" }).click();
   const toc = page.getByRole("navigation", { name: "Table of contents" });
-  await expect(toc.locator("a", { hasText: "Opening Arguments" })).toContainText("Finished");
-  await expect(toc.locator("a", { hasText: "A Brief Interlude" })).not.toContainText("Finished");
+  await expect(toc.getByRole("link", { name: "Opening Arguments", exact: true })).toBeVisible();
+  await expect(toc).not.toContainText("Finished");
   await page.keyboard.press("Escape");
 
   // The shared truth reaches the collection referencing that chapter: the
@@ -388,14 +395,8 @@ test("ordinary whole-work reading past a chapter's end completes it for the coll
 
   // The persisted truth survives a reload (honest persistence, not view
   // state).
-  await page.goto(`${BASE}/#/article/${WORK.id}`);
   await page.reload();
-  await page.getByRole("button", { name: "Table of contents" }).click();
-  await expect(
-    page.getByRole("navigation", { name: "Table of contents" }).locator("a", {
-      hasText: "Opening Arguments",
-    }),
-  ).toContainText("Finished");
+  await expect(page.locator(".collection-progress")).toHaveText("1 of 2 finished");
   const records = await readCompletions(page);
   expect(records).toEqual([{ targetKey: `work-chapter:${WORK.id}/${CH_ONE!.id}`, finished: true }]);
 });
@@ -779,49 +780,64 @@ test("a navigation leap proves nothing; a genuine scroll traversal does (DISC-24
   await expect(page.locator(".collection-progress")).toHaveText("1 of 3 finished");
 });
 
-test("an uncollected work is corrected in Reading status, not in the ToC (DISC-246-09)", async ({
+test("outside collections, chapter status stays out of the library and the ToC (DISC-246-09)", async ({
   page,
 }) => {
+  // A chapter finished in ordinary reading (the background "reading"
+  // record — unchanged by issue #17) before any collection references it.
   await seedLocation(page, WORK.id, 400, "2026-10-01T12:00:00.000Z");
-  await page.reload();
-  const trigger = page.getByRole("button", {
-    name: "Reading status for The Tide Ledger",
-    exact: true,
-  });
-  await trigger.click();
-  const dialog = page.getByRole("dialog", { name: "Reading status" });
-  await expect(dialog).toBeVisible();
-  await expect(dialog.getByRole("button", { name: "Close", exact: true })).toBeFocused();
-  await dialog
-    .getByRole("button", { name: "Mark finished: A Brief Interlude", exact: true })
-    .click();
-  await expect(
-    dialog.getByRole("button", { name: "Mark unfinished: A Brief Interlude", exact: true }),
-  ).toBeVisible();
-  expect(await readCompletions(page)).toEqual([
-    { targetKey: `work-chapter:${WORK.id}/${CH_INTERLUDE!.id}`, finished: true },
+  await seedStoreRows(page, "completions", [
+    CompletionRecordSchema.parse({
+      schemaVersion: 1,
+      targetKey: `work-chapter:${WORK.id}/${CH_ONE!.id}`,
+      target: { kind: "work-chapter", articleId: WORK.id, destinationId: CH_ONE!.id },
+      finished: true,
+      source: "reading",
+      updatedAt: "2026-10-01T12:00:00.000Z",
+    }),
   ]);
-  expect(await readLocationOffset(page, WORK.id)).toBe(400);
-  await page.keyboard.press("Escape");
-  await expect(dialog).toHaveCount(0);
-  await expect(trigger).toBeFocused();
-  await trigger.click();
-  await expect(
-    dialog.getByRole("button", { name: "Mark unfinished: A Brief Interlude", exact: true }),
-  ).toBeVisible();
-  await dialog.getByRole("button", { name: "Mark finished: Whole reading", exact: true }).click();
-  await expect(
-    dialog.getByRole("button", { name: "Mark unfinished: Whole reading", exact: true }),
-  ).toBeVisible();
-  expect(await readLocationOffset(page, WORK.id)).toBe(400);
-  await dialog.getByRole("button", { name: "Close", exact: true }).click();
+  await page.reload();
 
+  // The library state action is the direct whole-reading toggle — no
+  // Reading status dialog for a chaptered standalone work.
+  const row = page.locator(".library-row", { hasText: "The Tide Ledger" });
+  await expect(row.getByRole("button", { name: "Tags for The Tide Ledger" })).toBeVisible();
+  await expect(row.getByRole("button", { name: /^Reading status for / })).toHaveCount(0);
+  await row.getByRole("button", { name: "Mark as read: The Tide Ledger", exact: true }).click();
+  await expect(
+    row.getByRole("button", { name: "Mark as unread: The Tide Ledger", exact: true }),
+  ).toBeVisible();
+  await expect(page.getByRole("dialog")).toHaveCount(0);
+  await expect
+    .poll(() => readCompletions(page))
+    .toEqual(
+      expect.arrayContaining([
+        { targetKey: `article:${WORK.id}`, finished: true },
+        { targetKey: `work-chapter:${WORK.id}/${CH_ONE!.id}`, finished: true },
+      ]),
+    );
+  expect(await readLocationOffset(page, WORK.id)).toBe(400);
+  await row.getByRole("button", { name: "Mark as unread: The Tide Ledger", exact: true }).click();
+  await expect(
+    row.getByRole("button", { name: "Mark as read: The Tide Ledger", exact: true }),
+  ).toBeVisible();
+
+  // The ToC carries no finished labels and no completion controls.
   await page.goto(`${BASE}/#/article/${WORK.id}`);
   await expect(page.locator(".article-body")).toBeVisible({ timeout: 15_000 });
   await page.getByRole("button", { name: "Table of contents" }).click();
   const toc = page.getByRole("navigation", { name: "Table of contents" });
-  await expect(toc.getByRole("button", { name: /Mark (un)?finished/ })).toHaveCount(0);
-  await expect(toc.locator("li", { hasText: "A Brief Interlude" }).locator("a")).toContainText(
-    "Finished",
-  );
+  await expect(toc.getByRole("link", { name: "Opening Arguments", exact: true })).toBeVisible();
+  await expect(toc).not.toContainText("Finished");
+  await expect(toc.getByRole("button")).toHaveCount(0);
+  await page.keyboard.press("Escape");
+
+  // The saved chapter record still counts once a collection references it.
+  const planId = await seedCollection(page, "Later plan", "plan-later", [
+    { kind: "work-chapter", articleId: WORK.id, destinationId: CH_ONE!.id },
+    { kind: "work-chapter", articleId: WORK.id, destinationId: CH_INTERLUDE!.id },
+  ]);
+  await openCollection(page, planId, "Later plan");
+  await expect(page.locator(".collection-progress")).toHaveText("1 of 2 finished");
+  await expect(completionButton(page, "Mark unfinished", "Opening Arguments")).toBeVisible();
 });
