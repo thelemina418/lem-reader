@@ -20,12 +20,28 @@
 //       did not run / wrote no samples). Mirrors fingerprint.compare.ts
 //       L199-211 exactly.
 //
+// Read-only by default (lem-reader#2 item 4): the comparison never rewrites
+// the committed tests/e2e/perf/budget.json — on the Lemcentre nightly lane a
+// rewrite on a PASSED gate read as a baseline regeneration (exit 8). The
+// measured p95s are printed above the verdict; the lane assembles its own
+// perf/measured.json from .perf-tmp/. Refreshing the informational
+// p95WallClockMs/sampleCount fields takes --write-baseline
+// (npm run perf:rebaseline).
+//
+// Platform scope (owner decision, lem-reader#2 item 4, 2026-11-25): the
+// locked budgets were measured on the macOS reference machine, so only a
+// darwin run gates on them. On any other platform the comparison is
+// REPORT-ONLY: every over-budget cell is printed, and the exit is 0, until
+// that platform has budgets of its own (a budget change needs owner
+// approval).
+//
 // Usage in CI:
 //   - On a PR: `npm run perf` (= `playwright test perf.harness && node
 //     tests/e2e/perf/budget.compare.ts`) — fails the build if a measured
 //     p95 exceeds the locked budget.
 //   - To intentionally update the baseline after an approved budget change:
-//     edit tests/e2e/perf/budget.json, commit, re-run npm run perf.
+//     edit tests/e2e/perf/budget.json, commit, re-run npm run perf
+//     (npm run perf:rebaseline also refreshes the informational p95 fields).
 //
 // Locked-budget vs placeholder discipline (D6-01 measure-first):
 //   - The placeholder budget.json (Task 1) has empty engines + a rationale
@@ -41,6 +57,10 @@ import { resolve } from "node:path";
 const REPO_ROOT = process.cwd();
 const BUDGET_PATH = resolve(REPO_ROOT, "tests", "e2e", "perf", "budget.json");
 const TMP_DIR = resolve(REPO_ROOT, ".perf-tmp");
+const WRITE_BASELINE = process.argv.includes("--write-baseline");
+/** Platforms whose runs gate on the locked budgets (see the header). */
+const GATED_PLATFORMS: ReadonlySet<string> = new Set(["darwin"]);
+const GATED = GATED_PLATFORMS.has(process.platform);
 
 // ── Types ───────────────────────────────────────────────────────────────────
 
@@ -297,11 +317,13 @@ function main(): void {
         "Placeholder budget — thresholds not yet measured. Run npm run perf, propose p95 + headroom, get user approval (D6-01), then lock thresholds in Task 3.",
       engines: freshEnginesShape,
     };
-    mkdirSync(resolve(BUDGET_PATH, ".."), { recursive: true });
-    writeFileSync(BUDGET_PATH, JSON.stringify(placeholder, null, 2) + "\n", "utf8");
-    console.log(
-      `[perf] wrote ${BUDGET_PATH} (${freshSamples.length} samples, engines: ${[...enginesPresent].join(", ") || "none"})`,
-    );
+    if (WRITE_BASELINE) {
+      mkdirSync(resolve(BUDGET_PATH, ".."), { recursive: true });
+      writeFileSync(BUDGET_PATH, JSON.stringify(placeholder, null, 2) + "\n", "utf8");
+      console.log(
+        `[perf] wrote ${BUDGET_PATH} (${freshSamples.length} samples, engines: ${[...enginesPresent].join(", ") || "none"})`,
+      );
+    }
     console.log("[perf] no locked budget to diff against (placeholder / first run); exit 0");
     process.exit(0);
   }
@@ -316,6 +338,18 @@ function main(): void {
   }
   const headroomPct = committed.toleranceBound?.headroomPct ?? 0;
   const regressions = findRegressions(byCell, committed, headroomPct);
+
+  if (regressions.length > 0 && !GATED) {
+    console.log(
+      `[perf] D6-04 REPORT-ONLY on ${process.platform} — ${regressions.length} cell(s) over the macOS-measured budget (headroomPct=${headroomPct}%); not gating:`,
+    );
+    for (const r of regressions) {
+      console.log(
+        `  - ${r.engine}/${r.profile}/${r.fixture}/${r.phase}: measured ${r.measured}ms > budget ${r.budget}ms (allowed ${r.allowed}ms)`,
+      );
+    }
+    process.exit(0);
+  }
 
   if (regressions.length > 0) {
     console.error(
@@ -345,11 +379,17 @@ function main(): void {
     rationale: committed.rationale,
     engines: mergeLockedThresholds(freshEnginesShape, committedEngines),
   };
-  writeFileSync(BUDGET_PATH, JSON.stringify(refreshed, null, 2) + "\n", "utf8");
+  if (WRITE_BASELINE) {
+    writeFileSync(BUDGET_PATH, JSON.stringify(refreshed, null, 2) + "\n", "utf8");
+    console.log(
+      `[perf] wrote ${BUDGET_PATH} (${freshSamples.length} samples, engines: ${[...enginesPresent].join(", ") || "none"})`,
+    );
+  }
   console.log(
-    `[perf] wrote ${BUDGET_PATH} (${freshSamples.length} samples, engines: ${[...enginesPresent].join(", ") || "none"})`,
+    GATED
+      ? "[perf] D6-04 gate PASSED — all measured p95 within budget"
+      : `[perf] D6-04 REPORT-ONLY on ${process.platform} — all measured p95 within the macOS-measured budget`,
   );
-  console.log("[perf] D6-04 gate PASSED — all measured p95 within budget");
   process.exit(0);
 }
 

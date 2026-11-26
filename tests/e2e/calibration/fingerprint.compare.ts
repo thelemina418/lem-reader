@@ -10,8 +10,15 @@
 //   node tests/e2e/calibration/fingerprint.compare.ts
 // (Node 22.22+ strips TypeScript type annotations natively; no transpile
 // step needed. CI invokes this AFTER `npm run calibrate` writes the temp
-// files; it also re-writes calibration/fingerprint.json with the fresh
-// merged result so subsequent runs diff against the new baseline.)
+// files.)
+//
+// The comparison is READ-ONLY against the committed baseline: the fresh
+// merged result goes to .calibration-tmp/fingerprint.fresh.json (the
+// evidence the Lemcentre nightly lane stages as calibration/merged.json).
+// A gate that rewrote its own baseline on every run made the Linux lane
+// report a baseline regeneration (exit 8) on a PASSED comparison
+// (lem-reader#2 attempt 1). Rewriting calibration/fingerprint.json takes
+// the explicit --write-baseline flag (npm run calibrate:rebaseline).
 //
 // Exit codes:
 //   0 — no regression (or no committed fingerprint to diff against; first run)
@@ -21,17 +28,21 @@
 //   - On a PR: `npm run calibrate` then `node tests/e2e/calibration/fingerprint.compare.ts`
 //     — fails the build if a Pretext-eligible kind regressed.
 //   - To intentionally update the baseline after an approved eligibility
-//     change (e.g. a new Pretext version widens eligibility): re-run
-//     calibrate, then commit the regenerated calibration/fingerprint.json.
+//     change (e.g. a new Pretext version widens eligibility): run
+//     `npm run calibrate:rebaseline`, then commit the regenerated
+//     calibration/fingerprint.json.
 //
 // Shape (mirrors the fingerprint.ts loader in src/measurement):
 
-import { readFileSync, writeFileSync, existsSync, readdirSync, mkdirSync } from "node:fs";
+import { readFileSync, writeFileSync, existsSync, readdirSync, mkdirSync, rmSync } from "node:fs";
 import { resolve } from "node:path";
 
 const REPO_ROOT = process.cwd();
 const FINGERPRINT_PATH = resolve(REPO_ROOT, "calibration", "fingerprint.json");
 const TMP_DIR = resolve(REPO_ROOT, ".calibration-tmp");
+const FRESH_NAME = "fingerprint.fresh.json";
+const FRESH_PATH = resolve(TMP_DIR, FRESH_NAME);
+const WRITE_BASELINE = process.argv.includes("--write-baseline");
 
 // ── Types (mirror src/measurement/fingerprint.ts) ───────────────────────────
 
@@ -152,7 +163,7 @@ function loadTempResults(): BlockResult[] {
   if (!existsSync(TMP_DIR)) return [];
   const out: BlockResult[] = [];
   for (const f of readdirSync(TMP_DIR)) {
-    if (!f.endsWith(".json")) continue;
+    if (!f.endsWith(".json") || f === FRESH_NAME) continue;
     try {
       const txt = readFileSync(resolve(TMP_DIR, f), "utf8");
       const arr = JSON.parse(txt) as BlockResult[];
@@ -193,6 +204,8 @@ function normalizeEngines(byEngine: Record<string, EngineRows>): Record<string, 
 }
 
 function main(): void {
+  // Never leave a previous run's merge behind as this run's evidence.
+  rmSync(FRESH_PATH, { force: true });
   const freshResults = loadTempResults();
   if (freshResults.length === 0) {
     // No fresh calibration data — the harness did not run (or wrote no
@@ -219,16 +232,23 @@ function main(): void {
     engines: freshByEngine,
   };
 
-  // Write the fresh fingerprint (regenerate the committed artifact).
-  mkdirSync(resolve(FINGERPRINT_PATH, ".."), { recursive: true });
-  writeFileSync(FINGERPRINT_PATH, JSON.stringify(freshFingerprint, null, 2) + "\n", "utf8");
+  // Read the committed baseline BEFORE any write, so --write-baseline
+  // still diffs against the original.
+  const committed = loadCommittedFingerprint();
+  const serialized = JSON.stringify(freshFingerprint, null, 2) + "\n";
+  mkdirSync(TMP_DIR, { recursive: true });
+  writeFileSync(FRESH_PATH, serialized, "utf8");
+  const target = WRITE_BASELINE ? FINGERPRINT_PATH : FRESH_PATH;
+  if (WRITE_BASELINE) {
+    mkdirSync(resolve(FINGERPRINT_PATH, ".."), { recursive: true });
+    writeFileSync(FINGERPRINT_PATH, serialized, "utf8");
+  }
   console.log(
-    `[calibration] wrote ${FINGERPRINT_PATH} (${freshResults.length} samples, engines: ${enginesPresent.join(", ") || "none"})`,
+    `[calibration] wrote ${target} (${freshResults.length} samples, engines: ${enginesPresent.join(", ") || "none"})`,
   );
 
   // D3-10 regression gate: diff fresh vs committed for previously-eligible
   // (engine, kind) pairs. A committed-eligible kind now ineligible = FAIL.
-  const committed = loadCommittedFingerprint();
   if (!committed || !committed.engines) {
     console.log("[calibration] no committed fingerprint to diff against (first run); exit 0");
     process.exit(0);
@@ -255,7 +275,7 @@ function main(): void {
       console.error(`  - ${r.engine} / ${r.kind}`);
     }
     console.error(
-      "If this is intentional (e.g. a font regression), document the rationale in calibration/fingerprint.json and commit the new baseline.",
+      "If this is intentional (e.g. a font regression), run npm run calibrate:rebaseline, document the rationale in calibration/fingerprint.json and commit the new baseline.",
     );
     // D3-10 — the regression fails the build. process.exit(1) is the CI gate.
     process.exit(1);
