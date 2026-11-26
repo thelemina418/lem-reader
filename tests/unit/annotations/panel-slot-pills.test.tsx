@@ -211,37 +211,45 @@ describe("annotation panel slot pills (issue #222)", () => {
     expect(within(surface).queryAllByRole("radio")).toEqual([]);
   });
 
-  it("discloses tag editing without focusing the input and keeps tag names visible", async () => {
+  it("shows tag names as pills and + Tag swaps the slot row for the field in place", async () => {
     const user = userEvent.setup();
     renderControls();
     const surface = await findSurface();
-    const toggle = within(surface).getByRole("button", { name: /^Tags/ });
-    expect(surface.querySelector(".annotation-panel-tag-summary")?.textContent).toBe("reading");
-    expect(toggle.getAttribute("aria-expanded")).toBe("false");
+    const pills = within(surface).getByRole("list", { name: "Highlight tags" });
+    expect(within(pills).getByText("reading")).toBeTruthy();
     expect(within(surface).queryByRole("combobox")).toBeNull();
-    await user.click(toggle);
-    expect(toggle.getAttribute("aria-expanded")).toBe("true");
-    expect(within(surface).getByRole("combobox")).not.toBe(document.activeElement);
-    await user.click(toggle);
+    await user.click(within(surface).getByRole("button", { name: "Add tag" }));
+    const input = within(surface).getByRole("combobox");
+    await waitFor(() => expect(input).toBe(document.activeElement));
+    expect(surface.querySelector(".highlight-slot-picker")).toBeNull();
+    await user.click(within(surface).getByRole("button", { name: "Done adding tags" }));
     expect(within(surface).queryByRole("combobox")).toBeNull();
+    expect(surface.querySelector(".highlight-slot-picker")).not.toBeNull();
   });
 
-  it("keeps utility actions secondary and Escape returns from the menu without closing", async () => {
+  it("names the icon actions on hover and keeps Copy, Delete, Add note, and Done in pinned groups", async () => {
     const user = userEvent.setup();
     renderControls();
     const surface = await findSurface();
-    expect(within(surface).queryByRole("menuitem")).toBeNull();
-    const more = within(surface).getByRole("button", { name: "More actions" });
-    await user.click(more);
-    await waitFor(() =>
-      expect(within(surface).getByRole("menuitem", { name: "Copy" })).toBe(document.activeElement),
+    const start = surface.querySelector(".annotation-panel-footer-start")!;
+    const end = surface.querySelector(".annotation-panel-footer-end")!;
+    expect(
+      within(start as HTMLElement)
+        .getAllByRole("button")
+        .map((b) => b.getAttribute("aria-label")),
+    ).toEqual(["Copy highlight", "Delete highlight"]);
+    expect(
+      within(end as HTMLElement)
+        .getAllByRole("button")
+        .map((b) => b.getAttribute("aria-label") ?? b.textContent),
+    ).toEqual(["Add note", "Done"]);
+    const copy = within(surface).getByRole("button", { name: "Copy highlight" });
+    await user.hover(copy);
+    expect(copy.parentElement?.querySelector(".annotation-icon-label")?.textContent).toBe(
+      "Copy highlight",
     );
-    await user.keyboard("{ArrowDown}");
-    expect(within(surface).getByRole("menuitem", { name: "Delete" })).toBe(document.activeElement);
-    await user.keyboard("{Escape}");
-    expect(more).toBe(document.activeElement);
-    expect(within(surface).queryByRole("menu")).toBeNull();
-    expect(surface.hasAttribute("open")).toBe(true);
+    await user.unhover(copy);
+    expect(copy.parentElement?.querySelector(".annotation-icon-label")).toHaveAttribute("hidden");
   });
 
   it("reveals full slot action labels on focus and hover", async () => {

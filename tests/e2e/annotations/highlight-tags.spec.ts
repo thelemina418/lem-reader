@@ -109,10 +109,12 @@ async function seedHighlight(
   }, rec);
 }
 
-/** Tag editing is explicitly disclosed without automatically focusing entry. */
+/** + Tag swaps the slot row for the inline field and focuses its input. */
 async function revealTags(dialog: import("@playwright/test").Locator) {
-  await dialog.getByRole("button", { name: /^Tags/ }).click();
-  return dialog.locator("input#highlight-tags-input");
+  await dialog.getByRole("button", { name: "Add tag", exact: true }).click();
+  const input = dialog.locator("input#highlight-tags-input");
+  await expect(input).toBeFocused();
+  return input;
 }
 
 async function openTagEditor(page: Page) {
@@ -136,15 +138,12 @@ test.describe("highlight tags in the reader (issue #207)", () => {
     await expect(editor.getByRole("combobox")).not.toBeVisible();
     const tagInput = await revealTags(editor);
     await expect(tagInput).toBeVisible();
-    await expect(editor.getByRole("button", { name: /^Tags/ })).toHaveAttribute(
-      "aria-expanded",
-      "true",
-    );
+    await expect(editor.getByRole("button", { name: /^Apply slot/ })).toHaveCount(0);
 
     // Type + Enter picks (the shared combobox keyboard path).
     await tagInput.fill("essays");
     await tagInput.press("Enter");
-    await expect(editor.locator(".tag-picker-pill-text")).toHaveText("essays");
+    await expect(editor.locator(".annotation-panel-tag-text")).toHaveText("essays");
 
     // Done closes; the row carries the tag; focus is back on the highlight
     // (reading position unchanged — the passage is still on screen).
@@ -161,7 +160,7 @@ test.describe("highlight tags in the reader (issue #207)", () => {
     const mark = page.locator("mark.highlight").first();
     await expect(mark).toBeVisible();
     const reopened = await openTagEditor(page);
-    await expect(reopened.dialog.locator(".tag-picker-pill-text")).toHaveText("essays");
+    await expect(reopened.dialog.locator(".annotation-panel-tag-text")).toHaveText("essays");
     await reopened.tagInput.fill("to-revisit");
     await reopened.tagInput.press("Enter");
     await reopened.dialog.locator(".highlight-popover-done").click();
@@ -185,11 +184,11 @@ test.describe("highlight tags in the reader (issue #207)", () => {
     await expect(createOption).toBeVisible();
     // Blur first: moving focus away must not create the tag…
     await editor.locator("textarea.highlight-popover-textarea").focus();
-    await expect(editor.locator(".tag-picker-pill-text")).toHaveCount(0);
+    await expect(editor.locator(".annotation-panel-tag-text")).toHaveCount(0);
     // …then the explicit Add action commits it.
     await tagInput.fill("brand-new-tag");
     await editor.getByRole("option", { name: /Add “brand-new-tag”/ }).click();
-    await expect(editor.locator(".tag-picker-pill-text")).toHaveText("brand-new-tag");
+    await expect(editor.locator(".annotation-panel-tag-text")).toHaveText("brand-new-tag");
     await expect
       .poll(async () => (await readFirstHighlightRow(page))?.tags)
       .toEqual(["brand-new-tag"]);
@@ -216,7 +215,12 @@ test.describe("highlight tags in the reader (issue #207)", () => {
     await expect(tagInput).toHaveValue("");
     await expect(editor).toBeVisible();
 
-    // Layer 3 — the guarded dismissal saves and closes; focus returns to
+    // Layer 3 — the empty field closes; + Tag holds focus.
+    await page.keyboard.press("Escape");
+    await expect(tagInput).toHaveCount(0);
+    await expect(editor.getByRole("button", { name: "Add tag", exact: true })).toBeFocused();
+
+    // Layer 4 — the guarded dismissal saves and closes; focus returns to
     // the opening control (the anchor mark).
     await page.keyboard.press("Escape");
     await expect(editor).not.toBeVisible();
@@ -233,15 +237,16 @@ test.describe("highlight tags in the reader (issue #207)", () => {
       await selectRangeInBlock(page, blockIdx, 0, 14);
       await page.keyboard.press("n");
       const editor = page.locator("#highlight-popover");
-      const tagInput = await revealTags(editor);
       const noteInput = editor.locator("textarea.highlight-popover-textarea");
       await noteInput.fill("Keep this passage note.");
+      const tagInput = await revealTags(editor);
       await tagInput.fill("unfinished-tag");
       if (destination === "next control") {
         await tagInput.press("Tab");
       } else {
         await noteInput.focus();
       }
+      // Uncommitted text keeps the field open on blur: not committed, not lost.
       await expect(tagInput).not.toBeFocused();
       await expect(editor.getByRole("listbox")).not.toBeVisible();
       await expect(tagInput).toHaveValue("unfinished-tag");
@@ -249,6 +254,11 @@ test.describe("highlight tags in the reader (issue #207)", () => {
       await expect(tagInput).toHaveValue("");
       await expect(editor).toBeVisible();
       await expect(noteInput).toHaveValue("Keep this passage note.");
+      // The emptied field closes next; focus stays put outside it.
+      await page.keyboard.press("Escape");
+      await expect(tagInput).toHaveCount(0);
+      await expect(editor).toBeVisible();
+      if (destination === "note editor") await expect(noteInput).toBeFocused();
       await page.keyboard.press("Escape");
       await expect(editor).not.toBeVisible();
       await expect(page.locator("mark.highlight").first()).toBeFocused();
@@ -288,13 +298,16 @@ test.describe("highlight tags in the reader (issue #207)", () => {
     await expect(dialog).toBeVisible();
     await revealTags(dialog);
     // The hydrating tag chip renders from the seeded row.
-    await expect(dialog.locator(".tag-picker-pill-text")).toHaveText("legacy-tag");
+    await expect(dialog.locator(".annotation-panel-tag-text")).toHaveText("legacy-tag");
     // The tag field stays editable and commits.
     const tagInput = dialog.locator("input#highlight-tags-input");
     await expect(tagInput).toBeEnabled();
     await tagInput.fill("kept-anyway");
     await tagInput.press("Enter");
-    await expect(dialog.locator(".tag-picker-pill-text")).toHaveText(["legacy-tag", "kept-anyway"]);
+    await expect(dialog.locator(".annotation-panel-tag-text")).toHaveText([
+      "legacy-tag",
+      "kept-anyway",
+    ]);
     await dialog.locator(".highlight-popover-done").click();
     await expect(page.locator("dialog#highlight-popover")).not.toBeVisible();
     await expect
@@ -347,7 +360,7 @@ test.describe("highlight tags in the reader (issue #207)", () => {
       await page.keyboard.press("ArrowDown");
       await page.keyboard.press("ArrowUp");
       await page.keyboard.press("Enter");
-      await expect(editor.locator(".tag-picker-pill-text")).toHaveText("philosophy");
+      await expect(editor.locator(".annotation-panel-tag-text")).toHaveText("philosophy");
 
       await editor.locator(".highlight-popover-done").click();
       await expect(page.locator("mark.highlight").first()).toBeFocused();
@@ -372,11 +385,11 @@ test.describe("highlight tags in the reader (issue #207)", () => {
     const tagInput = await revealTags(editor);
     await tagInput.fill("phone-tag");
     await tagInput.press("Enter");
-    await expect(editor.locator(".tag-picker-pill-text")).toHaveText("phone-tag");
+    await expect(editor.locator(".annotation-panel-tag-text")).toHaveText("phone-tag");
 
-    // Tag editing floats above the compact panel, rather than expanding
-    // its organization area. Writing and footer targets retain their 44px
-    // floor; every surface stays within the viewport.
+    // The tag field takes the slot row's place; committed tags join the
+    // pill row. Writing and footer targets retain their 44px floor; every
+    // surface stays within the viewport.
     const viewport = page.viewportSize()!;
     const noteBox = await editor.locator("textarea.highlight-popover-textarea").boundingBox();
     expect(Math.round(noteBox!.height)).toBeGreaterThanOrEqual(44);
@@ -384,8 +397,8 @@ test.describe("highlight tags in the reader (issue #207)", () => {
     expect(Math.round(doneBox!.height)).toBeGreaterThanOrEqual(44);
     for (const locator of [
       editor.locator(".annotation-panel-organization"),
-      editor.locator("#annotation-tags"),
-      editor.locator(".highlight-slot-entry"),
+      editor.locator(".annotation-panel-tag-field"),
+      editor.locator(".annotation-panel-tags"),
       editor.locator(".annotation-panel-footer"),
     ]) {
       const box = await locator.boundingBox();
@@ -430,10 +443,12 @@ test.describe("highlight tags in the reader (issue #207)", () => {
     await tagInput.click();
     await tagInput.fill("zoomed");
     await page.keyboard.press("Enter");
-    await expect(editor.locator(".tag-picker-pill-text")).toHaveText("zoomed");
+    await expect(editor.locator(".annotation-panel-tag-text")).toHaveText("zoomed");
     // After a commit the picker resets (no open list, no draft), so Escape
-    // reaches layer 3: the guarded close saves the tag and returns focus to
-    // the passage — the zoomed session's function proof.
+    // closes the field, and the next Escape's guarded close saves the tag and
+    // returns focus to the passage — the zoomed session's function proof.
+    await page.keyboard.press("Escape");
+    await expect(tagInput).toHaveCount(0);
     await page.keyboard.press("Escape");
     await expect(editor).not.toBeVisible();
     await expect(page.locator("mark.highlight").first()).toBeFocused();

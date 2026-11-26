@@ -210,11 +210,14 @@ describe("NotePopover — native <dialog> + writing-only editor (issue #175)", (
     await screen.findByRole("textbox", { name: "Note" });
 
     const dialog = screen.getByRole("dialog", { name: "Highlight" });
-    expect(screen.getByRole("button", { name: /^Tags/ })).toHaveAttribute("aria-expanded", "false");
-    expect(screen.getByRole("button", { name: "More actions" })).toBeTruthy();
-    expect(screen.queryByRole("menuitem")).toBeNull();
+    expect(screen.getByRole("button", { name: "Add tag" })).toBeTruthy();
+    // Copy and Delete are direct icon actions — no menu to open.
+    expect(screen.getByRole("button", { name: "Copy highlight" })).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Delete highlight" })).toBeTruthy();
+    expect(screen.queryByRole("menu")).toBeNull();
     expect(screen.getByRole("button", { name: "Done" })).toBeTruthy();
-    expect(dialog.querySelectorAll("fieldset").length).toBe(2); // tags + the slot-pill color row (issue #222)
+    // Only the slot-pill color row: the tag field mounts on + Tag.
+    expect(dialog.querySelectorAll("fieldset").length).toBe(1);
     expect(dialog.querySelector("textarea")).not.toBeNull();
   });
 
@@ -241,9 +244,9 @@ describe("NotePopover — native <dialog> + writing-only editor (issue #175)", (
       "Apply slot 4: Blue",
       "Apply slot 5: Pink",
     ]);
-    // TagEntry + the slot-pill color row = two fieldsets (issue #222 — the
-    // named-color picker fieldset is gone).
-    expect(dialog.querySelectorAll("fieldset").length).toBe(2);
+    // The slot-pill color row is the only fieldset until + Tag swaps in the
+    // tag field (issue #222 removed the named-color picker fieldset).
+    expect(dialog.querySelectorAll("fieldset").length).toBe(1);
   });
 
   it("wires debounced save via updateNote on textarea change (D5-10)", async () => {

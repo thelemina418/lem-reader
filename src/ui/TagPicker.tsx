@@ -36,7 +36,7 @@
 // picker NEVER focuses itself on mount (the reader's TagEntry is inert at
 // ArticleView mount — Pitfall 8-5; the React autoFocus prop is banned by
 // lint).
-import { useEffect, useMemo } from "react";
+import { useEffect, useLayoutEffect, useMemo, useRef } from "react";
 import type { TagStat } from "../ingestion/library/tagsStore";
 import { sameTag } from "../ingestion/library/tagText";
 import {
@@ -69,6 +69,19 @@ export interface TagPickerProps {
    * it is not a layer — the key falls through to the host.
    */
   clearDraftOnEscape?: boolean;
+  /**
+   * Render the selected-tag chip list below the input (default). The reader
+   * annotation panel shows its own pill row outside the field, so it opts
+   * out to avoid listing every tag twice.
+   */
+  showSelectedChips?: boolean;
+  /**
+   * Hosts whose field sits inside a clipping scroll box (the annotation
+   * panel) float the suggestion list instead: called with the open list and
+   * the input whenever the list opens, changes, or the viewport/host moves,
+   * so the host can position it (position: fixed) within the visible area.
+   */
+  placeSuggestions?: (list: HTMLElement, input: HTMLElement) => void;
 }
 
 function findExisting(stats: TagStat[], text: string): TagStat | undefined {
@@ -101,9 +114,12 @@ export function TagPicker({
   focusOnMount = false,
   dismissSuggestionsOnEscape = false,
   clearDraftOnEscape = false,
+  showSelectedChips = true,
+  placeSuggestions,
 }: TagPickerProps) {
   const state = useVariantAComboboxState();
   const { draft, open, active, reset, lower, inputRef, setOpen, setDraft, setActive } = state;
+  const listRef = useRef<HTMLUListElement>(null);
 
   // Explicit focus management (the house dialog pattern — an
   // explicitly-opened popover may move focus). No autoFocus prop (lint).
@@ -133,6 +149,38 @@ export function TagPicker({
   const showCreate = lower.length > 0 && !exactExists;
   const optionCount = list.length + (showCreate ? 1 : 0);
   const listOpen = open && optionCount > 0;
+
+  useLayoutEffect(() => {
+    const list = listRef.current;
+    const input = inputRef.current;
+    if (!placeSuggestions || !listOpen || !list || !input) return;
+    const place = () => placeSuggestions(list, input);
+    place();
+    let frame: number | null = null;
+    const schedule = () => {
+      if (frame !== null) return;
+      frame = requestAnimationFrame(() => {
+        frame = null;
+        place();
+      });
+    };
+    const host = input.closest("dialog");
+    const observer = new ResizeObserver(schedule);
+    observer.observe(input);
+    if (host) observer.observe(host);
+    host?.addEventListener("scroll", schedule);
+    window.addEventListener("resize", schedule);
+    window.visualViewport?.addEventListener("resize", schedule);
+    window.visualViewport?.addEventListener("scroll", schedule);
+    return () => {
+      observer.disconnect();
+      if (frame !== null) cancelAnimationFrame(frame);
+      host?.removeEventListener("scroll", schedule);
+      window.removeEventListener("resize", schedule);
+      window.visualViewport?.removeEventListener("resize", schedule);
+      window.visualViewport?.removeEventListener("scroll", schedule);
+    };
+  }, [placeSuggestions, listOpen, optionCount, inputRef]);
 
   // The draft belongs to the whole editing session, even after Tab moves
   // focus to another control. Handle its Escape layers before native dialog
@@ -231,7 +279,16 @@ export function TagPicker({
           }
         />
         {listOpen && (
-          <ul className="tag-picker-suggestions" id={listboxId} role="listbox">
+          <ul
+            ref={listRef}
+            className={
+              placeSuggestions
+                ? "tag-picker-suggestions tag-picker-suggestions-floating"
+                : "tag-picker-suggestions"
+            }
+            id={listboxId}
+            role="listbox"
+          >
             {list.map((s, i) => (
               <li key={s.tag}>
                 <div
@@ -278,7 +335,7 @@ export function TagPicker({
       {/* Chips sit BELOW the input: entering the first tag never shifts the
           field (the reader's typing anchor stays put — the validated
           variant-A anatomy). */}
-      {selected.length > 0 && (
+      {showSelectedChips && selected.length > 0 && (
         <ul className="tag-picker-chips">
           {selected.map((name) => (
             <li key={name}>

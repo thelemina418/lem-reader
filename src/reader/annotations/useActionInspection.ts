@@ -1,7 +1,13 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 
 /** Hover/focus labels and non-activating touch/pen inspection for compact actions. */
-export function useActionInspection() {
+export function useActionInspection({
+  keyboardFocusOnly = false,
+}: {
+  /** Name the action only for keyboard-visible focus, so script-driven
+   *  opening focus (the annotation panel's icon footer) stays quiet. */
+  keyboardFocusOnly?: boolean;
+} = {}) {
   const [inspectionLabel, setInspectionLabel] = useState<string | null>(null);
   const [hoveredLabel, setHoveredLabel] = useState<string | null>(null);
   const [focusedLabel, setFocusedLabel] = useState<string | null>(null);
@@ -26,8 +32,10 @@ export function useActionInspection() {
   const inspectionProps = (label: string, activate: () => void) => ({
     onMouseEnter: () => setHoveredLabel(label),
     onMouseLeave: () => setHoveredLabel(null),
-    onFocus: () => {
-      if (!touchFocusing.current) setFocusedLabel(label);
+    onFocus: (event: React.FocusEvent<HTMLElement>) => {
+      if (touchFocusing.current) return;
+      if (keyboardFocusOnly && !focusVisible(event.currentTarget)) return;
+      setFocusedLabel(label);
     },
     onBlur: () => {
       setFocusedLabel(null);
@@ -74,4 +82,12 @@ export function useActionInspection() {
     inspectionProps,
     resetInspection,
   };
+}
+
+function focusVisible(element: HTMLElement): boolean {
+  try {
+    return element.matches(":focus-visible");
+  } catch {
+    return true; // engines without :focus-visible keep the earlier behavior
+  }
 }

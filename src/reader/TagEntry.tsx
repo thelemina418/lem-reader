@@ -74,6 +74,21 @@ interface TagEntryProps {
    * field permanently visible (the annotation panel) opt in.
    */
   clearDraftOnEscape?: boolean;
+  /** Forwarded to the picker: hosts with their own tag list hide its chips. */
+  showSelectedChips?: boolean;
+  /** Forwarded to the picker: only hosts the reader explicitly opened. */
+  focusOnMount?: boolean;
+  /**
+   * Follow later `tags` prop changes. Hosts that edit the same record's tags
+   * outside this field while it stays mounted (the annotation panel's pill
+   * removal and slot application) opt in so a later commit never resurrects
+   * a tag removed elsewhere.
+   */
+  syncTags?: boolean;
+  /** Visually hide the legend where the surrounding control already names the field. */
+  hideLegend?: boolean;
+  /** Forwarded to the picker: float suggestions out of a clipping host. */
+  placeSuggestions?: (list: HTMLElement, input: HTMLElement) => void;
 }
 
 /**
@@ -88,12 +103,21 @@ export function TagEntry({
   inputId = "tag-entry-input",
   dismissSuggestionsOnEscape = false,
   clearDraftOnEscape = false,
+  showSelectedChips = true,
+  focusOnMount = false,
+  syncTags = false,
+  hideLegend = false,
+  placeSuggestions,
 }: TagEntryProps) {
   // Local mirror of the tag array so the UI updates immediately on
   // add/remove without waiting for the parent's next render. The Dexie
   // write is fire-and-forget (errors land in errorCopy); the parent does
   // not need to re-fetch.
   const [localTags, setLocalTags] = useState<string[]>(tags);
+  const tagsKey = tags.join("\u0000");
+  useEffect(() => {
+    if (syncTags) setLocalTags(tagsKey === "" ? [] : tagsKey.split("\u0000"));
+  }, [syncTags, tagsKey]);
   const [errorCopy, setErrorCopy] = useState<string | null>(null);
   // Suggestion stats — lazy (first focus) + refresh-after-commit (see the
   // module comment). The loaded flag keeps the focus-capture idempotent
@@ -153,13 +177,16 @@ export function TagEntry({
 
   return (
     <fieldset className="tag-entry" onFocusCapture={ensureStats}>
-      <legend>Tags</legend>
+      <legend className={hideLegend ? "visually-hidden" : undefined}>Tags</legend>
       <label htmlFor={inputId} className="visually-hidden">
         Add or search a tag
       </label>
       <TagPicker
         dismissSuggestionsOnEscape={dismissSuggestionsOnEscape}
         clearDraftOnEscape={clearDraftOnEscape}
+        showSelectedChips={showSelectedChips}
+        focusOnMount={focusOnMount}
+        placeSuggestions={placeSuggestions}
         stats={stats}
         selected={localTags}
         onChange={(next) => void commitTags(next)}

@@ -1,6 +1,14 @@
 // Inline highlight tags: shared TagEntry persistence and keyboard behavior.
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { render, screen, waitFor, within, renderHook, act } from "@testing-library/react";
+import {
+  render,
+  screen,
+  waitFor,
+  within,
+  renderHook,
+  act,
+  fireEvent,
+} from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { useEffect } from "react";
 import {
@@ -154,12 +162,12 @@ async function openTagsInput(): Promise<{
 }> {
   const user = userEvent.setup();
   const dialog = await screen.findByRole("dialog", { name: "Highlight" });
-  const toggle = within(dialog).getByRole("button", { name: /^Tags/ });
-  if (toggle.getAttribute("aria-expanded") === "false") await user.click(toggle);
+  const addTag = within(dialog).queryByRole("button", { name: "Add tag" });
+  if (addTag) await user.click(addTag);
   const input = (await within(dialog).findByPlaceholderText(
     "Add or search a tag…",
   )) as HTMLInputElement;
-  await user.click(input);
+  await waitFor(() => expect(document.activeElement).toBe(input));
   return { user, input, dialog };
 }
 
@@ -170,31 +178,82 @@ describe("HighlightTagsDialog — disclosed tag editing", () => {
     vi.clearAllMocks();
   });
 
-  it("hosts the shared TagPicker behind a disclosure with a visible tag summary", async () => {
+  it("shows tags as removable pills and swaps the slot row for a focused tag field on + Tag", async () => {
     mockData.highlightRecord.tags = ["essays"];
     renderTagsDialog();
 
     const dialog = await screen.findByRole("dialog", { name: "Highlight" });
     expect(dialog.classList.contains("annotation-panel")).toBe(true);
-    // The fieldset legend + the visually-hidden input label both name the
-    // field (keyboard/SR anchoring inside the dialog).
-    expect(within(dialog).getByText("Tags", { selector: "legend" })).toBeTruthy();
+    // Pills sit in their own named row, outside the field, with no summary.
+    const pills = within(dialog).getByRole("list", { name: "Highlight tags" });
+    expect(within(pills).getByText("essays")).toBeTruthy();
+    expect(within(pills).getByRole("button", { name: "Remove tag essays" })).toBeTruthy();
+    expect(dialog.querySelector(".annotation-panel-tag-summary")).toBeNull();
+    expect(within(dialog).queryByRole("combobox")).toBeNull();
+    expect(within(dialog).getByRole("button", { name: /^Apply slot 1/ })).toBeTruthy();
+
+    await userEvent.setup().click(within(dialog).getByRole("button", { name: "Add tag" }));
+    // The field takes the slot row's place and receives focus; the legend
+    // stays as the group's accessible name without repeating visually.
     const input = within(dialog).getByLabelText("Add or search a tag");
     expect(input.id).toBe("highlight-tags-input");
-    const toggle = within(dialog).getByRole("button", { name: /^Tags/ });
-    expect(dialog.querySelector(".annotation-panel-tag-summary")?.textContent).toBe("essays");
-    expect(toggle).toHaveAttribute("aria-expanded", "false");
-    expect(within(dialog).queryByRole("combobox")).toBeNull();
-    await userEvent.setup().click(toggle);
-    expect(toggle).toHaveAttribute("aria-expanded", "true");
+    await waitFor(() => expect(document.activeElement).toBe(input));
+    expect(within(dialog).getByText("Tags", { selector: "legend" })).toHaveClass("visually-hidden");
+    expect(within(dialog).queryByRole("button", { name: /^Apply slot/ })).toBeNull();
+    // + Tag stays beside the field (tab order: field → + Tag → pills) and
+    // returns focus to the input when activated again.
+    const addTag = within(dialog).getByRole("button", { name: "Add tag" });
+    expect(addTag.getAttribute("aria-expanded")).toBe("true");
+    expect(addTag.compareDocumentPosition(input) & Node.DOCUMENT_POSITION_PRECEDING).toBeTruthy();
+    await userEvent.setup().click(addTag);
+    expect(within(dialog).getByLabelText("Add or search a tag")).toBe(input);
+    await waitFor(() => expect(document.activeElement).toBe(input));
+    // The picker's own chip list is suppressed: one remove control per tag.
+    expect(within(dialog).getAllByRole("button", { name: "Remove tag essays" })).toHaveLength(1);
+  });
 
-    // The existing tag renders as a pill chip with its inside-× remove
-    // button (the shared TagPicker anatomy, labelled for AT).
-    const remove = within(dialog).getByRole("button", {
-      name: "Remove tag essays",
+  it("pressing × or + Tag never blurs the open field first (Safari focuses nothing on click)", async () => {
+    mockData.highlightRecord.tags = [];
+    renderTagsDialog();
+    const { input, dialog } = await openTagsInput();
+    const close = within(dialog).getByRole("button", { name: "Done adding tags" });
+    const addTag = within(dialog).getByRole("button", { name: "Add tag" });
+    // fireEvent returns false when the default (focus moving) was prevented.
+    expect(fireEvent.mouseDown(addTag)).toBe(false);
+    expect(fireEvent.mouseDown(close)).toBe(false);
+    expect(document.activeElement).toBe(input);
+    await act(async () => {
+      fireEvent.click(close);
     });
-    expect(remove).toBeTruthy();
-    expect(within(dialog).getAllByText("essays").length).toBeGreaterThan(0);
+    expect(within(dialog).queryByRole("combobox")).toBeNull();
+    await waitFor(() =>
+      expect(document.activeElement).toBe(within(dialog).getByRole("button", { name: "Add tag" })),
+    );
+    // Closed, + Tag takes focus normally on press.
+    expect(fireEvent.mouseDown(within(dialog).getByRole("button", { name: "Add tag" }))).toBe(true);
+  });
+
+  it("the field closes from its × or an empty blur, returning the slot row", async () => {
+    mockData.highlightRecord.tags = [];
+    renderTagsDialog();
+    const { user, input, dialog } = await openTagsInput();
+    await user.click(within(dialog).getByRole("button", { name: "Done adding tags" }));
+    expect(within(dialog).queryByRole("combobox")).toBeNull();
+    expect(within(dialog).getByRole("button", { name: /^Apply slot 1/ })).toBeTruthy();
+    await waitFor(() =>
+      expect(document.activeElement).toBe(within(dialog).getByRole("button", { name: "Add tag" })),
+    );
+
+    // Uncommitted text keeps the field open on blur — never committed, never discarded.
+    const reopened = (await openTagsInput()).input;
+    expect(reopened).not.toBe(input);
+    await user.type(reopened, "draft");
+    await user.click(within(dialog).getByRole("button", { name: "Copy highlight" }));
+    expect(within(dialog).getByRole("combobox")).toHaveValue("draft");
+    await user.click(within(dialog).getByRole("combobox"));
+    await user.clear(within(dialog).getByRole("combobox"));
+    await user.click(within(dialog).getByRole("button", { name: "Copy highlight" }));
+    expect(within(dialog).queryByRole("combobox")).toBeNull();
   });
 
   it("keyboard pick: typing + Enter commits the tag through the write seam", async () => {
@@ -265,7 +324,6 @@ describe("HighlightTagsDialog — disclosed tag editing", () => {
     const { setHighlightTags } = await import("../../../src/ingestion/library/tagsStore");
     const user = userEvent.setup();
     renderTagsDialog();
-    await openTagsInput();
 
     const remove = await screen.findByRole("button", {
       name: "Remove tag essays",
@@ -280,7 +338,6 @@ describe("HighlightTagsDialog — disclosed tag editing", () => {
     const { setHighlightTags } = await import("../../../src/ingestion/library/tagsStore");
     const user = userEvent.setup();
     renderTagsDialog();
-    await openTagsInput();
 
     // The × rides a real <button> with the "Remove tag …" aria-label — the
     // screen-reader/keyboard path needs no extra wiring; Enter activates it.
@@ -309,6 +366,19 @@ describe("HighlightTagsDialog — disclosed tag editing", () => {
     // The host's StatusRegion (polite live region) announces the failure
     // locally — the StorageBanner behind the modal backdrop is not enough.
     await screen.findByText("Couldn't save tag.");
+  });
+
+  it("a failed pill removal keeps the pill and announces the failure", async () => {
+    mockData.highlightRecord.tags = ["essays"];
+    const { setHighlightTags } = await import("../../../src/ingestion/library/tagsStore");
+    vi.mocked(setHighlightTags).mockRejectedValueOnce(new Error("QuotaExceededError"));
+    const user = userEvent.setup();
+    renderTagsDialog();
+
+    await user.click(await screen.findByRole("button", { name: "Remove tag essays" }));
+
+    await screen.findByText("Couldn't remove tag. Try again.");
+    expect(screen.getByRole("button", { name: "Remove tag essays" })).toBeTruthy();
   });
 
   it("Done closes the dialog; the editor carries exactly ONE tag field (no note tag set)", async () => {
@@ -359,7 +429,60 @@ describe("HighlightTagsDialog — disclosed tag editing", () => {
     expect(dialog).toHaveAttribute("open");
   });
 
-  it("layered Escape 3: with no draft text, Escape closes through the guarded save", async () => {
+  it("layered Escape 3: an open, empty tag field closes before the panel and returns to + Tag", async () => {
+    mockData.highlightRecord.tags = [];
+    renderTagsDialog();
+
+    const { user, dialog } = await openTagsInput();
+    // Focus opens the browse list; that layer peels first.
+    if (screen.queryByRole("listbox")) await user.keyboard("{Escape}");
+    expect(screen.queryByRole("listbox")).toBeNull();
+    await user.keyboard("{Escape}");
+    expect(within(dialog).queryByRole("combobox")).toBeNull();
+    expect(dialog).toHaveAttribute("open");
+    await waitFor(() =>
+      expect(document.activeElement).toBe(within(dialog).getByRole("button", { name: "Add tag" })),
+    );
+  });
+
+  it("an immediate next Escape — sent from <body> before focus reaches + Tag — dismisses the panel", async () => {
+    mockData.highlightRecord.tags = [];
+    renderTagsDialog();
+
+    const { user, dialog } = await openTagsInput();
+    if (screen.queryByRole("listbox")) await user.keyboard("{Escape}");
+    // Close the field; the input unmounts and focus is momentarily on <body>.
+    await act(async () => {
+      fireEvent.keyDown(within(dialog).getByRole("combobox"), { key: "Escape" });
+    });
+    expect(within(dialog).queryByRole("combobox")).toBeNull();
+    // The next press lands outside the dialog's own keydown handler, with no
+    // task boundary in between: only the native close request reaches it.
+    await act(async () => {
+      fireEvent.keyDown(document.body, { key: "Escape" });
+      dialog.dispatchEvent(new Event("cancel", { cancelable: true }));
+    });
+    await waitFor(() => expect(dialog).not.toHaveAttribute("open"));
+  });
+
+  it("a native cancel (WebKit's Escape path) also closes the open tag field, not the panel", async () => {
+    mockData.highlightRecord.tags = [];
+    renderTagsDialog();
+
+    const { dialog } = await openTagsInput();
+    const cancel = () =>
+      act(async () => {
+        dialog.dispatchEvent(new Event("cancel", { cancelable: true }));
+      });
+    // The focus-opened browse list peels first, exactly as with keydown.
+    if (screen.queryByRole("listbox")) await cancel();
+    expect(screen.queryByRole("listbox")).toBeNull();
+    await cancel();
+    expect(within(dialog).queryByRole("combobox")).toBeNull();
+    expect(dialog).toHaveAttribute("open");
+  });
+
+  it("layered Escape 4: with no draft text, Escape closes through the guarded save", async () => {
     mockData.highlightRecord.tags = [];
     const { saveNote } = await import("../../../src/persistence/notesStore");
     renderTagsDialog();

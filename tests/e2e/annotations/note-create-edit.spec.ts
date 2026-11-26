@@ -109,19 +109,16 @@ test.describe("ANNO-02 note create + edit (05-05)", () => {
     await page.keyboard.press("n");
     await noteTextarea(page).fill("Writing surface only.");
     // Explicit note entry shares the same controls and accessible boundary.
-    // Slots stay available beside the editor; Tags expands on demand.
-    // Secondary actions live in More actions, not inline with writing.
+    // Slots stay available beside the editor; + Tag opens the field on
+    // demand. Copy and Delete are direct icon actions in the footer.
     const dlg = page.locator("#highlight-popover");
-    await expect(dlg.getByRole("button", { name: /^Tags/ })).toHaveAttribute(
-      "aria-expanded",
-      "false",
-    );
+    await expect(dlg.getByRole("button", { name: "Add tag", exact: true })).toBeVisible();
+    await expect(dlg.getByRole("combobox")).toHaveCount(0);
     await expect(dlg.getByRole("button", { name: /^Apply slot \d+: / })).toHaveCount(5);
     await expect(dlg.getByRole("radio")).toHaveCount(0);
-    await dlg.getByRole("button", { name: "More actions" }).click();
-    await expect(dlg.getByRole("menu").getByRole("menuitem", { name: "Delete" })).toBeVisible();
-    await page.keyboard.press("Escape");
-    await expect(dlg.getByRole("button", { name: "More actions" })).toBeFocused();
+    await expect(dlg.getByRole("button", { name: "Copy highlight" })).toBeVisible();
+    await expect(dlg.getByRole("button", { name: "Delete highlight" })).toBeVisible();
+    await expect(dlg.getByRole("menu")).toHaveCount(0);
     await expect(dlg.getByRole("button", { name: "Done" })).toBeVisible();
     await popoverDone(page);
 

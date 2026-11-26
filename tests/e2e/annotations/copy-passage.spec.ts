@@ -136,12 +136,12 @@ async function createSingleBlockHighlight(page: Page): Promise<void> {
 }
 
 /** Attach a note + a tag through the controls (the metadata the copy must
- *  NOT leak), expanding Tags without closing the dialog. */
+ *  NOT leak), through the inline tag field without closing the dialog. */
 async function addNoteAndTag(page: Page): Promise<void> {
   const controls = await openHighlightControls(page);
   await controls.getByRole("button", { name: "Add note" }).click();
   await noteTextarea(page).fill(NOTE_TEXT);
-  await controls.getByRole("button", { name: /^Tags/ }).click();
+  await controls.getByRole("button", { name: "Add tag", exact: true }).click();
   const tagInput = page.locator("input#highlight-tags-input");
   await tagInput.fill(TAG);
   await tagInput.press("Enter");
@@ -265,20 +265,14 @@ test.describe("Copy highlighted passage (#194)", () => {
     const controls = highlightControls(page);
     await expect(controls).toBeVisible();
 
-    await annotationAction(page, "Copy", true);
+    const copy = await annotationAction(page, "Copy", true);
     await page.keyboard.press("Enter");
-    await expect(controls.getByRole("menu")).toHaveCount(0);
     await expect(controls).toContainText("Copied.");
 
     const rows = await highlightRows(page, FIXTURE);
     expect(await lastWrite(page)).toBe(rows[0]!.exact);
-    // Activation closes the menu and returns focus to More actions.
-    expect(
-      await controls
-        .getByRole("button", { name: "More actions" })
-        .evaluate((el) => el === document.activeElement),
-      "focus returns to More actions after keyboard activation",
-    ).toBeTruthy();
+    // A direct action: focus stays where the reader left it.
+    await expect(copy).toBeFocused();
   });
 
   test("keyboard: Copy works identically in scrolling mode", async ({ page }) => {
@@ -292,10 +286,9 @@ test.describe("Copy highlighted passage (#194)", () => {
     await page.keyboard.press("Enter");
     const controls = highlightControls(page);
     await expect(controls).toBeVisible();
-    await annotationAction(page, "Copy", true);
+    const copy = await annotationAction(page, "Copy", true);
     await page.keyboard.press("Enter");
-    await expect(controls.getByRole("menu")).toHaveCount(0);
-    await expect(controls.getByRole("button", { name: "More actions" })).toBeFocused();
+    await expect(copy).toBeFocused();
     await expect(controls).toContainText("Copied.");
     const rows = await highlightRows(page, FIXTURE);
     expect(await lastWrite(page)).toBe(rows[0]!.exact);

@@ -372,13 +372,15 @@ test.describe("highlight slots in the reader (issue #195)", () => {
 
     // Give the highlight a hand-added tag, then apply the tagged slot from
     // the panel: the slot tag JOINS, the hand-added tag SURVIVES.
-    // Expand Tags to edit; slot names remain accessible even when not hovered.
+    // + Tag opens the inline field; slot names remain accessible even when not hovered.
     // Issue #222 — no "Slot applied." card: the visible color + tag change
     // is the register.
     const controls2 = await openHighlightControls(page);
-    await controls2.getByRole("button", { name: /^Tags/ }).click();
+    await controls2.getByRole("button", { name: "Add tag", exact: true }).click();
     await controls2.locator("input#highlight-tags-input").fill("manual");
     await controls2.locator("input#highlight-tags-input").press("Enter");
+    // Close the field so the slot row returns for the application below.
+    await controls2.getByRole("button", { name: "Done adding tags" }).click();
     await expect(
       controls2.getByLabel("Highlight tags", { exact: true }).getByText("manual", { exact: true }),
     ).toBeVisible();

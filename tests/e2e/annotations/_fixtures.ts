@@ -1050,26 +1050,41 @@ export async function openNoteEditorViaControls(page: Page): Promise<void> {
   await expect(page.locator("dialog#highlight-popover")).toBeVisible();
 }
 
-/** Open the real secondary-action menu, using pointer or keyboard navigation. */
+/**
+ * The panel footer's icon action (2026-11-25 rework: Copy and Delete are
+ * direct icon buttons, no menu). `keyboard` focuses it instead of hovering
+ * so callers can activate with Enter/Space.
+ */
 export async function annotationAction(
   page: Page,
   name: "Copy" | "Delete",
   keyboard = false,
 ): Promise<Locator> {
-  const controls = highlightControls(page);
-  const more = controls.getByRole("button", { name: "More actions", exact: true });
-  if (keyboard) {
-    await more.focus();
-    await page.keyboard.press("ArrowDown");
-    if (name === "Delete") await page.keyboard.press("ArrowDown");
-  } else await more.click();
-  const item = controls.getByRole("menu").getByRole("menuitem", { name, exact: true });
+  const item = highlightControls(page).getByRole("button", {
+    name: `${name} highlight`,
+    exact: true,
+  });
   await expect(item).toBeVisible();
-  if (keyboard) await expect(item).toBeFocused();
+  if (keyboard) {
+    await item.focus();
+    await expect(item).toBeFocused();
+  }
   return item;
 }
 
 /** The note editor's accessible textbox. */
 export function noteTextarea(page: Page): Locator {
   return page.getByRole("textbox", { name: "Note", exact: true });
+}
+
+/**
+ * Sequential focus navigation that reaches buttons on every engine. macOS
+ * WebKit follows Safari's default ("Press Tab to highlight each item" off):
+ * plain Tab skips buttons and only Option+Tab walks them, so the reference
+ * Mac lane presses Alt+Tab there. Every other engine/platform uses plain Tab.
+ */
+export async function pressTab(page: Page, options: { shift?: boolean } = {}): Promise<void> {
+  const macWebKit =
+    page.context().browser()?.browserType().name() === "webkit" && process.platform === "darwin";
+  await page.keyboard.press(`${options.shift ? "Shift+" : ""}${macWebKit ? "Alt+" : ""}Tab`);
 }

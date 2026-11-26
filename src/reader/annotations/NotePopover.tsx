@@ -42,8 +42,8 @@ import { hasNoteContent } from "../../annotations/noteText";
 import { HighlightSlotEntry } from "./HighlightSlotEntry";
 import { TagEntry } from "../TagEntry";
 import { effectiveZoom } from "./anchorPosition";
-import { AnnotationActions } from "./AnnotationActions";
-import { useAnnotationFlyout } from "./useAnnotationFlyout";
+import { AnnotationIconButton } from "./AnnotationIconButton";
+import { CloseIcon, CopyIcon, EditIcon, PlusIcon, TrashIcon } from "../../ui/icons";
 
 /** Issue #176 — the ONE measure-and-choose step shared by the open path and
  *  the viewport-change reposition (they must never drift): read the open
@@ -68,6 +68,29 @@ function placeEditor(
     ),
     viewportHeight: viewport.height,
   };
+}
+
+/** Float the inline tag field's suggestions inside the visible viewport
+ *  (position: fixed escapes the panel's scroll clip). Prefer the space above
+ *  the field so the list covers writing rather than Done; fall back below
+ *  when above is the smaller side, scrolling the list within its side. */
+function placeTagSuggestions(list: HTMLElement, input: HTMLElement): void {
+  const viewport = currentViewportRect();
+  const edge = NOTE_EDITOR_EDGE_GUTTER;
+  const gap = 4;
+  const zoom = effectiveZoom();
+  const anchor = input.getBoundingClientRect();
+  list.style.maxHeight = "none";
+  const natural = list.getBoundingClientRect().height;
+  const aboveSpace = Math.max(0, anchor.top - viewport.top - edge - gap);
+  const belowSpace = Math.max(0, viewport.top + viewport.height - anchor.bottom - edge - gap);
+  const above = natural <= aboveSpace || aboveSpace >= belowSpace;
+  const space = above ? aboveSpace : belowSpace;
+  const height = Math.min(natural, space);
+  list.style.maxHeight = `${space / zoom}px`;
+  list.style.left = `${anchor.left / zoom}px`;
+  list.style.width = `${anchor.width / zoom}px`;
+  list.style.top = `${(above ? anchor.top - gap - height : anchor.bottom + gap) / zoom}px`;
 }
 
 /** Excerpt cap for the dialog's accessible description (UI-SPEC §Interaction
@@ -103,6 +126,11 @@ export const NOTE_RECOVERED_DRAFT_COPY = "Recovered draft";
 export const COPY_OK_COPY = "Copied.";
 export const COPY_FAILED_COPY = "Couldn't copy. Select the highlighted text and copy it manually.";
 
+/** A rejected pill removal: the tag stays (the write rolled back), and the
+ *  failure is announced rather than swallowed — the tag field's own commit
+ *  failure carries the same register. */
+export const TAG_REMOVE_FAILED_COPY = "Couldn't remove tag. Try again.";
+
 export function NotePopover(): React.ReactElement | null {
   const {
     article,
@@ -134,21 +162,35 @@ export function NotePopover(): React.ReactElement | null {
 
   const [panelFor, setPanelFor] = useState<string | null>(null);
   const [noteExpanded, setNoteExpanded] = useState(false);
-  const [tagsExpanded, setTagsExpanded] = useState(false);
-  const tagsTriggerRef = useRef<HTMLButtonElement>(null);
-  const tagsSurfaceRef = useRef<HTMLElement>(null);
-  useAnnotationFlyout(tagsExpanded, tagsTriggerRef, tagsSurfaceRef);
-  useEffect(() => {
-    if (!tagsExpanded) return;
-    const dismiss = (event: PointerEvent) => {
-      const target = event.target as Node;
-      if (!tagsSurfaceRef.current?.contains(target) && !tagsTriggerRef.current?.contains(target)) {
-        setTagsExpanded(false);
-      }
-    };
-    document.addEventListener("pointerdown", dismiss);
-    return () => document.removeEventListener("pointerdown", dismiss);
-  }, [tagsExpanded]);
+  // The inline tag field: + Tag swaps the slot row for the field in the
+  // same footprint (+ Tag itself stays, keeping the tab order writing →
+  // field → + Tag → pills); Escape, the field's × and an empty blur swap
+  // it back.
+  const [tagFieldOpen, setTagFieldOpen] = useState(false);
+  const [tagRemoveFailed, setTagRemoveFailed] = useState(false);
+  const tagFieldOpenRef = useRef(false);
+  tagFieldOpenRef.current = tagFieldOpen;
+  const addTagRef = useRef<HTMLButtonElement>(null);
+  const tagFieldRef = useRef<HTMLDivElement>(null);
+  // The slot row's height when + Tag opened the field: the field holds that
+  // footprint (the row can wrap to two lines on narrow sheets) so opening and
+  // closing never move the panel or the footer.
+  const organizationRef = useRef<HTMLDivElement>(null);
+  const [tagFieldMinHeight, setTagFieldMinHeight] = useState<number | null>(null);
+  const pillRowRef = useRef<HTMLUListElement>(null);
+  // One Escape press closes the field; a WebKit `cancel` from the same press
+  // must not then also dismiss the panel. Scoped to that press: every new
+  // Escape keydown clears it first (document capture), so a quick next press
+  // — even one sent from <body> while focus is still moving to + Tag — always
+  // reaches guarded dismissal.
+  const escapeClosedTagFieldRef = useRef(false);
+  // Escape returns focus to + Tag only when it was inside the field: an
+  // Escape pressed while writing the note leaves the caret in the note.
+  const focusInTagField = () => tagFieldRef.current?.contains(document.activeElement) ?? false;
+  const closeTagField = useCallback((restoreFocus: boolean) => {
+    setTagFieldOpen(false);
+    if (restoreFocus) requestAnimationFrame(() => addTagRef.current?.focus());
+  }, []);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const deleteButtonRef = useRef<HTMLButtonElement | null>(null);
   const [session, setSession] = useState(0);
@@ -256,10 +298,14 @@ export function NotePopover(): React.ReactElement | null {
   useLayoutEffect(() => {
     const textarea = textareaRef.current;
     if (!textarea || !noteVisible || isConfirm) return;
+    // A closed dialog is display:none, so scrollHeight reads 0 and the field
+    // would collapse to its minimum. Measure only inside the open dialog; the
+    // session bump after showModal re-runs this for every reopen.
+    if (!popoverRef.current?.open) return;
     textarea.style.height = "auto";
     textarea.style.height = `${textarea.scrollHeight}px`;
     // Keep remounts the writing view without changing its text or visibility.
-  }, [noteText, noteVisible, isConfirm]);
+  }, [noteText, noteVisible, isConfirm, session]);
 
   // Sync the dialog's visibility with the editor states. Native <dialog> +
   // showModal gives VoiceOver the modal-dialog accessibility context (focus
@@ -295,7 +341,7 @@ export function NotePopover(): React.ReactElement | null {
         : activeId;
       setPanelFor(activeId);
       setNoteExpanded(openPopoverFor !== null || hasNoteContent(noteText));
-      setTagsExpanded(false);
+      setTagFieldOpen(false);
       setSession((value) => value + 1);
       try {
         dlg.showModal();
@@ -320,6 +366,7 @@ export function NotePopover(): React.ReactElement | null {
       // id) and the save-state register resets to idle (a prior session's
       // saved/error phase never leaks into the fresh editor).
       setDeleteFailed(false);
+      setTagRemoveFailed(false);
       setCopyStatus({ phase: "idle", attempt: ++copyAttemptRef.current });
       sessionIdRef.current = activeId;
       dismissalPendingRef.current = false;
@@ -347,7 +394,12 @@ export function NotePopover(): React.ReactElement | null {
       const textarea = dlg.querySelector<HTMLTextAreaElement>("textarea");
       textarea?.focus();
       textarea?.select();
-    } else dlg.querySelector<HTMLElement>(".highlight-controls-actions button")?.focus();
+    } else
+      // Add note while writing is hidden, otherwise Done — never a
+      // destructive or clipboard action as the landing spot.
+      dlg
+        .querySelector<HTMLElement>(".annotation-panel-add-note, .highlight-popover-done")
+        ?.focus();
   }, [session]);
 
   // Issue #178 — restore an interrupted save's recovery draft for THIS
@@ -503,7 +555,7 @@ export function NotePopover(): React.ReactElement | null {
       // the sheet before its footer becomes stranded below the fold.
       panel
         .querySelectorAll(
-          ".highlight-popover-note, .annotation-panel-organization, .annotation-panel-footer",
+          ".highlight-popover-note, .annotation-panel-organization, .annotation-panel-tags, .annotation-panel-footer",
         )
         .forEach((element) => boxObserver.observe(element));
     }
@@ -677,7 +729,7 @@ export function NotePopover(): React.ReactElement | null {
       if (dlg.open) return;
       copyAttemptRef.current++;
       flushNoteSave();
-      setTagsExpanded(false);
+      setTagFieldOpen(false);
       if (!stateDriven) {
         // A close this component did not drive: clear the session's state.
         // After a state-driven close it is already empty, and clearing it
@@ -713,15 +765,68 @@ export function NotePopover(): React.ReactElement | null {
     };
     const handleCancelEvent = (event: Event) => {
       event.preventDefault();
+      // Escape layer: an open tag field closes before the panel does.
+      if (escapeClosedTagFieldRef.current) return;
+      if (tagFieldOpenRef.current) {
+        closeTagField(focusInTagField());
+        return;
+      }
       void requestDismissRef.current();
+    };
+    const handleEscapePress = (event: KeyboardEvent) => {
+      if (event.key === "Escape") escapeClosedTagFieldRef.current = false;
     };
     dlg.addEventListener("close", handleCloseEvent);
     dlg.addEventListener("cancel", handleCancelEvent);
+    document.addEventListener("keydown", handleEscapePress, true);
     return () => {
       dlg.removeEventListener("close", handleCloseEvent);
       dlg.removeEventListener("cancel", handleCancelEvent);
+      document.removeEventListener("keydown", handleEscapePress, true);
     };
-  }, [flushNoteSave, setOpenPopoverFor, setConfirmDeleteFor, setControlsFor]);
+  }, [flushNoteSave, setOpenPopoverFor, setConfirmDeleteFor, setControlsFor, closeTagField]);
+
+  /** Escape layer between the picker's own layers (suggestions, then
+   *  uncommitted text — they stop propagation when they act) and guarded
+   *  panel dismissal: close the open tag field and return to + Tag. */
+  const handleDialogKeyDown = (event: React.KeyboardEvent<HTMLDialogElement>) => {
+    if (event.key !== "Escape" || event.defaultPrevented || !tagFieldOpenRef.current) return;
+    event.preventDefault();
+    escapeClosedTagFieldRef.current = true;
+    closeTagField(focusInTagField());
+  };
+
+  /** Pill removal moves focus to the next pill, else the previous, else the
+   *  tag entry point (the open field's input, or + Tag). Focus lands after
+   *  the tag list re-renders without the removed pill. */
+  const pendingPillFocusRef = useRef<number | null>(null);
+  const highlightTags = resolved?.record.tags ?? [];
+  const tagsKey = highlightTags.join("\u0000");
+  const removeTag = (index: number) => {
+    if (!resolved) return;
+    const name = highlightTags[index];
+    if (name === undefined) return;
+    pendingPillFocusRef.current = index;
+    setTagRemoveFailed(false);
+    void updateHighlightTags(
+      resolved.record.id,
+      highlightTags.filter((t) => t !== name),
+    ).catch(() => {
+      pendingPillFocusRef.current = null;
+      setTagRemoveFailed(true);
+    });
+  };
+  useLayoutEffect(() => {
+    const index = pendingPillFocusRef.current;
+    if (index === null) return;
+    pendingPillFocusRef.current = null;
+    const buttons = pillRowRef.current?.querySelectorAll<HTMLButtonElement>("button");
+    const target =
+      (buttons && buttons.length > 0 ? buttons[Math.min(index, buttons.length - 1)] : null) ??
+      tagFieldRef.current?.querySelector<HTMLInputElement>("input") ??
+      addTagRef.current;
+    target?.focus();
+  }, [tagsKey]);
 
   /**
    * Issue #177 — outside click (the ::backdrop) dismisses like Escape. The
@@ -882,6 +987,7 @@ export function NotePopover(): React.ReactElement | null {
       data-placement={anchored ? placement.mode : undefined}
       style={placementStyle}
       onClick={handleBackdropClick}
+      onKeyDown={handleDialogKeyDown}
     >
       {resolved &&
         (isConfirm ? (
@@ -1014,98 +1120,154 @@ export function NotePopover(): React.ReactElement | null {
                 disabled={isUnresolved}
               />
             </div>
-            <div className="annotation-panel-organization">
-              <HighlightSlotEntry
-                key={`${activeId}-${session}`}
-                compact
-                slots={highlightSlots}
-                bases={bases}
-                onApply={(slot) => applyHighlightSlot(resolved.record.id, slot)}
-              />
-              <button
-                ref={tagsTriggerRef}
-                type="button"
-                className="highlight-controls-button annotation-panel-tags-toggle"
-                aria-expanded={tagsExpanded}
-                aria-controls="annotation-tags"
-                onClick={() => setTagsExpanded((expanded) => !expanded)}
-              >
-                Tags
-                {(resolved.record.tags ?? []).length > 0 && (
-                  <span className="annotation-panel-tag-count">{resolved.record.tags!.length}</span>
-                )}
-              </button>
-              <section
-                ref={tagsSurfaceRef}
-                id="annotation-tags"
-                popover="manual"
-                className="annotation-panel-tags-surface"
-                aria-label="Highlight tags"
-                hidden={!tagsExpanded}
-              >
-                <TagEntry
+            <div
+              ref={organizationRef}
+              className="annotation-panel-organization"
+              style={
+                tagFieldOpen && tagFieldMinHeight !== null
+                  ? { minHeight: `${tagFieldMinHeight}px` }
+                  : undefined
+              }
+              onBlur={(event) => {
+                // Focus leaving the field and + Tag closes an empty field.
+                // Blur never commits and never discards: uncommitted text
+                // keeps the field open for the reader to finish or clear.
+                if (!tagFieldOpenRef.current) return;
+                if (event.currentTarget.contains(event.relatedTarget as Node | null)) return;
+                const draft =
+                  tagFieldRef.current?.querySelector<HTMLInputElement>("input")?.value ?? "";
+                if (draft.trim().length === 0) closeTagField(false);
+              }}
+            >
+              {tagFieldOpen ? (
+                <div ref={tagFieldRef} className="annotation-panel-tag-field">
+                  <TagEntry
+                    key={`${activeId}-${session}`}
+                    recordId={resolved.record.id}
+                    tags={highlightTags}
+                    saveTags={(next) => updateHighlightTags(resolved.record.id, next)}
+                    inputId="highlight-tags-input"
+                    dismissSuggestionsOnEscape
+                    clearDraftOnEscape
+                    showSelectedChips={false}
+                    focusOnMount
+                    syncTags
+                    hideLegend
+                    placeSuggestions={placeTagSuggestions}
+                  />
+                  <button
+                    type="button"
+                    className="highlight-controls-button annotation-panel-tag-field-close"
+                    aria-label="Done adding tags"
+                    // Safari never focuses a clicked button: pressing it would
+                    // blur the empty field to nowhere, close it before this
+                    // click lands, and drop focus. Keep focus where it is; the
+                    // click closes the field and returns focus to + Tag.
+                    onMouseDown={(event) => event.preventDefault()}
+                    onClick={() => closeTagField(true)}
+                  >
+                    <CloseIcon />
+                  </button>
+                </div>
+              ) : (
+                <HighlightSlotEntry
                   key={`${activeId}-${session}`}
-                  recordId={resolved.record.id}
-                  tags={resolved.record.tags ?? []}
-                  saveTags={(next) => updateHighlightTags(resolved.record.id, next)}
-                  inputId="highlight-tags-input"
-                  dismissSuggestionsOnEscape
-                  clearDraftOnEscape
+                  compact
+                  slots={highlightSlots}
+                  bases={bases}
+                  onApply={(slot) => applyHighlightSlot(resolved.record.id, slot)}
                 />
-                <button
-                  type="button"
-                  className="highlight-controls-button annotation-panel-tags-close"
-                  onClick={() => {
-                    setTagsExpanded(false);
-                    tagsTriggerRef.current?.focus();
-                  }}
-                >
-                  Close tags
-                </button>
-              </section>
+              )}
+              <button
+                ref={addTagRef}
+                type="button"
+                className="highlight-controls-button annotation-panel-add-tag"
+                aria-label="Add tag"
+                aria-expanded={tagFieldOpen}
+                // While the field is open, a press must not blur it closed
+                // first (Safari focuses nothing on click); the click refocuses
+                // the input.
+                onMouseDown={(event) => {
+                  if (tagFieldOpen) event.preventDefault();
+                }}
+                onClick={() => {
+                  if (tagFieldOpen) {
+                    // Already open: + Tag returns to the field's input.
+                    tagFieldRef.current?.querySelector<HTMLInputElement>("input")?.focus();
+                    return;
+                  }
+                  const row = organizationRef.current;
+                  setTagFieldMinHeight(
+                    row ? row.getBoundingClientRect().height / effectiveZoom() : null,
+                  );
+                  setTagFieldOpen(true);
+                }}
+              >
+                <PlusIcon />
+                Tag
+              </button>
             </div>
-            {(resolved.record.tags ?? []).length > 0 && (
-              <p className="annotation-panel-tag-summary">{resolved.record.tags!.join(", ")}</p>
-            )}
-            <StatusRegion>{deleteFailed && <p>{DELETE_FAILED_COPY}</p>}</StatusRegion>
+            {/* Always mounted (hidden at zero) so the placement observer
+                sees the row appear and re-pins the panel above its growth. */}
+            <ul
+              className="annotation-panel-tags"
+              aria-label="Highlight tags"
+              ref={pillRowRef}
+              hidden={highlightTags.length === 0}
+            >
+              {highlightTags.map((name, index) => (
+                <li key={name} className="annotation-panel-tag">
+                  <span className="annotation-panel-tag-text">{name}</span>
+                  <button
+                    type="button"
+                    className="annotation-panel-tag-remove"
+                    aria-label={`Remove tag ${name}`}
+                    onClick={() => removeTag(index)}
+                  >
+                    <CloseIcon />
+                  </button>
+                </li>
+              ))}
+            </ul>
+            <StatusRegion>
+              {deleteFailed && <p>{DELETE_FAILED_COPY}</p>}
+              {tagRemoveFailed && <p>{TAG_REMOVE_FAILED_COPY}</p>}
+            </StatusRegion>
             <div
               className="highlight-controls-actions annotation-panel-footer"
               role="group"
               aria-label="Highlight controls"
             >
-              {!noteVisible && (
-                <button
-                  type="button"
-                  className="highlight-controls-button"
-                  onClick={() => {
-                    setNoteExpanded(true);
-                    requestAnimationFrame(() =>
-                      popoverRef.current?.querySelector<HTMLTextAreaElement>("textarea")?.focus(),
-                    );
+              {/* Two pinned groups: Copy + Delete at the inline start, Add
+                  note + Done at the inline end. Add note leaving (writing
+                  opened) leaves its gap empty — no other control moves. */}
+              <div className="annotation-panel-footer-start">
+                <AnnotationIconButton
+                  label="Copy highlight"
+                  disabled={working}
+                  onActivate={() => void handleCopy()}
+                >
+                  <CopyIcon />
+                </AnnotationIconButton>
+                <AnnotationIconButton
+                  label="Delete highlight"
+                  className="annotation-panel-delete"
+                  buttonRef={deleteButtonRef}
+                  disabled={working}
+                  onActivate={() => {
+                    setDeleteFailed(false);
+                    if (hasNoteContent(noteText)) {
+                      setConfirmHeight(
+                        (popoverRef.current?.getBoundingClientRect().height ?? 240) /
+                          effectiveZoom(),
+                      );
+                      setConfirmDeleteFor(activeId);
+                    } else void performDelete();
                   }}
                 >
-                  Add note
-                </button>
-              )}
-              <AnnotationActions
-                triggerRef={deleteButtonRef}
-                onTabForward={() =>
-                  popoverRef.current
-                    ?.querySelector<HTMLButtonElement>(".highlight-popover-done")
-                    ?.focus()
-                }
-                disabled={working}
-                onCopy={() => void handleCopy()}
-                onDelete={() => {
-                  setDeleteFailed(false);
-                  if (hasNoteContent(noteText)) {
-                    setConfirmHeight(
-                      (popoverRef.current?.getBoundingClientRect().height ?? 240) / effectiveZoom(),
-                    );
-                    setConfirmDeleteFor(activeId);
-                  } else void performDelete();
-                }}
-              />
+                  <TrashIcon />
+                </AnnotationIconButton>
+              </div>
               {/* Success belongs to the modal's live region: the article-level
                 announcement is inert while showModal keeps the editor open. */}
               <StatusRegion>
@@ -1123,22 +1285,39 @@ export function NotePopover(): React.ReactElement | null {
                   <p key={copyStatus.attempt}>{COPY_FAILED_COPY}</p>
                 )}
               </StatusRegion>
-              {noteSavePhase === "error" && (
+              <div className="annotation-panel-footer-end">
+                {!noteVisible && (
+                  <AnnotationIconButton
+                    label="Add note"
+                    align="end"
+                    className="annotation-panel-add-note"
+                    onActivate={() => {
+                      setNoteExpanded(true);
+                      requestAnimationFrame(() =>
+                        popoverRef.current?.querySelector<HTMLTextAreaElement>("textarea")?.focus(),
+                      );
+                    }}
+                  >
+                    <EditIcon />
+                  </AnnotationIconButton>
+                )}
+                {noteSavePhase === "error" && (
+                  <BusyButton
+                    className="highlight-controls-button highlight-popover-retry"
+                    busy={working}
+                    onClick={() => void handleRetry()}
+                  >
+                    Retry
+                  </BusyButton>
+                )}
                 <BusyButton
-                  className="highlight-controls-button highlight-popover-retry"
+                  className="highlight-controls-button highlight-popover-done"
                   busy={working}
-                  onClick={() => void handleRetry()}
+                  onClick={() => void requestDismissRef.current()}
                 >
-                  Retry
+                  Done
                 </BusyButton>
-              )}
-              <BusyButton
-                className="highlight-controls-button highlight-popover-done"
-                busy={working}
-                onClick={() => void requestDismissRef.current()}
-              >
-                Done
-              </BusyButton>
+              </div>
             </div>
           </>
         ))}
