@@ -83,6 +83,11 @@ interface VisibleGroup {
   searchMatched?: boolean;
 }
 
+/** "1 chapter" / "14 chapters". */
+function chapterCount(n: number): string {
+  return `${n} ${n === 1 ? "chapter" : "chapters"}`;
+}
+
 function outcomeMessage(outcome: AddCollectionEntryOutcome, title: string): string {
   switch (outcome.outcome) {
     case "added":
@@ -371,18 +376,17 @@ export function AddReadingDialog({
             </p>
           ) : (
             <ul className="add-reading-list">
-              {visible.map(({ group, chapters, searchMatched }, index) => {
+              {visible.map(({ group, chapters, searchMatched }) => {
                 const { parent } = group;
                 const count = group.chapters.length;
                 const addedChapters = group.chapters.filter((c) => addedKeys.has(c.key)).length;
                 // The collapsed row's honest membership note (issue #16).
-                const note =
-                  addedChapters > 0
-                    ? `${addedChapters} ${addedChapters === 1 ? "chapter" : "chapters"} added`
-                    : null;
+                const note = addedChapters > 0 ? `${chapterCount(addedChapters)} added` : null;
                 const expanded = chapters !== null;
-                const chaptersId = `${idPrefix}-chapters-${index}`;
-                const disclosureText = `${expanded ? "Hide" : "Show"} ${count} ${count === 1 ? "chapter" : "chapters"}`;
+                // Keyed by the reading (never list position) so the aria-controls
+                // target is stable while search filters the list.
+                const chaptersId = `${idPrefix}-chapters-${parent.key}`;
+                const disclosureText = `${expanded ? "Hide" : "Show"} ${chapterCount(count)}`;
                 return (
                   <li key={parent.key} className="add-reading-group">
                     <div className="add-reading-row">
