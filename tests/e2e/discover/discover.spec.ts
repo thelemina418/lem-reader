@@ -142,14 +142,16 @@ test.describe("Discover (issues #121 + #123)", () => {
     await wipeDatabase(page);
   });
 
-  test("the Discover nav link is visible TEXT at 320px, carries aria-current on #/discover, and the empty state invites the first action", async ({
+  test("the Discover nav link is visible TEXT in the 320px Menu, carries aria-current on #/discover, and the empty state invites the first action", async ({
     page,
   }) => {
     await page.setViewportSize(NARROW);
     await page.goto(`${BASE}/#/discover`);
     await expect(page.getByRole("heading", { level: 1, name: "Discover" })).toBeVisible();
 
-    // The link is a visible text link at narrow width (never icon-only).
+    // At narrow width the destinations sit behind the Menu disclosure
+    // (issue #19); opened, the link is a visible text link (never icon-only).
+    await primaryNav(page).getByRole("button", { name: "Menu" }).click();
     const link = primaryNav(page).getByRole("link", { name: "Discover" });
     await expect(link).toBeVisible();
     await expect(link).toHaveAttribute("aria-current", "page");
@@ -170,7 +172,12 @@ test.describe("Discover (issues #121 + #123)", () => {
     await page.goto(`${BASE}/`);
     await expect(page.getByRole("heading", { level: 1, name: "Saved articles" })).toBeVisible();
 
-    // Keyboard activation of the text link navigates to the destination.
+    // Keyboard: open the narrow Menu (issue #19), then activate the text
+    // link — it navigates to the destination.
+    const menu = primaryNav(page).getByRole("button", { name: "Menu" });
+    await menu.focus();
+    await page.keyboard.press("Enter");
+    await expect(menu).toHaveAttribute("aria-expanded", "true");
     await primaryNav(page).getByRole("link", { name: "Discover" }).focus();
     await page.keyboard.press("Enter");
     await expect(page).toHaveURL(/#\/discover$/);

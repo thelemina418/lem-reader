@@ -259,13 +259,16 @@ function rowGeometry(page: Page) {
   });
 }
 
+/** Issue #19 — the narrow-width destination disclosure in the Primary nav. */
+function primaryMenuButton(page: Page) {
+  return page.getByRole("navigation", { name: "Primary" }).getByRole("button", { name: "Menu" });
+}
+
 /** The widths of the 320–810 acceptance sweep (#82): the tightest bands
- * on both sides of the sanctioned collapses (the Reader staged clip —
- * below 640px since the mobile reader-band reorganization; ≤639px
- * wordmark collapse). */
-// The 640 boundary pins the recalibrated Reader staged collapse: 639 is
-// the last phone width (links staged out of flow), 640 the first width
-// where the destination links return to flow and the row must still hold.
+ * on both sides of the ≤639px collapses (the wordmark clip and, since
+ * issue #19, the narrow Menu). 639 is the last width with the Menu, 640
+ * the first where the destination links sit inline and the row must
+ * still hold. */
 const SWEEP_WIDTHS = [320, 375, 420, 421, 450, 461, 480, 639, 640, 810] as const;
 
 test.describe("Read nav (#82 — the shell Read destination over the shared resume-target derivation)", () => {
@@ -452,34 +455,20 @@ test.describe("Read nav (#82 — the shell Read destination over the shared resu
       );
     }
 
-    // The staged-collapse polarity (the mobile reader-band contract): the
-    // destination links leave flow through the whole phone band — below
-    // 640px the Reader band carries the reading tools alone — and return
-    // to flow at 640px, the same line where the wordmark re-enters.
-    const navInFlow = (page: Page) =>
-      page.evaluate(() => {
-        const link = document.querySelector<HTMLElement>(
-          '.app-header[data-destination="reader"] .shell-nav a',
-        );
-        if (!link) return null;
-        const r = link.getBoundingClientRect();
-        return { width: r.width, position: getComputedStyle(link).position };
-      });
+    // The narrow-menu polarity (issue #19): below 640px the destinations
+    // sit behind the Menu disclosure (closed → the links are not rendered
+    // in the band); at 640px+ the Menu button is gone and the links sit
+    // inline.
+    const menu = primaryMenuButton(page);
     for (const width of [320, 461, 639] as const) {
       await page.setViewportSize({ width, height: 640 });
-      const staged = await navInFlow(page);
-      expect(staged, `reader nav link mounted at ${width}px`).not.toBeNull();
-      expect(staged!.position, `reader: nav links staged out of flow at ${width}px`).toBe(
-        "absolute",
-      );
-      expect(staged!.width, `reader: nav links clipped at ${width}px`).toBeLessThanOrEqual(1.5);
+      await expect(menu, `reader: Menu shown at ${width}px`).toBeVisible();
+      await expect(readLink(page), `reader: links behind the Menu at ${width}px`).toBeHidden();
     }
     for (const width of [640, 810] as const) {
       await page.setViewportSize({ width, height: 640 });
-      const flow = await navInFlow(page);
-      expect(flow, `reader nav link mounted at ${width}px`).not.toBeNull();
-      expect(flow!.position, `reader: nav links back in flow at ${width}px`).not.toBe("absolute");
-      expect(flow!.width, `reader: nav links visible at ${width}px`).toBeGreaterThan(10);
+      await expect(menu, `reader: no Menu at ${width}px`).toBeHidden();
+      await expect(readLink(page), `reader: links inline at ${width}px`).toBeVisible();
     }
   });
 

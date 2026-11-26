@@ -28,15 +28,17 @@
 // .header-controls inline-flex group on the inline-end; the brand link +
 // shell nav share a .header-start group inline-start. The row stays 48px —
 // at ≤639px the wordmark visually collapses (the .visually-hidden clip —
-// D15-17) while staying keyboard/SR-reachable, so destination links + the
-// 44px icon buttons fit one row.
+// D15-17) while staying keyboard/SR-reachable, and the destination links
+// move behind the Menu disclosure (issue #19), so the row holds only 44px
+// icon buttons.
 //
 // Mirrors src/a11y/SkipLink.tsx minimal-component discipline (single
 // responsibility, verbatim UI-SPEC microcopy, class hook matches CSS).
 
+import { useEffect, useId, useRef, useState } from "react";
 import { useSettings } from "../settings/SettingsContext";
 import { ModeToggle } from "./ModeToggle";
-import { GearIcon, HighlighterIcon, TagIcon, ContentsIcon, PlusIcon } from "../ui/icons";
+import { GearIcon, HighlighterIcon, TagIcon, ContentsIcon, PlusIcon, MenuIcon } from "../ui/icons";
 
 interface HeaderProps {
   onOpenSettings: () => void;
@@ -164,6 +166,27 @@ export function Header({
   // Header is a useSettings consumer so the toggle's aria-pressed + glyph
   // reflect the LIVE preference without App prop-drilling. App stays unchanged.
   const { settings } = useSettings();
+  // Issue #19 — the narrow-width destination menu. Below 640px CSS hides
+  // the inline links behind the Menu disclosure; at 640px+ the button is
+  // display:none and this state is inert (the list always shows inline).
+  const [navOpen, setNavOpen] = useState(false);
+  const navRef = useRef<HTMLElement>(null);
+  const navToggleRef = useRef<HTMLButtonElement>(null);
+  const navListId = useId();
+  useEffect(() => {
+    if (!navOpen) return;
+    const onPointerDown = (event: PointerEvent) => {
+      if (!navRef.current?.contains(event.target as Node)) setNavOpen(false);
+    };
+    // A destination hop from anywhere (Back, the brand link) closes it too.
+    const onHashChange = () => setNavOpen(false);
+    document.addEventListener("pointerdown", onPointerDown);
+    window.addEventListener("hashchange", onHashChange);
+    return () => {
+      document.removeEventListener("pointerdown", onPointerDown);
+      window.removeEventListener("hashchange", onHashChange);
+    };
+  }, [navOpen]);
   return (
     <header className="app-header" data-destination={destination}>
       {/*
@@ -206,26 +229,85 @@ export function Header({
           (view-switcher) and "Book chapters" (chapter nav) so all three
           nav landmarks stay distinguishable in the a11y tree.
         */}
-        <nav className="shell-nav" aria-label="Primary">
-          <a href="#/" aria-current={destination === "library" ? "page" : undefined}>
-            Library
-          </a>
+        <nav
+          ref={navRef}
+          className="shell-nav"
+          aria-label="Primary"
+          data-open={navOpen ? "true" : "false"}
+          onKeyDown={(event) => {
+            if (event.key === "Escape" && navOpen) {
+              event.stopPropagation();
+              setNavOpen(false);
+              navToggleRef.current?.focus();
+            }
+          }}
+          onBlur={(event) => {
+            const next = event.relatedTarget as Node | null;
+            if (navOpen && next && !event.currentTarget.contains(next)) setNavOpen(false);
+          }}
+        >
           {/*
-            Issue #121 — the Discover destination link. A VISIBLE TEXT link
-            at every width (D15-17 — no icon-only links; the shell nav never
-            collapses its destinations), between Library and Highlights so
-            the reading destinations keep their order.
+            Issue #19 — the narrow-width (<640px) destination disclosure.
+            A plain disclosure button (aria-expanded + aria-controls, NO
+            aria-haspopup): the destinations stay navigation links, never
+            ARIA menuitems. CSS shows it only below 640px; there the list
+            is hidden until it opens as a board-voiced panel under the
+            band. The 48px row is untouched — the panel is positioned out
+            of flow.
           */}
-          <a href="#/discover" aria-current={destination === "discover" ? "page" : undefined}>
-            Discover
-          </a>
-          {/* Issue #210 — the Annotations destination (the cross-library
+          <button
+            ref={navToggleRef}
+            type="button"
+            className="btn btn-icon shell-nav-toggle"
+            aria-label="Menu"
+            aria-expanded={navOpen}
+            aria-controls={navListId}
+            onClick={(event) => {
+              // macOS WebKit does not focus a clicked <button> (see the
+              // annotations trigger) — Escape's focus return needs it.
+              event.currentTarget.focus();
+              setNavOpen((open) => !open);
+            }}
+          >
+            <MenuIcon />
+          </button>
+          <ul
+            id={navListId}
+            className="shell-nav-list"
+            onClick={(event) => {
+              // Close on activation; never preventDefault — the native href
+              // navigates (and modified clicks keep browser behavior).
+              if ((event.target as HTMLElement).closest("a")) setNavOpen(false);
+            }}
+          >
+            <li>
+              <a href="#/" aria-current={destination === "library" ? "page" : undefined}>
+                Library
+              </a>
+            </li>
+            {/*
+            Issue #121 — the Discover destination link. A VISIBLE TEXT link
+            (D15-17 — no icon-only links; below 640px the text links sit in
+            the Menu disclosure, issue #19), between Library and Annotations
+            so the reading destinations keep their order.
+          */}
+            <li>
+              <a href="#/discover" aria-current={destination === "discover" ? "page" : undefined}>
+                Discover
+              </a>
+            </li>
+            {/* Issue #210 — the Annotations destination (the cross-library
               review of highlights AND article notes; the rename of the
               former Highlights destination link). */}
-          <a href="#/annotations" aria-current={destination === "annotations" ? "page" : undefined}>
-            Annotations
-          </a>
-          {/*
+            <li>
+              <a
+                href="#/annotations"
+                aria-current={destination === "annotations" ? "page" : undefined}
+              >
+                Annotations
+              </a>
+            </li>
+            {/*
             Issue #82 (decision #68 — the third nav item "Read"): visible
             label "Read"; aria-label "Continue reading" ties it to the
             rail's vocabulary. aria-current="page" ONLY while the open
@@ -235,19 +317,22 @@ export function Header({
             link; plain native href pushes history (D14-14 — no
             hasAppHistory involvement).
           */}
-          {readTarget && (
-            <a
-              href={`#/article/${readTarget.articleId}`}
-              aria-label="Continue reading"
-              aria-current={
-                destination === "reader" && openArticleId === readTarget.articleId
-                  ? "page"
-                  : undefined
-              }
-            >
-              Read
-            </a>
-          )}
+            {readTarget && (
+              <li>
+                <a
+                  href={`#/article/${readTarget.articleId}`}
+                  aria-label="Continue reading"
+                  aria-current={
+                    destination === "reader" && openArticleId === readTarget.articleId
+                      ? "page"
+                      : undefined
+                  }
+                >
+                  Read
+                </a>
+              </li>
+            )}
+          </ul>
         </nav>
       </div>
       {/*

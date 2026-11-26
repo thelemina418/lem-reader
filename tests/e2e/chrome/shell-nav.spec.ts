@@ -342,4 +342,60 @@ test.describe("shell nav (15-02 — NAV-01/NAV-02/NAV-05)", () => {
       await expect(page.getByRole("heading", { level: 1, name: "Saved articles" })).toBeVisible();
     }
   });
+
+  // (7) Issue #19 — the narrow destination Menu. Below 640px the Primary
+  // nav's destinations sit behind one disclosure button: it opens a panel
+  // under the band (out of flow — the 48px row and the page width never
+  // change), announces the current destination, closes on Escape with
+  // focus back on the trigger, and activating a destination navigates and
+  // closes it.
+  test("(7) 320×640 Menu disclosure: opens in-viewport, Escape returns focus, a link navigates", async ({
+    page,
+  }) => {
+    await page.setViewportSize({ width: NARROW.width, height: NARROW.height });
+    await page.goto(`${BASE}/#/`);
+    await expect(page.getByRole("heading", { level: 1 })).toBeVisible();
+
+    const menu = primaryNav(page).getByRole("button", { name: "Menu" });
+    await expect(menu).toHaveAttribute("aria-expanded", "false");
+    await expect(shellHighlightsLink(page)).toBeHidden();
+
+    await menu.focus();
+    await page.keyboard.press("Enter");
+    await expect(menu).toHaveAttribute("aria-expanded", "true");
+    const library = primaryNav(page).getByRole("link", { name: "Library" });
+    await expect(library).toBeVisible();
+    await expect(library).toHaveAttribute("aria-current", "page");
+
+    const geom = await page.evaluate(() => {
+      const header = document.querySelector<HTMLElement>(".app-header")!;
+      const list = document.querySelector<HTMLElement>(".shell-nav-list")!;
+      const r = list.getBoundingClientRect();
+      return {
+        headerHeight: header.getBoundingClientRect().height,
+        listLeft: r.left,
+        listRight: r.right,
+        listTop: r.top,
+        docScrollWidth: document.documentElement.scrollWidth,
+        docClientWidth: document.documentElement.clientWidth,
+      };
+    });
+    expect(geom.headerHeight, "the band stays 48px with the Menu open").toBe(48);
+    expect(geom.listTop, "the panel drops under the band").toBeGreaterThanOrEqual(47.5);
+    expect(geom.listLeft).toBeGreaterThanOrEqual(-0.5);
+    expect(geom.listRight, "the panel fits the 320px viewport").toBeLessThanOrEqual(320.5);
+    expect(geom.docScrollWidth, "no horizontal page scroll").toBeLessThanOrEqual(
+      geom.docClientWidth,
+    );
+
+    await library.focus();
+    await page.keyboard.press("Escape");
+    await expect(menu).toHaveAttribute("aria-expanded", "false");
+    await expect(menu).toBeFocused();
+
+    await menu.click();
+    await primaryNav(page).getByRole("link", { name: "Discover" }).click();
+    await expect(page).toHaveURL(/#\/discover$/);
+    await expect(menu).toHaveAttribute("aria-expanded", "false");
+  });
 });

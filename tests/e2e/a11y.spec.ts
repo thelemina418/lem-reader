@@ -688,18 +688,25 @@ test.describe("compact navigation (320px)", () => {
   test("a11y #125: the narrow library chrome is axe-clean", async ({ page }) => {
     await page.goto(`${BASE}/#/`);
     await expect(page.getByRole("heading", { name: "Saved articles" })).toBeVisible();
-    // The nav links are visible at the narrow cell (the shell-nav NARROW
-    // contract the compact-nav keyboard cells pin) — assert before scanning
-    // so a collapsed surface can't silently weaken the gate.
-    await expect(
-      page.getByRole("navigation", { name: "Primary" }).getByRole("link", { name: "Discover" }),
-    ).toBeVisible();
-    const results = await new AxeBuilder({ page }).withTags([...WCAG_TAGS]).analyze();
-    const serious = seriousViolations(results);
-    const ids = serious.map((v) => v.id);
-    expect(ids, JSON.stringify(serious, null, 2)).not.toContain("heading-order");
-    expect(ids).not.toContain("list");
-    expect(serious).toEqual([]);
+    // Issue #19: at the narrow cell the destinations sit behind the Menu
+    // disclosure. Scan BOTH states — closed (the band as a reader first
+    // meets it) and open (the destination list visible, asserted before
+    // the scan so a collapsed surface can't silently weaken the gate).
+    const nav = page.getByRole("navigation", { name: "Primary" });
+    const menu = nav.getByRole("button", { name: "Menu" });
+    await expect(menu).toBeVisible();
+    for (const state of ["closed", "open"] as const) {
+      if (state === "open") {
+        await menu.click();
+        await expect(nav.getByRole("link", { name: "Discover" })).toBeVisible();
+      }
+      const results = await new AxeBuilder({ page }).withTags([...WCAG_TAGS]).analyze();
+      const serious = seriousViolations(results);
+      const ids = serious.map((v) => v.id);
+      expect(ids, `${state}: ${JSON.stringify(serious, null, 2)}`).not.toContain("heading-order");
+      expect(ids, state).not.toContain("list");
+      expect(serious, state).toEqual([]);
+    }
   });
 
   test("a11y #125: narrow Discover is axe-clean (empty state)", async ({ page }) => {
