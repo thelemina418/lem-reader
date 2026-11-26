@@ -111,7 +111,10 @@ import type {
 // entry) and renders its outcome union beside addToLibrary's.
 // The service itself loads on the first collection submission only (it
 // carries the collections store; the library-only dialog never needs it).
-import type { CollectionImportOutcome } from "../routes/collections/importIntoCollection";
+import type {
+  CollectionImportDestination,
+  CollectionImportOutcome,
+} from "../routes/collections/importIntoCollection";
 import { collectionImportAnnouncement } from "../routes/collections/collectionImportCopy";
 // Issue #75 (decision #71) — the ONE shared tag picker + its suggestion
 // currency. The optional "Tags (optional)" fieldset captures tags at
@@ -134,26 +137,6 @@ import { BusyButton } from "../ui/BusyButton";
 import { extractYouTubeVideoId } from "./youtube";
 
 type IngestStatus = "idle" | "submitting" | "success" | "error";
-
-/** The landed collection-import outcomes the destination page renders. */
-export type LandedCollectionImport = Extract<
-  CollectionImportOutcome,
-  { outcome: "added" | "not-added" }
->;
-
-/**
- * Issue #15 — "Import into collection": the SAME dialog (the ordinary
- * import flow — never stacked inside Add readings) aimed at one collection.
- * A landed import closes the dialog and hands the outcome to the collection
- * page, which owns focus on the new entry and the status announcement (a
- * live region inside the closing dialog could not announce). The reader
- * stays on the collection, so the "Open after adding" choice is absent.
- */
-export type AddDialogCollectionDestination = {
-  collectionId: string;
-  collectionName: string;
-  onImported: (outcome: LandedCollectionImport) => void;
-};
 
 /** The selected intake source (D16-05). Reset to "url" on every open. */
 export type AddDialogSource = "url" | "paste" | "file";
@@ -196,8 +179,14 @@ export type AddDialogProps = {
    * library rows render from, so suggestion order cannot drift.
    */
   tagStats: TagStat[];
-  /** Issue #15 — when set, the import also lands in this collection. */
-  destination?: AddDialogCollectionDestination | null;
+  /**
+   * Issue #15 — "Import into collection": the SAME dialog (the ordinary
+   * import flow — never stacked inside Add readings) aimed at one
+   * collection. A landed import closes the dialog and hands the outcome to
+   * the collection page. The reader stays on the collection, so the "Open
+   * after adding" choice is absent.
+   */
+  destination?: CollectionImportDestination | null;
 };
 
 /**
@@ -496,7 +485,9 @@ export function AddDialog({
       if (outcome.saved) onSaved();
       setStatus("error");
       setMessage(
-        collectionImportAnnouncement(outcome, destination?.collectionName ?? "").join(" "),
+        destination !== null
+          ? collectionImportAnnouncement(outcome, destination.collectionName).join(" ")
+          : mapReasonToCopy("already-in-library"),
       );
       return;
     }

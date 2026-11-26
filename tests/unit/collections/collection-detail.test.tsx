@@ -625,3 +625,60 @@ describe("import into collection (issue #15)", () => {
     expect(screen.queryByRole("link", { name: "Second reading" })).not.toBeInTheDocument();
   });
 });
+
+describe("import into collection — navigation mid-import (issue #15 review)", () => {
+  it("an import that lands after the page switched to ANOTHER collection never paints or announces there", async () => {
+    const other = CollectionSchema.parse({ ...collection, id: "other-collection", name: "Other" });
+    vi.mocked(useLibrarySnapshot).mockReturnValue({
+      status: "ready",
+      snapshot: {
+        ...EMPTY_LIBRARY_SNAPSHOT,
+        articles: [article, secondArticle],
+        standaloneArticles: [article, secondArticle],
+      },
+    });
+    const onImportIntoCollection = vi.fn();
+    const { rerender } = render(
+      <CollectionDetailView
+        collectionId={collection.id}
+        hasAppHistory={false}
+        onImportIntoCollection={onImportIntoCollection}
+      />,
+    );
+    fireEvent.click(await screen.findByRole("button", { name: "Import into collection" }));
+    const destination = onImportIntoCollection.mock.calls[0]![0];
+
+    // Browser Back to another collection while the import is in flight.
+    vi.mocked(getCollection).mockResolvedValue(other);
+    rerender(
+      <CollectionDetailView
+        collectionId={other.id}
+        hasAppHistory={false}
+        onImportIntoCollection={onImportIntoCollection}
+      />,
+    );
+    await screen.findByRole("heading", { level: 1, name: "Other" });
+
+    act(() =>
+      destination.onImported({
+        outcome: "added",
+        saved: false,
+        collection: CollectionSchema.parse({
+          ...collection,
+          entries: [
+            ...collection.entries,
+            {
+              id: "entry-new",
+              target: { kind: "article", articleId: secondArticle.id },
+              addedAt: "2026-11-25T00:00:00.000Z",
+            },
+          ],
+        }),
+        entryId: "entry-new",
+        notes: [],
+      }),
+    );
+    expect(screen.queryByRole("link", { name: "Second reading" })).not.toBeInTheDocument();
+    expect(screen.queryByText(/added to Other/)).not.toBeInTheDocument();
+  });
+});

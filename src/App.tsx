@@ -33,7 +33,7 @@ import { useDeferredLibrarySnapshot } from "./ingestion/library/useDeferredLibra
 import { invalidateLibrarySnapshot } from "./ingestion/library/librarySnapshotBus";
 // Type-only (erased — no fetch): the tag-stats shape for the memo below.
 import type { TagStat } from "./ingestion/library/tagStats";
-import type { AddDialogCollectionDestination } from "./ingestion/AddDialog";
+import type { CollectionImportDestination } from "./routes/collections/importIntoCollection";
 
 const LibraryView = lazy(() =>
   import("./ingestion/library/LibraryView").then((m) => ({ default: m.LibraryView })),
@@ -409,19 +409,14 @@ function AppInner() {
   // Issue #15 — the collection an open session imports into (set by the
   // collection page's "Import into collection"; null for the ordinary
   // library add from either Add trigger). The SAME dialog serves both.
-  const [addDestination, setAddDestination] = useState<AddDialogCollectionDestination | null>(null);
-  const openAdd = useCallback(() => {
-    setAddDialogReady(true);
-    setAddSavedNotice(null);
-    setAddDestination(null);
-    setAddOpen(true);
-  }, []);
-  const openImportIntoCollection = useCallback((destination: AddDialogCollectionDestination) => {
+  const [addDestination, setAddDestination] = useState<CollectionImportDestination | null>(null);
+  const openAddSession = useCallback((destination: CollectionImportDestination | null) => {
     setAddDialogReady(true);
     setAddSavedNotice(null);
     setAddDestination(destination);
     setAddOpen(true);
   }, []);
+  const openAdd = useCallback(() => openAddSession(null), [openAddSession]);
   // Issue #163 — the unchecked-success landing: the dialog hands the
   // confirmation copy here, the library's status region announces it (a
   // live region inside the closing dialog could not), and — when the
@@ -694,7 +689,7 @@ function AppInner() {
           <CollectionDetailView
             collectionId={view.id}
             hasAppHistory={hasAppHistory}
-            onImportIntoCollection={openImportIntoCollection}
+            onImportIntoCollection={openAddSession}
           />
         ) : (
           <ArticleView

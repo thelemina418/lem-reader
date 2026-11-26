@@ -12,10 +12,8 @@ vi.mock("../../../src/persistence/collectionsStore", () => ({ addCollectionEntry
 
 import { addToLibrary } from "../../../src/ingestion/addToLibrary";
 import { addCollectionEntry } from "../../../src/persistence/collectionsStore";
-import {
-  collectionImportAnnouncement,
-  importIntoCollection,
-} from "../../../src/routes/collections/importIntoCollection";
+import { importIntoCollection } from "../../../src/routes/collections/importIntoCollection";
+import { collectionImportAnnouncement } from "../../../src/routes/collections/collectionImportCopy";
 
 const addToLibraryMock = vi.mocked(addToLibrary);
 const addEntryMock = vi.mocked(addCollectionEntry);

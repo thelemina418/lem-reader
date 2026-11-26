@@ -86,10 +86,7 @@ import { collectionContextSuffix } from "../../reader/readerHistory";
 import { useNavigationIntent } from "../../reader/useNavigationIntent";
 import { AddReadingDialog } from "./AddReadingDialog";
 import { collectionImportAnnouncement } from "./collectionImportCopy";
-import type {
-  AddDialogCollectionDestination,
-  LandedCollectionImport,
-} from "../../ingestion/AddDialog";
+import type { CollectionImportDestination, LandedCollectionImport } from "./importIntoCollection";
 
 type LoadStatus = "loading" | "ready" | "missing" | "error";
 
@@ -101,7 +98,7 @@ export function CollectionDetailView({
   collectionId: string;
   hasAppHistory: boolean;
   /** Issue #15 — opens the app's import dialog aimed at this collection. */
-  onImportIntoCollection?: (destination: AddDialogCollectionDestination) => void;
+  onImportIntoCollection?: (destination: CollectionImportDestination) => void;
 }) {
   // The ONE library read model — titles, book resume pointers, and the
   // add-picker's rows all read the same settled snapshot.
@@ -400,12 +397,17 @@ export function CollectionDetailView({
   // NEW save is shown once the invalidated snapshot lands (or resolves the
   // target already); an existing reading is resolvable at once. A library
   // read failure shows it anyway (the page's own error line explains it).
-  type PendingImport = { outcome: LandedCollectionImport; snapshotAtLanding: unknown };
+  type PendingImport = { outcome: LandedCollectionImport; snapshotAtLanding: typeof snapshot };
   const [pendingImport, setPendingImport] = useState<PendingImport | null>(null);
   // The snapshot CURRENT when the import lands (a live mirror, rewritten
   // every render — the dialog session may span other snapshot reloads).
   const liveSnapshotRef = useRef(snapshot);
   liveSnapshotRef.current = snapshot;
+  // The collection this mount currently shows: the app-level dialog can
+  // outlive a hash change (browser Back mid-import), so a landing for the
+  // collection the import was opened from is dropped on any other page.
+  const liveCollectionIdRef = useRef(collectionId);
+  liveCollectionIdRef.current = collectionId;
   useEffect(() => {
     if (pendingImport === null || collection === null) return;
     const { outcome } = pendingImport;
@@ -426,11 +428,14 @@ export function CollectionDetailView({
 
   function handleOpenImport(): void {
     if (!collection || !onImportIntoCollection) return;
+    const openedFor = collection.id;
     onImportIntoCollection({
-      collectionId: collection.id,
+      collectionId: openedFor,
       collectionName: collection.name,
-      onImported: (outcome) =>
-        setPendingImport({ outcome, snapshotAtLanding: liveSnapshotRef.current }),
+      onImported: (outcome) => {
+        if (liveCollectionIdRef.current !== openedFor) return;
+        setPendingImport({ outcome, snapshotAtLanding: liveSnapshotRef.current });
+      },
     });
   }
 

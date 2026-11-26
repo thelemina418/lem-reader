@@ -25,9 +25,6 @@ import { skippedChaptersCopy } from "../../ingestion/ingestCopy";
 import type { IngestionFailureReason } from "../../ingestion/types";
 import { addCollectionEntry } from "../../persistence/collectionsStore";
 import type { Collection, CollectionEntryTarget } from "../../content/schema";
-// The page/dialog copy lives in a store-free module so the lazily loaded
-// dialog can render it without pulling this module's persistence graph.
-export { collectionImportAnnouncement } from "./collectionImportCopy";
 
 /**
  * The outcome of one import-into-collection submission. `saved` is true
@@ -52,36 +49,62 @@ export type CollectionImportOutcome =
   /** The reading is in the library, but the entry could not be added. */
   | { outcome: "not-added"; saved: boolean };
 
+/** The landed outcomes the collection page renders (focus + announcement). */
+export type LandedCollectionImport = Extract<
+  CollectionImportOutcome,
+  { outcome: "added" | "not-added" }
+>;
+
+/**
+ * The collection an import dialog session lands in: the collection page
+ * builds it ("Import into collection"), the app shell hands it to the ONE
+ * import dialog, and the dialog reports a landed outcome back through
+ * `onImported` (the page owns focus on the new entry and the status
+ * announcement — a live region inside the closing dialog could not
+ * announce).
+ */
+export type CollectionImportDestination = {
+  collectionId: string;
+  collectionName: string;
+  onImported: (outcome: LandedCollectionImport) => void;
+};
+
 export async function importIntoCollection(
   collectionId: string,
   input: AddToLibraryInput,
   tags: readonly string[] = [],
 ): Promise<CollectionImportOutcome> {
-  const library = await addToLibrary(input, tags);
+  const libraryOutcome = await addToLibrary(input, tags);
 
   let target: CollectionEntryTarget;
   let saved: boolean;
   let notes: string[] = [];
-  if (library.outcome === "saved-article") {
-    target = { kind: "article", articleId: library.articleId };
+  if (libraryOutcome.outcome === "saved-article") {
+    target = { kind: "article", articleId: libraryOutcome.articleId };
     saved = true;
-    notes = [library.note, ...library.warnings, library.degraded].filter(
+    notes = [libraryOutcome.note, ...libraryOutcome.warnings, libraryOutcome.degraded].filter(
       (line): line is string => line !== undefined,
     );
-  } else if (library.outcome === "saved-book") {
-    target = { kind: "book", bookId: library.bookId };
+  } else if (libraryOutcome.outcome === "saved-book") {
+    target = { kind: "book", bookId: libraryOutcome.bookId };
     saved = true;
-    if (library.skippedChapterCount > 0) {
-      notes = [skippedChaptersCopy(library.skippedChapterCount)];
+    if (libraryOutcome.skippedChapterCount > 0) {
+      notes = [skippedChaptersCopy(libraryOutcome.skippedChapterCount)];
     }
-  } else if (library.reason === "already-in-library" && library.existingArticleId !== undefined) {
-    target = { kind: "article", articleId: library.existingArticleId };
+  } else if (
+    libraryOutcome.reason === "already-in-library" &&
+    libraryOutcome.existingArticleId !== undefined
+  ) {
+    target = { kind: "article", articleId: libraryOutcome.existingArticleId };
     saved = false;
-  } else if (library.reason === "already-in-library" && library.existingBookId !== undefined) {
-    target = { kind: "book", bookId: library.existingBookId };
+  } else if (
+    libraryOutcome.reason === "already-in-library" &&
+    libraryOutcome.existingBookId !== undefined
+  ) {
+    target = { kind: "book", bookId: libraryOutcome.existingBookId };
     saved = false;
   } else {
-    return { outcome: "refused", reason: library.reason };
+    return { outcome: "refused", reason: libraryOutcome.reason };
   }
 
   try {
