@@ -65,13 +65,6 @@ export interface TocPanelProps {
    * navigates.
    */
   onActivate: (entry: TocEntry) => void;
-  /**
-   * Issue #246 — the shared chapter-completion marks for THIS work, keyed
-   * by the chapter destinations' start block (the same block a TOC entry
-   * resolves). Absent/undefined: no marks render (single-part works,
-   * EPUB chapter articles — the ordinary TOC, byte-unchanged).
-   */
-  chapterMarks?: ReadonlyMap<number, boolean>;
 }
 
 /** One rendered TOC row: the derived entry plus its nested children. */
@@ -108,7 +101,7 @@ function buildTocTree(entries: TocEntry[]): TocNode[] {
  * ownership split against the parent's controlled seam.
  */
 export const TocPanel = forwardRef<HTMLDivElement, TocPanelProps>(function TocPanel(
-  { article, articleEl, open, mode = "scrolling", onActivate, chapterMarks },
+  { article, articleEl, open, mode = "scrolling", onActivate },
   ref,
 ) {
   // Derived entries are computed, never persisted (Pitfall 9 — zero
@@ -194,9 +187,6 @@ export const TocPanel = forwardRef<HTMLDivElement, TocPanelProps>(function TocPa
     <a
       href={`#toc-${entry.blockIndex}`}
       aria-current={entry.blockIndex === currentKey ? "true" : undefined}
-      aria-label={
-        chapterMarks?.get(entry.blockIndex) === true ? `${entry.text}, finished` : undefined
-      }
       onClick={(event) => {
         // Link semantics without router side effects (Pitfall 4). The
         // fragment-only href never parses — activation is always ours.
@@ -213,13 +203,6 @@ export const TocPanel = forwardRef<HTMLDivElement, TocPanelProps>(function TocPa
       }}
     >
       {entry.text}
-      {chapterMarks?.get(entry.blockIndex) === true && (
-        // Issue #246 — the shared completion mark: the chapter this entry
-        // opens has been finished (a valid chapter-reading transition or an
-        // explicit correction — content/completion.ts owns the truth).
-        // Ordinary text children: auto-escaped, announced with the entry.
-        <span className="toc-entry-finished"> Finished</span>
-      )}
     </a>
   );
 

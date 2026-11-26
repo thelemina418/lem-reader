@@ -63,8 +63,8 @@ describe("useChapterCompletion callback ownership and failures", () => {
     const stale = result.current;
     rerender({ article: b, structure: structureB });
     await act(async () => {
-      await stale.setChapterFinished(chapter.id, true);
-      await stale.completeChapter(chapter.id);
+      stale.completeChapter(chapter.id);
+      await Promise.resolve();
     });
     expect(recordCompletion).not.toHaveBeenCalled();
   });
@@ -78,11 +78,13 @@ describe("useChapterCompletion callback ownership and failures", () => {
     rerender({ article: b, structure: structureB });
     rerender({ article: a, structure: structureA });
     await act(async () => {
-      await stale.setChapterFinished(chapter.id, true);
+      stale.completeChapter(chapter.id);
+      await Promise.resolve();
     });
     const departed = result.current;
     unmount();
-    await departed.setChapterFinished(chapter.id, true);
+    departed.completeChapter(chapter.id);
+    await Promise.resolve();
     expect(recordCompletion).not.toHaveBeenCalled();
   });
 
@@ -90,30 +92,13 @@ describe("useChapterCompletion callback ownership and failures", () => {
     vi.mocked(recordCompletion).mockRejectedValue(new Error("Storage unavailable"));
     const { result } = renderHook(() => useChapterCompletion(a, structureA));
     await waitFor(() => expect(loadAllCompletions).toHaveBeenCalledTimes(1));
-    let outcome: unknown;
     await act(async () => {
-      outcome = result.current.completeChapter(chapter.id);
-      // Drain the old rejecting implementation without leaking a test rejection.
-      await Promise.resolve(outcome).catch(() => {});
+      result.current.completeChapter(chapter.id);
     });
-    expect(outcome).toBeUndefined();
-    expect(result.current.saveFailed).toBe(true);
-    expect(result.current.marksByBlockIndex.get(chapter.startBlock)).toBe(false);
+    await waitFor(() => expect(result.current.saveFailed).toBe(true));
     await act(async () => {
-      await Promise.resolve(result.current.completeChapter(chapter.id)).catch(() => {});
+      result.current.completeChapter(chapter.id);
     });
     expect(recordCompletion).toHaveBeenCalledTimes(2);
-  });
-
-  it("explicit corrections still reject for their control to handle", async () => {
-    vi.mocked(recordCompletion).mockRejectedValue(new Error("Storage unavailable"));
-    const { result } = renderHook(() => useChapterCompletion(a, structureA));
-    await waitFor(() => expect(loadAllCompletions).toHaveBeenCalledTimes(1));
-    await act(async () => {
-      await expect(result.current.setChapterFinished(chapter.id, true)).rejects.toThrow(
-        "Storage unavailable",
-      );
-    });
-    expect(result.current.saveFailed).toBe(true);
   });
 });

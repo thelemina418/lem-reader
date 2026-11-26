@@ -467,13 +467,14 @@ describe("TocPanel: Escape routing", () => {
   });
 });
 
-it("keeps chapter navigation and finished status without completion-changing actions", () => {
+it("keeps chapter navigation without chapter status or completion actions (issue #17)", () => {
   const article = parseArticle({
     ...baseArticle,
     blocks: [heading(2, "Chapter one"), para("Body")],
   });
-  mountPanel(article, { chapterMarks: new Map([[0, true]]) });
-  expect(screen.getByRole("link", { name: "Chapter one, finished" })).toBeInTheDocument();
+  mountPanel(article);
+  expect(screen.getByRole("link", { name: "Chapter one" })).toBeInTheDocument();
+  expect(screen.queryByText(/Finished/)).not.toBeInTheDocument();
   expect(screen.queryByRole("button", { name: /Mark (un)?finished/ })).not.toBeInTheDocument();
 });
 

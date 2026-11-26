@@ -132,3 +132,39 @@ describe("LibraryRow — the per-article review entry (issue #76)", () => {
     expect(cluster!.children).toHaveLength(1);
   });
 });
+
+// Issue #17 — chapter status is corrected only on collection rows. A
+// chaptered standalone reading's library state action is the same direct
+// whole-reading toggle every other reading has (no Reading status dialog).
+describe("LibraryRow — the reading-state action (issue #17)", () => {
+  function chapteredArticle(): CanonicalArticle {
+    return ArticleSchema.parse({
+      id: "chaptered-row",
+      revision: 1,
+      lang: "en",
+      provenance: {
+        title: "Chaptered Reading",
+        retrievedAt: "2026-09-01T00:00:00.000Z",
+        originalHtmlHash: FAKE_HASH,
+      },
+      blocks: ["One", "Two"].flatMap((title) => [
+        { kind: "heading", level: 2, content: [{ text: title }] },
+        { kind: "paragraph", content: [{ text: `${title} body.` }] },
+      ]),
+    });
+  }
+
+  it("a chaptered reading toggles whole-reading read directly", () => {
+    const onReadingStateChange = vi.fn().mockResolvedValue(undefined);
+    render(
+      <LibraryRow
+        article={chapteredArticle()}
+        total={100}
+        onReadingStateChange={onReadingStateChange}
+      />,
+    );
+    expect(screen.queryByRole("button", { name: /^Reading status for / })).toBeNull();
+    screen.getByRole("button", { name: "Mark as read: Chaptered Reading" }).click();
+    expect(onReadingStateChange).toHaveBeenCalledWith(true);
+  });
+});

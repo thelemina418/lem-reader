@@ -557,8 +557,8 @@ export function ArticleView({
     if (article === null || chapterScope === undefined) return null;
     return resolveChapterAssignment(article, workStructure.structure, chapterScope);
   }, [article, workStructure.structure, chapterScope]);
-  // Issue #246 — the shared-completion seam: the mounted work's chapter
-  // records (the TOC finished marks) + the transition writer. The ALGEBRA —
+  // Issue #246 — the shared-completion seam: the chapter-transition
+  // writer (issue #17 — the reader shows no chapter status). The ALGEBRA —
   // which reading move completes which chapter — is noteReadingMove below;
   // the hook owns persistence, once-per-mount dedupe, and failure honesty.
   const chapterCompletion = useChapterCompletion(article, workStructure.structure);
@@ -3904,7 +3904,6 @@ export function ArticleView({
             open={tocOpen}
             mode={isPaginated ? "paginated" : "scrolling"}
             onActivate={handleTocJump}
-            chapterMarks={chapterCompletion.marksByBlockIndex}
           />
           {/* Phase 5 Plan 05-03 Task 2: AnnotationsDrawer — native <dialog>
             reading-order list + empty-state + navigate-back. Reads highlights

@@ -405,16 +405,13 @@ test.describe("SC#5 + LIB-06 — progress hairline + continue-reading strip + fi
     const row = page
       .locator(".library-list > li")
       .filter({ hasText: HAIRLINE_FIXTURE.provenance.title });
-    await row.getByRole("button", { name: /^Reading status for / }).click();
-    const status = page.getByRole("dialog", { name: "Reading status" });
-    await status.getByRole("button", { name: "Mark finished: Whole reading", exact: true }).click();
+    await row.getByRole("button", { name: /^Mark as read:/ }).click();
 
-    // The action still flips optimistically and stays flipped after the
-    // invalidation reload; chaptered works now correct inside the dialog.
-    await expect(
-      status.getByRole("button", { name: "Mark unfinished: Whole reading", exact: true }),
-    ).toBeVisible();
-    await status.getByRole("button", { name: "Close", exact: true }).click();
+    // The accessible name flips to the target action at click time — this
+    // holds in BOTH the optimistic transient (Quick 260909-ahy Task 2) and
+    // the settled state, so it cannot flake on reload timing yet locks that
+    // the name never idles on the stale "Mark as read:" label.
+    await expect(row.getByRole("button", { name: /^Mark as unread:/ })).toBeVisible();
 
     // The Finished mark proves the invalidation reload has landed (the
     // ordering gate for the probe assertion below).
