@@ -1,5 +1,36 @@
 import { test, expect } from "@playwright/test";
+import type { Page } from "@playwright/test";
 import { openArticle } from "./_harness";
+
+/** One persisted reader-prefs field, read straight from Dexie (raw
+ * IndexedDB). Settings saves are debounced (400 ms) and then written
+ * asynchronously, so a reload must wait for the WRITE, not a fixed sleep:
+ * a 500 ms sleep left ~100 ms for the write and lost it on the 3-core
+ * hosted macOS runner (#3 hosted shadow, run 45729460283). */
+async function persistedPref(page: Page, field: string): Promise<unknown> {
+  return page.evaluate(async (name) => {
+    const db = await new Promise<IDBDatabase>((resolve, reject) => {
+      const req = indexedDB.open("lem-reader");
+      req.onsuccess = () => resolve(req.result);
+      req.onerror = () => reject(req.error);
+    });
+    try {
+      const row = await new Promise<{ value?: Record<string, unknown> } | undefined>(
+        (resolve, reject) => {
+          const getReq = db
+            .transaction("settings", "readonly")
+            .objectStore("settings")
+            .get("reader-prefs");
+          getReq.onsuccess = () => resolve(getReq.result);
+          getReq.onerror = () => reject(getReq.error);
+        },
+      );
+      return row?.value?.[name];
+    } finally {
+      db.close();
+    }
+  }, field);
+}
 
 test("Firefox explains the audio limitation without starting synthesis", async ({ page }) => {
   await openArticle(page, "word");
@@ -16,7 +47,7 @@ test("Firefox explains the audio limitation without starting synthesis", async (
   ).toBeVisible();
   await page.getByRole("button", { name: "Dismiss", exact: true }).click();
   await expect(page.getByRole("complementary", { name: "Read-aloud availability" })).toHaveCount(0);
-  await page.waitForTimeout(500);
+  await expect.poll(() => persistedPref(page, "speechNoticeDismissed")).toBe(true);
   await page.reload();
   await expect(page.getByRole("complementary", { name: "Read-aloud availability" })).toHaveCount(0);
   await expect(page.getByRole("button", { name: "Pause", exact: true })).toHaveCount(0);
@@ -38,7 +69,7 @@ test("read-aloud controls can be hidden and restored in settings", async ({ page
   await expect(toggle).toBeChecked();
   await toggle.uncheck();
   await expect(page.getByRole("button", { name: "Read aloud", exact: true })).toHaveCount(0);
-  await page.waitForTimeout(500);
+  await expect.poll(() => persistedPref(page, "showReadAloud")).toBe(false);
   await page.reload();
   await expect(page.getByRole("button", { name: "Read aloud", exact: true })).toHaveCount(0);
   await page.getByRole("button", { name: "Reading settings", exact: true }).click();
