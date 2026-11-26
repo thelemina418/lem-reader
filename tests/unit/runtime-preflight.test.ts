@@ -61,8 +61,12 @@ describe("renderPreflightFailure — the actionable rejection message", () => {
     expect(text).toContain("v26.7.0");
     expect(text).toContain(".mise.toml");
     // Fix 1: run the command under the repo-local pin without changing the
-    // global default.
-    expect(text).toContain("mise exec --");
+    // global default. The pinned bin dir is PREPENDED so every subprocess
+    // (npm → vitest workers) inherits it: `mise exec` alone does not reorder
+    // a mise path already on PATH behind /usr/bin, so an activated shell
+    // with a system Node first still runs the children under that Node.
+    expect(text).toContain(`PATH="$(mise where node)/bin:$PATH" <your command>`);
+    expect(text).not.toContain("mise exec --");
     // Where a fresh session rediscovers the contract.
     expect(text).toContain("docs/setup.md");
   });
@@ -76,7 +80,7 @@ describe("renderPreflightFailure — the actionable rejection message", () => {
   test("an unparseable runtime still gets a complete, actionable message", () => {
     const text = renderPreflightFailure(checkNodeRuntime(""));
     expect(text).toContain("Node 22");
-    expect(text).toContain("mise exec --");
+    expect(text).toContain("mise where node");
   });
 
   test("an acceptable runtime renders nothing (the fast path is silent)", () => {

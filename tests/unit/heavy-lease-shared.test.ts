@@ -117,10 +117,18 @@ describe("shared-lease record evidence (issue #280)", () => {
       if (previousDir === undefined) delete process.env.LEM_HEAVY_LEASE_SHARED_DIR;
       else process.env.LEM_HEAVY_LEASE_SHARED_DIR = previousDir;
     }
-    // Without the shared dir, the per-user cache default is unchanged.
-    const fallback = defaultLeaseFile();
-    expect(fallback).toMatch(/lem-reader/);
-    expect(fallback.endsWith("heavy-test.lease.json")).toBe(true);
+    // Without the shared dir, the per-user cache default is unchanged. Point
+    // at a missing dir explicitly: a provisioned host (lemcentre) has the
+    // real /run/lem-heavy-lease, which must not decide this assertion.
+    process.env.LEM_HEAVY_LEASE_SHARED_DIR = join(shared, "absent");
+    try {
+      const fallback = defaultLeaseFile();
+      expect(fallback).toMatch(/lem-reader/);
+      expect(fallback.endsWith("heavy-test.lease.json")).toBe(true);
+    } finally {
+      if (previousDir === undefined) delete process.env.LEM_HEAVY_LEASE_SHARED_DIR;
+      else process.env.LEM_HEAVY_LEASE_SHARED_DIR = previousDir;
+    }
   });
 
   it("publishes the lease file group-writable even under a restrictive umask (UMask=0077 plane)", async () => {
