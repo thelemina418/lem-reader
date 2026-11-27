@@ -39,6 +39,7 @@ import type { PaginatedSurfaceHandle } from "./PaginatedSurface";
 import { fragmentContainingOffset } from "../pagination/anchor";
 import { findScrollTarget } from "./restoreLocation";
 import { endPinOffset, landingForRestore } from "./readingPosition";
+import { graphemeLength } from "../content/normalizeText";
 
 /** Belt-and-suspenders re-call delay for the D4-07 firefox-settle guard. */
 export const FOCUS_SETTLE_MS = 120;
@@ -114,7 +115,10 @@ export function jumpToOffset(
       const pageIdx = fragmentContainingOffset(pages, offset, article);
       surface.turnToPage(pageIdx);
     }
-  } else if (input.endLanding && landingForRestore(offset, endPinOffset(article)) === "end") {
+  } else if (
+    input.endLanding &&
+    landingForRestore(offset, endPinOffset(article), graphemeLength(article)) === "end"
+  ) {
     // 260908-oht: absolute document bottom so the first scroll-save re-pins
     // total instead of un-finishing a finished article.
     window.scrollTo(0, document.documentElement.scrollHeight);

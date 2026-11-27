@@ -25,6 +25,7 @@ import {
   footnoteRows,
   graphemeClusters,
   inlineText,
+  mainTextLength,
 } from "../content/normalizeText";
 import { footnoteReferenceSpans } from "../content/footnoteReferences";
 
@@ -93,6 +94,36 @@ export const MAX_CHUNK_GRAPHEMES = 250;
 export interface SpeechScope {
   start: number;
   end: number;
+}
+
+/**
+ * Issue #58 — the CONTINUOUS speech scope for a session starting at
+ * `startOffset`. The notes are reference material, not reading: a session
+ * started in the main text stops at the main text's end; a session started
+ * inside a note reads that note and stops at its end (a position between
+ * rows — the separator — belongs to the note that follows it). An
+ * assignment range (issue #244) still clips the result. Returns undefined
+ * when nothing needs clipping (no notes, no assignment) — the whole article
+ * speaks, byte-identical to before.
+ */
+export function speechScopeForStart(
+  article: CanonicalArticle,
+  startOffset: number,
+  assignment?: SpeechScope,
+): SpeechScope | undefined {
+  const rows = footnoteRows(article);
+  if (rows.length === 0) return assignment;
+  const mainEnd = mainTextLength(article);
+  let scope: SpeechScope = { start: 0, end: mainEnd };
+  if (startOffset > mainEnd || (startOffset === mainEnd && mainEnd === 0)) {
+    const row = rows.find((r) => startOffset < r.start + r.length) ?? rows.at(-1)!;
+    scope = { start: row.start, end: row.start + row.length };
+  }
+  if (assignment === undefined) return scope;
+  return {
+    start: Math.max(scope.start, assignment.start),
+    end: Math.min(scope.end, assignment.end),
+  };
 }
 
 export function chunkArticleForSpeech(

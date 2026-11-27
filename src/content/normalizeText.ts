@@ -309,6 +309,23 @@ export function graphemeLength(article: CanonicalArticle): number {
   return articleGraphemeIndex(article).totalGraphemes;
 }
 
+/**
+ * Issue #58 — the canonical length of the article's MAIN TEXT: the
+ * coordinate stream up to (not including) the notes region. The notes are
+ * reference material, not reading: completion, progress, read-aloud's
+ * continuous stop, and Estimated reading time all measure against this
+ * end. Equals graphemeLength when there are no footnote rows. The body's
+ * last block ends one separator before the first row
+ * (normalizeText's `[body, notes].join(SEP)`); an all-empty body spends no
+ * separator, so its main text is empty.
+ */
+export function mainTextLength(article: CanonicalArticle): number {
+  const index = articleGraphemeIndex(article);
+  const firstRow = index.footnoteRows[0];
+  if (firstRow === undefined) return index.totalGraphemes;
+  return Math.max(0, firstRow.start - BLOCK_SEPARATOR.length);
+}
+
 // ── Raw↔normalized cluster alignment (Pitfall 1 bridge) ─────────────────────
 // The DOM renders run texts concatenated (InlineRenderer adds no separators),
 // while the D-05 normalized text collapses whitespace AND joins runs with " ".
