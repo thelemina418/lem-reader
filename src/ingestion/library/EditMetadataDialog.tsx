@@ -56,6 +56,8 @@ import { formatIsoDate } from "./formatDate";
 import { StatusRegion } from "../../ui/StatusRegion";
 import { BusyButton } from "../../ui/BusyButton";
 import { PdfRepairPanel } from "./PdfRepairPanel";
+import { ReprocessPanel } from "./ReprocessPanel";
+import { isUploadSource } from "../../persistence/reprocessStore";
 
 /** isoToDateInput — ISO datetime → the "YYYY-MM-DD" a date input holds. */
 function isoToDateInput(iso: string): string {
@@ -300,6 +302,17 @@ export function EditMetadataDialog({ open, article, onSaved, onCancel }: EditMet
         {open && article?.ingestionMeta?.source === "pdf" && (
           <PdfRepairPanel key={article.id} article={article} onSaved={onSaved} onBusy={setSaving} />
         )}
+        {open &&
+          article &&
+          ((article.ingestionMeta?.source === "url" && article.provenance.sourceUrl) ||
+            isUploadSource(article.ingestionMeta?.source)) && (
+            <ReprocessPanel
+              key={article.id}
+              article={article}
+              onSaved={onSaved}
+              onBusy={setSaving}
+            />
+          )}
         <form onSubmit={handleFormSubmit} className="edit-metadata-form">
           {/* Title field — placeholder carries the CANONICAL title
               (D17-03/D17-08: the canonical value is visible ONLY here,
