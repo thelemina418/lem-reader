@@ -13,26 +13,28 @@
 //
 // REUSE, DO NOT FORK (the 04-09 offset-drift class is the risk being avoided):
 // this module composes ONLY the two shipped helpers — pageStartGlobalOffset
-// (src/pagination/anchor.ts) and graphemeLength (src/content/normalizeText.ts)
+// (src/pagination/anchor.ts) and mainTextLength (src/content/normalizeText.ts —
+// the main text's length; graphemeLength when there are no notes, issue #58)
 // — and performs no new offset-accumulation walk over blocks.
 //
 // Pure domain module — no UI framework imports, no DOM globals, no side
 // effects. jsdom-safe to unit test with hand-built PageFragment fixtures.
 
 import type { CanonicalArticle } from "../content/types";
-import { graphemeLength } from "../content/normalizeText";
+import { mainTextLength } from "../content/normalizeText";
 import { pageAnchorOffset, pageStartGlobalOffset } from "./anchor";
 import type { PageFragment } from "./types";
 
 /**
  * Progress ratio [0, 1] for a canonical D-05 offset — the ONE offset→ratio
- * shape (offset / graphemeLength, clamped). The page-based helpers below
+ * shape (offset / mainTextLength, clamped — issue #58: the notes are not
+ * reading, so the end of the main text reads 1 and note positions clamp). The page-based helpers below
  * compose it; issue #236's turn-announce percent composes it directly (the
  * committed page's canonical start offset — the same currency the
  * orientation label resolves).
  */
 export function offsetProgressRatio(article: CanonicalArticle, offset: number): number {
-  const total = graphemeLength(article);
+  const total = mainTextLength(article);
   if (total === 0) return 0;
   return Math.min(1, Math.max(0, offset / total));
 }
@@ -40,7 +42,7 @@ export function offsetProgressRatio(article: CanonicalArticle, offset: number): 
 /**
  * Progress ratio [0, 1] for the page whose content starts at `fragment`.
  *
- * ratio = pageStartGlobalOffset(article, fragment) / graphemeLength(article)
+ * ratio = pageStartGlobalOffset(article, fragment) / mainTextLength(article)
  *
  * Boundary semantics (SC#2): the first page of any article — including a
  * one-page article — reads 0; each turn grows the ratio monotonically; the
@@ -54,7 +56,7 @@ export function paginatedProgressRatio(article: CanonicalArticle, fragment: Page
 
 /**
  * Progress ratio [0, 1] for the COMMITTED page at `currentPageIdx` — the
- * committed-page anchor (pageAnchorOffset) over graphemeLength, so the final
+ * committed-page anchor (pageAnchorOffset) over mainTextLength, so the final
  * page of a MULTI-page set reads exactly 1 (passive completion, 260908-oht)
  * while a one-page article keeps reading 0 on open (POLISH-02). Defensive
  * bounds mirror paginatedProgressRatio: empty coordinate space → 0.
@@ -64,7 +66,7 @@ export function committedPageProgressRatio(
   pages: PageFragment[],
   currentPageIdx: number,
 ): number {
-  const total = graphemeLength(article);
+  const total = mainTextLength(article);
   if (total === 0) return 0;
   return Math.min(1, Math.max(0, pageAnchorOffset(article, pages, currentPageIdx) / total));
 }

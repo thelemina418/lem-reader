@@ -77,7 +77,7 @@ A label attached to an individual highlight; a kind of annotation tag, independe
 _Avoid_: article tag (when the label belongs to the highlight)
 
 **Estimated reading time**:
-A whole-article estimate of how long the text takes to read at a fixed typical pace, shown on library rows; a book row shows one total across its chapters. It counts the article's reading text (code included, images not). It describes the article, never the reader — it does not change as you read and is never learned from your sessions.
+A whole-article estimate of how long the text takes to read at a fixed typical pace, shown on library rows; a book row shows one total across its chapters. It counts the article's main text (code included, images not); the notes at the end are reference material and are left out. It describes the article, never the reader — it does not change as you read and is never learned from your sessions.
 _Avoid_: time read, time left, reading speed (the accrued "read here" time is a different thing)
 
 **Highlight slot**:

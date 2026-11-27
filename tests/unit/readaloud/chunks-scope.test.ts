@@ -15,7 +15,7 @@
 import { describe, expect, it } from "vitest";
 import { ArticleSchema } from "../../../src/content/schema";
 import type { CanonicalArticle } from "../../../src/content/types";
-import { chunkArticleForSpeech } from "../../../src/readaloud/chunks";
+import { chunkArticleForSpeech, speechScopeForStart } from "../../../src/readaloud/chunks";
 import {
   articleGraphemeIndex,
   graphemeClusters,
@@ -96,5 +96,46 @@ describe("chunkArticleForSpeech — the assignment scope clip (issue #244)", () 
     const joined = unscoped.map((c) => c.text).join(" ");
     expect(joined).toContain("Only first chapter");
     expect(joined).toContain("Later words");
+  });
+});
+
+// Issue #58 — the notes are not reading: continuous read-aloud started in
+// the main text stops at its end; started inside a note, it reads that note
+// (and only that note).
+describe("speechScopeForStart — read-aloud stops at the end of the main text", () => {
+  const noted = ArticleSchema.parse({
+    ...baseArticle,
+    blocks: [
+      { kind: "paragraph", content: [{ text: "The main text opens here.", marks: [] }] },
+      { kind: "paragraph", content: [{ text: "The main text closes here.", marks: [] }] },
+    ],
+    footnotes: [
+      { id: "fn-1", content: [{ text: "First note body.", marks: [] }] },
+      { id: "fn-2", content: [{ text: "Second note body.", marks: [] }] },
+    ],
+  });
+  const spoken = (start: number, assignment?: { start: number; end: number }) =>
+    chunkArticleForSpeech(noted, speechScopeForStart(noted, start, assignment))
+      .filter((c) => c.endGrapheme > start)
+      .map((c) => c.text);
+
+  it("started in the main text, it reads to the main text's end and no note", () => {
+    expect(spoken(0)).toEqual(["The main text opens here.", "The main text closes here."]);
+  });
+
+  it("started inside a note, it reads that note only", () => {
+    const secondNote = normalizeText(noted).indexOf("Second note");
+    expect(spoken(secondNote + 3)).toEqual(["Second note body."]);
+    const firstNote = normalizeText(noted).indexOf("First note");
+    expect(spoken(firstNote)).toEqual(["First note body."]);
+  });
+
+  it("an article without notes keeps the whole article (or its assignment)", () => {
+    expect(speechScopeForStart(scopedWork, 0)).toBeUndefined();
+    expect(speechScopeForStart(scopedWork, 0, { start: 3, end: 9 })).toEqual({ start: 3, end: 9 });
+  });
+
+  it("an assignment range still clips the main-text scope", () => {
+    expect(spoken(0, { start: 0, end: 25 })).toEqual(["The main text opens here."]);
   });
 });
