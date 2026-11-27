@@ -31,7 +31,8 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { CanonicalArticle } from "../content/types";
 import { chunkArticleForSpeech, speechScopeForStart } from "../readaloud/chunks";
-import { mainTextLength } from "../content/normalizeText";
+import { graphemeLength, mainTextLength } from "../content/normalizeText";
+import { noteListenEndOffset } from "./readingPosition";
 import type { SpeechScope } from "../readaloud/chunks";
 import type { CarriedFollow, ListenFinishedInfo } from "../readaloud/engine";
 import { ReadAloudEngine } from "../readaloud/engine";
@@ -305,7 +306,7 @@ export function useReadAloud(
     );
     const noteEnd =
       sessionScope !== undefined && sessionScope.start > mainTextLength(currentArticle)
-        ? sessionScope.end
+        ? noteListenEndOffset(sessionScope.end, graphemeLength(currentArticle))
         : undefined;
     const nextEngine = new ReadAloudEngine({
       adapter: createWebSpeechAdapter(),

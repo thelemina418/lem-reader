@@ -20,6 +20,7 @@ const { getCompletion, recordCompletion } =
 const { articleReadingState } = await import("../../../src/ingestion/library/readingState");
 
 const MAIN_END = 100;
+const TEXT_END = 180;
 const target = { kind: "article" as const, articleId: "noted-article" };
 
 function at(graphemeOffset: number, savedAt: string): LocationRecord {
@@ -71,5 +72,17 @@ describe("saving a position inside the notes", () => {
     await saveLocation(at(140, "2026-01-03T00:00:00.000Z"), { mainTextEnd: MAIN_END });
     await saveLocation(at(10, "2026-01-04T00:00:00.000Z"), { mainTextEnd: MAIN_END });
     expect(await stateNow()).toBe("in-progress");
+  });
+
+  // Spec #66 — before #66 the end pin of a footnoted article was the end of
+  // its notes. A reader who finished then (no completion record) and now
+  // reads in the notes stays finished: the legacy pin is a finish.
+  it("a reader finished at the legacy notes-end pin stays finished reading the notes", async () => {
+    await db.location.put(at(TEXT_END, "2026-01-02T00:00:00.000Z"));
+    const extents = { mainTextEnd: MAIN_END, textEnd: TEXT_END };
+    await saveLocation(at(140, "2026-01-03T00:00:00.000Z"), extents);
+    expect(await stateNow()).toBe("finished");
+    await saveLocation(at(160, "2026-01-04T00:00:00.000Z"), extents);
+    expect(await stateNow()).toBe("finished");
   });
 });

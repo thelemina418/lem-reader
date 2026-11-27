@@ -353,6 +353,119 @@ describe("loadLibrarySnapshot — grapheme-total fold (Issue #3)", () => {
   });
 });
 
+// Spec #66 — before #66 the end-of-article pin of a footnoted article was the
+// END OF ITS NOTES (graphemeLength). Such a saved row is the legacy end pin:
+// the latest-location fold reads it as the modern end pin (the main-text
+// end), so an article a reader finished before upgrading stays finished in
+// the library, its book's progress, and every collection derivation.
+describe("loadLibrarySnapshot — legacy end pin (spec #66)", () => {
+  beforeEach(async () => {
+    await wipeDatabase();
+  });
+
+  const notedBlocks = [
+    { kind: "paragraph" as const, content: [{ text: "Main text.", marks: [] }] },
+  ];
+  const notedFootnotes = [
+    { id: "fn-1", content: [{ text: "A much longer note body.", marks: [] }] },
+  ];
+
+  it("reads a saved notes-end offset as the main-text end pin (finished)", async () => {
+    const { dexieLibrarySource } = await loadLibrarySource();
+    const { saveLocation } = await loadLocationStore();
+    const { graphemeLength } = await loadNormalizeText();
+    const { loadLibrarySnapshot } = await loadSnapshot();
+    const { articleReadingState } = await import("../../../src/ingestion/library/readingState");
+
+    const article = sampleArticle({
+      id: "legacy-finished",
+      blocks: notedBlocks,
+      footnotes: notedFootnotes,
+    });
+    await dexieLibrarySource.save(article);
+    const legacyPin = graphemeLength(article);
+    expect(legacyPin).toBeGreaterThan(10);
+    await saveLocation(sampleLocation(article.id, 1, legacyPin, "2026-05-01T00:00:00.000Z"));
+
+    const snapshot = await loadLibrarySnapshot();
+    const latest = snapshot.latestLocationByArticleId.get(article.id);
+    expect(latest?.graphemeOffset).toBe(10);
+    expect(
+      articleReadingState(latest, snapshot.totalsByArticleId.get(article.id)!, undefined),
+    ).toBe("finished");
+  });
+
+  it("keeps a position inside the notes unfinished", async () => {
+    const { dexieLibrarySource } = await loadLibrarySource();
+    const { saveLocation } = await loadLocationStore();
+    const { graphemeLength } = await loadNormalizeText();
+    const { loadLibrarySnapshot } = await loadSnapshot();
+    const { articleReadingState } = await import("../../../src/ingestion/library/readingState");
+
+    const article = sampleArticle({
+      id: "reading-notes",
+      blocks: notedBlocks,
+      footnotes: notedFootnotes,
+    });
+    await dexieLibrarySource.save(article);
+    const inNotes = graphemeLength(article) - 1;
+    await saveLocation(sampleLocation(article.id, 1, inNotes, "2026-05-01T00:00:00.000Z"));
+
+    const snapshot = await loadLibrarySnapshot();
+    const latest = snapshot.latestLocationByArticleId.get(article.id);
+    expect(latest?.graphemeOffset).toBe(inNotes);
+    expect(
+      articleReadingState(latest, snapshot.totalsByArticleId.get(article.id)!, undefined),
+    ).toBe("in-progress");
+  });
+
+  it("leaves another revision's row as saved (its pin is that revision's)", async () => {
+    const { dexieLibrarySource } = await loadLibrarySource();
+    const { saveLocation } = await loadLocationStore();
+    const { graphemeLength } = await loadNormalizeText();
+    const { loadLibrarySnapshot } = await loadSnapshot();
+
+    const article = sampleArticle({
+      id: "revised",
+      revision: 2,
+      blocks: notedBlocks,
+      footnotes: notedFootnotes,
+    });
+    await dexieLibrarySource.save(article);
+    const offset = graphemeLength(article);
+    await saveLocation(sampleLocation(article.id, 1, offset, "2026-05-01T00:00:00.000Z"));
+
+    const snapshot = await loadLibrarySnapshot();
+    expect(snapshot.latestLocationByArticleId.get(article.id)?.graphemeOffset).toBe(offset);
+  });
+
+  it("counts a legacy-finished chapter in its book's progress", async () => {
+    const { saveBook } = await loadBooksStore();
+    const { saveLocation } = await loadLocationStore();
+    const { graphemeLength } = await loadNormalizeText();
+    const { loadLibrarySnapshot } = await loadSnapshot();
+    const { deriveBookProgress } = await import("../../../src/ingestion/library/bookProgress");
+
+    const book = sampleBook({ chapterArticleIds: ["legacy-c00"] });
+    const chapter = sampleChapter("legacy-c00", book.id, {
+      blocks: notedBlocks,
+      footnotes: notedFootnotes,
+    });
+    await saveBook(book, [chapter]);
+    await saveLocation(
+      sampleLocation(chapter.id, 1, graphemeLength(chapter), "2026-05-01T00:00:00.000Z"),
+    );
+
+    const snapshot = await loadLibrarySnapshot();
+    const loaded = snapshot.books.find((b) => b.id === book.id)!;
+    expect(
+      deriveBookProgress(loaded, snapshot.latestLocationByArticleId, (id) =>
+        snapshot.totalsByArticleId.get(id),
+      ),
+    ).toBe(1);
+  });
+});
+
 describe("loadLibrarySnapshot — tags fold (Issue #3)", () => {
   beforeEach(async () => {
     await wipeDatabase();

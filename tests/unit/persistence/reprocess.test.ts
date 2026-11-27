@@ -338,4 +338,31 @@ describe("reprocessing a URL article", () => {
       [...normalizeText(preview.proposed)].length,
     );
   });
+  // Spec #66 — a row finished before #66 sits at the legacy end pin (the
+  // end of the notes); it is a finish, carried to the proposed main-text end.
+  it("keeps an article finished at the legacy notes-end pin finished", async () => {
+    const db = await import("../../../src/persistence/db").then((m) => m.db);
+    const footnoted = ArticleSchema.parse({
+      ...saved,
+      footnotes: [
+        { id: "fn-1", content: [{ text: "A note that is reference material.", marks: [] }] },
+      ],
+    });
+    await db.articles.put(footnoted);
+    const { previewReprocess } = await import("../../../src/persistence/reprocessStore");
+    await db.location.put({
+      schemaVersion: 1,
+      articleId: saved.id,
+      revision: 1,
+      graphemeOffset: [...normalizeText(footnoted)].length,
+      savedAt: "2026-01-03T00:00:00Z",
+    });
+    const preview = await previewReprocess(
+      saved.id,
+      candidate({
+        footnotes: [{ id: "fn-1", content: [{ text: "A reworded note.", marks: [] }] }],
+      }),
+    );
+    expect(preview.position).toEqual({ kind: "kept", offset: mainTextLength(preview.proposed) });
+  });
 });

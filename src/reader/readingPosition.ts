@@ -75,6 +75,39 @@ export function inNotesOffset(offset: number, total: number): boolean {
 }
 
 /**
+ * fromLegacyEndPin — spec #66: before #66 the end pin of a footnoted article
+ * was the end of its NOTES (graphemeLength — the whole coordinate stream),
+ * so a reader who finished then left a row at exactly that offset. Read
+ * there, it is the legacy end pin — a finish — and reads as today's end pin
+ * (mainEnd, endPinOffset). Every other offset, including one inside the
+ * notes, reads as saved. Nothing today saves `textEnd` for a footnoted
+ * article (note positions save their passage start; every finish saves the
+ * main-text end), so the exact offset is unambiguous. Apply it wherever a
+ * persisted location is read against the article it was saved for (same
+ * revision): the library's latest-location fold, the notes carry-over in
+ * saveLocation, and reprocess carry-over.
+ *
+ * @param mainEnd The saved revision's main-text end (mainTextLength).
+ * @param textEnd The saved revision's whole length (graphemeLength).
+ */
+export function fromLegacyEndPin(offset: number, mainEnd: number, textEnd: number): number {
+  return textEnd > mainEnd && offset === textEnd ? mainEnd : offset;
+}
+
+/**
+ * noteListenEndOffset — spec #66: where a read-aloud session started inside a
+ * note leaves the reader: that note's end, except the LAST note, whose end is
+ * the article's whole length — the legacy end pin (fromLegacyEndPin), a
+ * finish. That one pins its final grapheme instead, still inside the note.
+ *
+ * @param noteEnd The note session's scope end.
+ * @param textEnd The article's whole length (graphemeLength).
+ */
+export function noteListenEndOffset(noteEnd: number, textEnd: number): number {
+  return Math.min(noteEnd, textEnd - 1);
+}
+
+/**
  * Scroll-bottom tolerance (260908-oht): within this many CSS px of the
  * document bottom counts as "reached the end" (sub-pixel/rounding slack).
  */

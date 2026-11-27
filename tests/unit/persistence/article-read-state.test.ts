@@ -2,7 +2,11 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import fakeIndexedDB, { IDBKeyRange } from "fake-indexeddb";
 import { Dexie } from "dexie";
 import { ArticleSchema } from "../../../src/content/schema";
-import { graphemeClusters, normalizeText } from "../../../src/content/normalizeText";
+import {
+  graphemeClusters,
+  mainTextLength,
+  normalizeText,
+} from "../../../src/content/normalizeText";
 
 Dexie.dependencies.indexedDB = fakeIndexedDB;
 Dexie.dependencies.IDBKeyRange = IDBKeyRange;
@@ -45,6 +49,21 @@ describe("explicit article reading state", () => {
         graphemeOffset: graphemeClusters(normalizeText(target), target.lang).length,
       },
     });
+  });
+
+  // Spec #66 — Mark read writes the modern end pin (the main-text end), never
+  // the legacy notes-end pin, so a footnoted article marked read is finished.
+  it("marks a footnoted article read at its main-text end", async () => {
+    const target = ArticleSchema.parse({
+      ...article("Main text."),
+      footnotes: [{ id: "fn-1", content: [{ text: "A longer note body.", marks: [] }] }],
+    });
+    await setArticleReadState(target, true);
+    expect(await loadLocation(target.id, target.revision)).toMatchObject({
+      ok: true,
+      location: { graphemeOffset: mainTextLength(target) },
+    });
+    expect(mainTextLength(target)).toBe(10);
   });
 
   it("uses a positive end marker for documents without normalized text", async () => {

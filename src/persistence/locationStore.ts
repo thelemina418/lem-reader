@@ -26,11 +26,10 @@ import type { LocationRecordRow } from "./db";
 import { LocationRecordSchema } from "../content/schema";
 import type { LocationRecord } from "../content/schema";
 import type { CanonicalArticle } from "../content/types";
-import { graphemeClusters, normalizeText } from "../content/normalizeText";
 import { classifyStorageError } from "./errors";
 import { getCompletion, recordCompletion } from "./completionsStore";
 import { articleCompletionFinished } from "../content/completion";
-import { inNotesOffset } from "../reader/readingPosition";
+import { endPinOffset, fromLegacyEndPin, inNotesOffset } from "../reader/readingPosition";
 
 /**
  * Discriminated result of loading a reading location from Dexie.
@@ -116,7 +115,9 @@ export async function loadLocation(
  * the save that crosses from the main text into the notes first carries the
  * reader's completion state over as a "reading" completion record — a reader
  * who already finished stays finished there, one who jumped in early stays
- * unfinished. The location and the record commit together.
+ * unfinished. The location and the record commit together. `textEnd` (the
+ * article's whole length, graphemeLength) lets that carry-over read a
+ * pre-#66 finish at the end of the notes (fromLegacyEndPin) as a finish.
  *
  * Returns silently on success. A throw propagates to the caller (useScrollSave),
  * which catches it and routes via the onStorageError callback so the
@@ -125,7 +126,7 @@ export async function loadLocation(
  */
 export async function saveLocation(
   loc: LocationRecord,
-  options: { mainTextEnd?: number } = {},
+  options: { mainTextEnd?: number; textEnd?: number } = {},
 ): Promise<void> {
   // Dexie constructs the compound primary key from articleId + revision
   // automatically — the row does NOT carry a "[articleId+revision]" field.
@@ -142,13 +143,25 @@ export async function saveLocation(
     return;
   }
   await db.transaction("rw", db.location, db.completions, async () => {
-    const previous = LocationRecordSchema.safeParse(
+    const parsed = LocationRecordSchema.safeParse(
       await db.location.get([loc.articleId, loc.revision]),
     );
-    if (previous.success && !inNotesOffset(previous.data.graphemeOffset, mainEnd)) {
+    // The legacy end pin (a pre-#66 finish at the end of the notes) carries
+    // over as the finish it was.
+    const previous = parsed.success
+      ? {
+          ...parsed.data,
+          graphemeOffset: fromLegacyEndPin(
+            parsed.data.graphemeOffset,
+            mainEnd,
+            options.textEnd ?? mainEnd,
+          ),
+        }
+      : undefined;
+    if (previous !== undefined && !inNotesOffset(previous.graphemeOffset, mainEnd)) {
       const target = { kind: "article" as const, articleId: loc.articleId };
       const record = await getCompletion(target);
-      const finished = articleCompletionFinished(previous.data, mainEnd, record ?? undefined);
+      const finished = articleCompletionFinished(previous, mainEnd, record ?? undefined);
       if (finished !== (record?.finished ?? false)) {
         await recordCompletion(target, finished, "reading", loc.savedAt);
       }
@@ -170,7 +183,8 @@ export async function setArticleReadState(article: CanonicalArticle, read: boole
     schemaVersion: 1,
     articleId: article.id,
     revision: article.revision,
-    graphemeOffset: Math.max(1, graphemeClusters(normalizeText(article), article.lang).length),
+    // Spec #66 — the end pin (the main-text end), never the notes end.
+    graphemeOffset: Math.max(1, endPinOffset(article)),
     savedAt: new Date().toISOString(),
   });
 }
