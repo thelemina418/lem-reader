@@ -864,7 +864,7 @@ export const ArticleBody = memo(
           article.footnotes.length > 0 ? (
           <section aria-label="Footnotes">
             <ol>
-              {article.footnotes.map((fn) => {
+              {article.footnotes.map((fn, footnoteIndex) => {
                 // fn.id is schema-locked to /^fn-\d+$/ (Plan 01 Task 2,
                 // Pitfall 4 — DOM-clobbering guard), so the derived suffix `n`
                 // is digits-only and safe in both the href fragment and the
@@ -874,13 +874,38 @@ export const ArticleBody = memo(
                 // the li id — the visible page is the only place fn-N exists.
                 // Issue #57: tabIndex -1 lets a followed reference land
                 // focus ON the note; the returns are the shared chrome.
+                // Issue #65: note highlights (and the spoken word) slice
+                // against the note's canonical row; the content wrapper is
+                // capture's text boundary (the returns carry no coordinates).
+                const body = footnoteBodyBlock(fn, article.lang);
+                const row =
+                  highlightIndex === null
+                    ? undefined
+                    : footnoteRows(article).find((r) => r.index === footnoteIndex);
+                const noteSlices =
+                  row === undefined
+                    ? {}
+                    : blockViewSlices(
+                        sliceBlockHighlights({
+                          block: body,
+                          origin: row.start,
+                          visibleLen: row.length,
+                          highlights: effectiveHighlights,
+                          lang: article.lang,
+                        }),
+                      );
                 return (
                   <li
                     key={fn.id}
                     id={measurementProjection ? undefined : fn.id}
                     tabIndex={measurementProjection ? undefined : -1}
                   >
-                    <FootnoteBodyContent body={footnoteBodyBlock(fn, article.lang)} />{" "}
+                    <FootnoteBodyContent
+                      body={body}
+                      highlightSlices={noteSlices.highlightSlices}
+                      childHighlightSlices={noteSlices.childHighlightSlices}
+                      contentWrapper
+                    />{" "}
                     <FootnoteReturns
                       article={article}
                       footnoteId={fn.id}

@@ -36,8 +36,9 @@
 //   INTERIOR GAPS (D19-02): footnote-reference markers + unsupported block
 //   (textless — render unmarked) and code (READABLE — IS marked, asserted).
 //   REFUSALS (D19-05/D19-06): boundary-ineligible (endpoint inside
-//   unsupported content — the ONE new string, verbatim), ineligible
-//   (endpoint inside a footnote BODY — Pitfall 6), overlap (D19-07,
+//   unsupported content — the ONE new string, verbatim; also a span from
+//   the main text into a footnote BODY — issue #65, which made notes
+//   highlightable but keeps a highlight inside one region), overlap (D19-07,
 //   existing string). Cross-page/measurement-body refusal stays green in
 //   capture-rejects.spec.ts — not duplicated here.
 //   D19-14: a highlight starting at a list item's FIRST character covers
@@ -524,12 +525,13 @@ test.describe("ANNO-12 eligibility matrix — refusals (D19-05/D19-06/D19-07)", 
     expect(await countHighlightsInDexie(page, UNSUPPORTED)).toBe(0);
   });
 
-  test("refusal ineligible: an endpoint inside a footnote BODY refuses with the existing ineligible hint + NO record (Pitfall 6)", async ({
+  test("refusal boundary: a span from the main text into a footnote BODY refuses with the boundary hint + NO record (issue #65)", async ({
     page,
   }) => {
     await openScrolling(page, FIGURES);
-    // Footnote bodies render as <li id="fn-…"> WITHOUT data-block-index —
-    // the ancestor walk terminates at the reading root → "ineligible".
+    // Issue #65 (was Pitfall 6 "ineligible"): footnote bodies are
+    // highlightable now, but a highlight stays within the main text or one
+    // note — a main text → note span is an ineligible boundary.
     const tried = await page.evaluate(() => {
       const para = Array.from(document.querySelectorAll('[data-block-index="0"]')).find(
         (el) => el.closest(".article-body-measurement") === null,
@@ -553,7 +555,9 @@ test.describe("ANNO-12 eligibility matrix — refusals (D19-05/D19-06/D19-07)", 
     expect(tried, "paragraph → footnote-body selection placed").toBeTruthy();
     const toolbar = page.locator(".selection-toolbar");
     await expect(toolbar).toBeVisible();
-    await expect(toolbar).toContainText("Select readable text to highlight it.");
+    await expect(toolbar).toContainText(
+      "This selection includes content that can't be highlighted.",
+    );
     await expect(toolbar.getByRole("button", { name: "Slot 1: Default" })).toHaveCount(0);
     await page.keyboard.press("h");
     await page.waitForTimeout(200);

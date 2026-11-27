@@ -300,11 +300,11 @@ export function PageFragmentView({
  * anatomy the scrolling body renders — li#fn-N with the visible body text and
  * the ↩ back-link to #fn-ref-N — with runs sliced to the entry's intra-row
  * range through the ONE shared slicing primitive (never a fork). The row
- * carries NO data-block-index: capture's findBlockAncestor terminates at the
- * reading root, so footnote bodies stay ineligible for highlights exactly as
- * in scrolling mode (D5-07/Pitfall 6 — readability never broadens annotation
- * eligibility). The content wrapper is the overflow guard's read target: its
- * textContent is exactly the entry's raw run text, chrome-free.
+ * carries NO data-block-index (it is no body block); issue #65 captures
+ * highlights in it through the note itself — `li#fn-N`, the entry's
+ * `data-footnote-grapheme-start`, and the content wrapper. The wrapper is
+ * also the overflow guard's read target: its textContent is exactly the
+ * entry's raw run text, chrome-free.
  */
 function FootnoteEntryView({
   entry,
@@ -365,7 +365,12 @@ function FootnoteEntryView({
     if (childSlices) claimSlicesFirstOccurrence(childSlices, seenHighlightIds);
   }
   return (
-    <li id={fn.id} tabIndex={-1} data-footnote-index={footnoteIndex}>
+    <li
+      id={fn.id}
+      tabIndex={-1}
+      data-footnote-index={footnoteIndex}
+      data-footnote-grapheme-start={entry.startGrapheme}
+    >
       <FootnoteBodyContent
         body={resolved}
         highlightSlices={viewSlices.highlightSlices}

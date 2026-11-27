@@ -576,10 +576,10 @@ describe("captureSelection — span composition (D19)", () => {
     }
   });
 
-  it("(e) footnote-body endpoint refuses as ineligible (no data-block-index ancestor)", () => {
-    // 19-RESEARCH Pitfall 6: footnote BODIES render without data-block-index
-    // (only the reference markers are eligible blocks) — the ancestor walk
-    // terminates at readingRoot → the existing "ineligible" reason.
+  it("(e) a span from the main text into a footnote body refuses whole (boundary-ineligible)", () => {
+    // Issue #65 (was: "ineligible" — footnote bodies were unmarkable): notes
+    // are eligible now, but a highlight stays within one region, so a
+    // main-text → note span is an ineligible boundary.
     const article = parseArticle({
       ...baseArticle,
       blocks: [{ kind: "paragraph", content: [{ text: "body text" }] }],
@@ -605,9 +605,25 @@ describe("captureSelection — span composition (D19)", () => {
     const result = captureSelection(article, document.body);
     expect(result.ok).toBe(false);
     if (!result.ok) {
-      expect(result.reason).toBe("ineligible");
+      expect(result.reason).toBe("boundary-ineligible");
       expect("position" in result).toBe(false);
     }
+
+    // Inside the note alone, the same body captures at the note's offset.
+    const inNote = document.createRange();
+    inNote.setStart(li.firstChild!, 9);
+    inNote.setEnd(li.firstChild!, 13);
+    const sel2 = window.getSelection()!;
+    sel2.removeAllRanges();
+    sel2.addRange(inNote);
+    const noted = captureSelection(article, document.body);
+    // "body text" + "\n" → the note's row starts at 10; "body" is at 9.
+    expect(noted).toEqual({
+      ok: true,
+      blockIndex: 1,
+      footnoteIndex: 0,
+      position: { start: 19, end: 23 },
+    });
   });
 
   it("(f) whitespace-only selection composes empty → defensive empty-span", () => {

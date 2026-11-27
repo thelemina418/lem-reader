@@ -39,7 +39,7 @@ import type { PaginatedSurfaceHandle } from "./PaginatedSurface";
 import { fragmentContainingOffset } from "../pagination/anchor";
 import { findScrollTarget } from "./restoreLocation";
 import { endPinOffset, landingForRestore } from "./readingPosition";
-import { graphemeLength } from "../content/normalizeText";
+import { footnoteRowAt, graphemeLength } from "../content/normalizeText";
 
 /** Belt-and-suspenders re-call delay for the D4-07 firefox-settle guard. */
 export const FOCUS_SETTLE_MS = 120;
@@ -123,7 +123,12 @@ export function jumpToOffset(
     // total instead of un-finishing a finished article.
     window.scrollTo(0, document.documentElement.scrollHeight);
   } else {
-    const target = findScrollTarget(article, input.blocks, offset);
+    // Issue #65: a passage inside a note (a note highlight) lands on that
+    // note — the body blocks never contain it.
+    const row = footnoteRowAt(article, offset);
+    const note =
+      row === undefined ? null : document.getElementById(article.footnotes[row.index]!.id);
+    const target = note ?? findScrollTarget(article, input.blocks, offset);
     // Silent + instant (A11Y-06) — never behavior: "smooth".
     target?.scrollIntoView({ block: input.scrollAlignment ?? "start" });
   }

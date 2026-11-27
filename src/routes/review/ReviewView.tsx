@@ -71,6 +71,7 @@
 //     App.tsx regex grammar.
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { CanonicalArticle } from "../../content/types";
+import { footnoteRowAt } from "../../content/normalizeText";
 import { TagFilter } from "../../ingestion/library/TagFilter";
 // Plan 14-03 Task 1 (D14-02) — the review destination's document.title via
 // the ONE shared helper (never string-built here; the helper owns the
@@ -224,6 +225,18 @@ function reviewStripeProps(
 }
 
 /**
+ * Issue #65 — "Note 3" for a highlight that resolves inside a Footnote (the
+ * note's number from its controlled fn-N id), null for main-text highlights
+ * and for rows with no resolved passage (never a guessed label).
+ */
+function noteHighlightLabel(entry: HighlightReviewEntry): string | null {
+  if (entry.article === undefined || entry.resolvedPosition === undefined) return null;
+  const row = footnoteRowAt(entry.article, entry.resolvedPosition.start);
+  if (row === undefined) return null;
+  return `Note ${entry.article.footnotes[row.index]!.id.replace(/^fn-/, "")}`;
+}
+
+/**
  * One review row — the review-row redesign. The card (li.review-item, styled
  * in app.css) carries the highlight's color as an inline-start stripe; the
  * row body is the content column: the FULL stored quote center stage (the
@@ -289,6 +302,7 @@ function ReviewRow({
     entry.resolvedPosition,
   );
   const ariaExcerpt = firstFragmentExcerpt(entry.highlight.quote.exact, ARIA_MAX_CHARS);
+  const footnoteLabel = noteHighlightLabel(entry);
   const noteText = entry.note?.text ?? "";
   const jumpable = entry.status === "confident" && entry.article !== undefined;
   // D10-07 badge vocabulary — calm, distinct copy announced as row content.
@@ -399,6 +413,7 @@ function ReviewRow({
       <div className="review-row-foot">
         <div className="review-row-meta">
           <span className="review-date">{formatDate(entry.highlight.createdAt)}</span>
+          {footnoteLabel !== null && <span className="review-date">{footnoteLabel}</span>}
           {badgeText !== null && (
             <span className={`review-badge review-badge-${entry.status}`}>{badgeText}</span>
           )}
