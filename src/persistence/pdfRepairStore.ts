@@ -5,10 +5,10 @@ import {
   CollectionActiveEntrySchema,
   CompletionRecordSchema,
   type CanonicalArticle,
-  type CollectionEntryTarget,
 } from "../content/schema";
 import { deriveWorkStructure } from "../content/structure";
 import { db } from "./db";
+import { chapterConsequences, type ChapterConsequence } from "./chapterConsequences";
 
 export class PdfRepairRefusal extends Error {}
 
@@ -31,9 +31,7 @@ const Backup = z.object({
 });
 const fingerprint = (value: unknown): string => JSON.stringify(value) ?? "missing";
 
-export type RepairConsequence =
-  | { kind: "completion"; id: string; label: string }
-  | { kind: "collection-entry"; collectionId: string; entryId: string; label: string };
+export type RepairConsequence = ChapterConsequence;
 
 export interface PdfRepairPreview {
   articleId: string;
@@ -105,49 +103,7 @@ export async function previewPdfRepair(
   const oldStructure =
     article.structure ??
     deriveWorkStructure({ ...article, provenanceTitle: article.provenance.title });
-  const reliableChapter = (target: CollectionEntryTarget): boolean => {
-    if (target.kind !== "work-chapter" || target.articleId !== articleId) return true;
-    const before = oldStructure?.destinations.find(
-      (d) => d.id === target.destinationId && d.kind === "chapter",
-    );
-    const after = proposed.structure?.destinations.find(
-      (d) => d.id === target.destinationId && d.kind === "chapter",
-    );
-    return (
-      before !== undefined &&
-      after !== undefined &&
-      JSON.stringify(before) === JSON.stringify(after)
-    );
-  };
-  const chapterLabel = (target: CollectionEntryTarget): string => {
-    if (target.kind !== "work-chapter") return "unknown chapter";
-    const title =
-      oldStructure?.destinations.find((d) => d.id === target.destinationId)?.title ??
-      target.destinationId;
-    // Preview copy is bounded; the complete titles remain in the chapter
-    // disclosures. This does not truncate canonical content or navigation.
-    return `“${title.length > 120 ? `${title.slice(0, 120)}…` : title}” (${target.destinationId})`;
-  };
-  const consequences: RepairConsequence[] = [];
-  for (const completion of await db.completions.toArray()) {
-    if (!reliableChapter(completion.target))
-      consequences.push({
-        kind: "completion",
-        id: completion.targetKey,
-        label: `Remove ${completion.finished ? "finished" : "unfinished"} status for chapter ${chapterLabel(completion.target)}.`,
-      });
-  }
-  for (const collection of await db.collections.toArray()) {
-    for (const entry of collection.entries) {
-      if (!reliableChapter(entry.target))
-        consequences.push({
-          kind: "collection-entry",
-          collectionId: collection.id,
-          entryId: entry.id,
-          label: `Remove chapter ${chapterLabel(entry.target)}, entry ${entry.id}, from “${collection.name}”; it cannot be redirected to a different chapter.`,
-        });
-    }
-  }
+  const consequences = await chapterConsequences(articleId, oldStructure, proposed.structure);
   return {
     articleId,
     original: JSON.stringify(row),
