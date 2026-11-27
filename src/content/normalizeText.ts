@@ -30,11 +30,62 @@ export function normalizeRunText(text: string): string {
  * Exported for the read-aloud speakable-channel walk (src/readaloud/chunks.ts),
  * which needs the caption sub-range of a figure block — the SAME function the
  * D-05 substrate uses, never a fork (Pitfall 3). */
-export function inlineText(runs: InlineRun[]): string {
-  return runs
-    .map((r) => normalizeRunText(r.text))
-    .filter(Boolean)
-    .join(" ");
+export function inlineText(runs: readonly InlineRun[]): string {
+  const separators = runSeparators(runs);
+  let text = "";
+  runs.forEach((run, i) => {
+    const norm = normalizeRunText(run.text);
+    if (norm.length > 0) text += (separators[i] === 1 ? " " : "") + norm;
+  });
+  return text;
+}
+
+const LEADING_ASCII_WS = /^[\t\n\f\r ]/;
+const TRAILING_ASCII_WS = /[\t\n\f\r ]$/;
+
+function isFootnoteRefRun(run: InlineRun): boolean {
+  return run.marks.some((mark) => mark.type === "footnote-ref");
+}
+
+const separatorCache = new WeakMap<readonly InlineRun[], readonly (0 | 1)[]>();
+
+/**
+ * runSeparators — THE inline run-join rule, per run: the separator graphemes
+ * the D-05 stream places before that run's contribution (0 for a run with no
+ * contribution, and for the first contributing run).
+ *
+ * Adjacent contributions join with one " " — except at a Footnote
+ * reference's edge with no whitespace in the source: spec #66 keeps the
+ * marker graphemes where the old flattened ingest had them ("Claim1 more."),
+ * so a stored highlight quote that includes a marker is unchanged.
+ * Whitespace-only runs between two contributions count as source
+ * whitespace. Every walk over the stream (inlineText, the splitBlock
+ * slicing family, footnoteReferenceSpans) reads its joins from here.
+ */
+export function runSeparators(runs: readonly InlineRun[]): readonly (0 | 1)[] {
+  const hit = separatorCache.get(runs);
+  if (hit) return hit;
+  const separators: (0 | 1)[] = new Array<0 | 1>(runs.length).fill(0);
+  let previous: InlineRun | null = null;
+  let whitespaceBetween = false;
+  runs.forEach((run, i) => {
+    if (normalizeRunText(run.text).length === 0) {
+      if (run.text.length > 0) whitespaceBetween = true;
+      return;
+    }
+    if (previous !== null) {
+      const glued =
+        (isFootnoteRefRun(previous) || isFootnoteRefRun(run)) &&
+        !whitespaceBetween &&
+        !TRAILING_ASCII_WS.test(previous.text) &&
+        !LEADING_ASCII_WS.test(run.text);
+      separators[i] = glued ? 0 : 1;
+    }
+    previous = run;
+    whitespaceBetween = false;
+  });
+  separatorCache.set(runs, separators);
+  return separators;
 }
 
 /**

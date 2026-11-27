@@ -85,9 +85,10 @@ describe("Markdown footnotes (issue #62)", () => {
     expect(note).not.toBeNull();
     expect(text.slice(note!, note! + "The first note".length)).toBe("The first note");
     const back = footnoteAnchorOffset(article, "#fn-ref-1");
-    expect(back).toBe(text.indexOf("The claim 1 holds up") + "The claim ".length);
+    // Spec #66 S3: the marker joins its word with no inserted space.
+    expect(back).toBe(text.indexOf("The claim1 holds up") + "The claim".length);
     const second = footnoteAnchorOffset(article, "#fn-ref-1-2");
-    expect(second).toBe(text.indexOf("claim 1 returns") + "claim ".length);
+    expect(second).toBe(text.indexOf("claim1 returns") + "claim".length);
   });
 
   it("finds references inside emphasis, lists and quotations", async () => {

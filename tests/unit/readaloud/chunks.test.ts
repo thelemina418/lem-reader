@@ -270,7 +270,7 @@ describe("chunkArticleForSpeech — the spoken channel rules (issue #43, O7)", (
     const at = first.text.indexOf("is");
     const canonical = first.startGrapheme + first.utf16ToGrapheme[at]!;
     expect(clusters.slice(canonical, canonical + 2).join("")).toBe("is");
-    expect(clusters.join("")).toContain("claim 12 is");
+    expect(clusters.join("")).toContain("claim12 is"); // spec #66 S3: no inserted space
   });
 
   it("skips the legacy block-level marker too", () => {
