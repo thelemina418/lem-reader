@@ -14,7 +14,9 @@
 // wrapping loop is REUSED UNCHANGED inside each slice (a link inside a
 // highlight stays active — D5-07). NO parallel renderer is forked (DOC-02
 // reading order + D-05 offset integrity depend on reusing this same output).
+import { createContext, useContext } from "react";
 import type { InlineRun } from "../types";
+import { footnoteReferenceAnchorId } from "../footnoteReferences";
 import type { HighlightSlice } from "../../annotations/highlightRanges";
 // Issue #118 — the shared mark-trait helpers (the ONE className + aria-label
 // copy contract, shared with the code twin in BlockRenderer).
@@ -30,10 +32,39 @@ import { SpokenMark } from "./SpokenMark";
 // was derived at the mapping site; this just carries it onto the mark).
 import { tintMarkStyle } from "../../settings/highlightTint";
 
+/**
+ * Spec #66 / issue #55 — TRUE inside a hidden measurement body. Inline
+ * footnote references there render their marker as plain superscript text:
+ * no fn-ref ids and no #fn links (issue #235 — the visible page is the only
+ * place an exposed footnote identifier may exist). ArticleBody provides it
+ * from its `measurementProjection` prop; everything else is visible.
+ */
+export const MeasurementProjectionContext = createContext(false);
+
 function Inline({ run }: { run: InlineRun }) {
+  const measurementProjection = useContext(MeasurementProjectionContext);
   let node: React.ReactNode = run.text;
   for (const mark of run.marks) {
     switch (mark.type) {
+      case "footnote-ref":
+        // The Footnote reference (issue #55): a superscript link to its note.
+        // footnoteId is schema-locked to /^fn-\d+$/ and the anchor id derives
+        // from it (fn-ref-N / fn-ref-N-K), so neither can clobber the DOM.
+        node = measurementProjection ? (
+          <sup>
+            <span>{node}</span>
+          </sup>
+        ) : (
+          <sup>
+            <a
+              id={footnoteReferenceAnchorId(mark.footnoteId, mark.occurrence)}
+              href={`#${mark.footnoteId}`}
+            >
+              {node}
+            </a>
+          </sup>
+        );
+        break;
       case "strong":
         node = <strong>{node}</strong>;
         break;

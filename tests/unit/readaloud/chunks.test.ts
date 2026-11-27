@@ -248,6 +248,40 @@ describe("chunkArticleForSpeech — the spoken channel rules (issue #43, O7)", (
     expect(spoken[spoken.length - 1]).toBe("Smith 2020, page 12.");
   });
 
+  it("skips inline footnote markers but keeps the spoken words aligned (issue #55)", () => {
+    const article = makeArticle([
+      {
+        kind: "paragraph",
+        content: [
+          { text: "The claim" },
+          { text: "12", marks: [{ type: "footnote-ref", footnoteId: "fn-1", occurrence: 1 }] },
+          { text: " is supported. Next" },
+          { text: "†", marks: [{ type: "footnote-ref", footnoteId: "fn-2", occurrence: 1 }] },
+          { text: "." },
+        ],
+      },
+    ]);
+    const chunks = chunkArticleForSpeech(article);
+    expect(chunks.map((c) => c.text)).toEqual(["The claim is supported.", "Next."]);
+    // The marker keeps its place in the coordinate stream: a boundary on
+    // "is" maps to the canonical offset of "is", past the skipped marker.
+    const clusters = graphemeClusters(normalizeText(article), "en");
+    const first = chunks[0]!;
+    const at = first.text.indexOf("is");
+    const canonical = first.startGrapheme + first.utf16ToGrapheme[at]!;
+    expect(clusters.slice(canonical, canonical + 2).join("")).toBe("is");
+    expect(clusters.join("")).toContain("claim 12 is");
+  });
+
+  it("skips the legacy block-level marker too", () => {
+    const article = makeArticle([
+      { kind: "paragraph", content: [{ text: "A claim." }] },
+      { kind: "footnote-reference", footnoteId: "fn-1", marker: "[1]" },
+      { kind: "paragraph", content: [{ text: "More." }] },
+    ]);
+    expect(chunkArticleForSpeech(article).map((c) => c.text)).toEqual(["A claim.", "More."]);
+  });
+
   it("preserves document order across mixed skipped and spoken blocks", () => {
     const article = makeArticle([
       { kind: "heading", level: 2, content: [{ text: "The header" }] },

@@ -26,7 +26,7 @@
 import type { Block, CanonicalArticle } from "../types";
 import type { HighlightColor, StructureDestination } from "../schema";
 import { Fragment, memo, useMemo, useState } from "react";
-import { InlineList } from "./InlineRenderer";
+import { InlineList, MeasurementProjectionContext } from "./InlineRenderer";
 import type { TextPositionSelector } from "../normalizeText";
 import { articleGraphemeIndex, BLOCK_SEPARATOR, footnoteRows } from "../normalizeText";
 // Issue #233 — the window shape is the Zod-inferred BlockWindow contract,
@@ -685,7 +685,7 @@ export const ArticleBody = memo(
     const bodyBounds = blockWindow ?? contentRange;
     const contentIndex = contentRange ? articleGraphemeIndex(article) : null;
     return (
-      <>
+      <MeasurementProjectionContext.Provider value={measurementProjection}>
         {article.blocks
           .slice(bodyBounds?.startBlock ?? 0, bodyBounds?.endBlock)
           .map((block, localIndex) => {
@@ -841,7 +841,7 @@ export const ArticleBody = memo(
             </ol>
           </section>
         ) : null}
-      </>
+      </MeasurementProjectionContext.Provider>
     );
   },
   // Comparator: re-render only when the article identity, the explicit
