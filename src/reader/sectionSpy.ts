@@ -66,6 +66,18 @@ export interface UseSectionSpyOptions {
    * `Section: {text}.` string from the value the detection measured on).
    */
   onCurrent: (heading: HTMLHeadingElement, text: string) => void;
+  /**
+   * OPTIONAL — invoked (same debounce, on change only) when NO heading is
+   * current any more: scrolling above the first heading, or a paginated
+   * page that no heading contains (the opening page). Without it the
+   * consumer keeps the last section it was told about — the TOC's
+   * aria-current stayed on page 1's "Alpha section" after switching to
+   * scrolling at the top of the article (nightly WebKit toc-navigation:665;
+   * the switch only looked right when it beat the 250ms debounce). Omitted
+   * by SectionAnnouncer, whose `Section: {text}.` contract has no "none"
+   * announcement, so its behavior is unchanged.
+   */
+  onNone?: () => void;
 }
 
 /** Approximate header height — sentinel line sits just under the header. */
@@ -84,6 +96,7 @@ export function useSectionSpy({
   selector,
   mode = "scrolling",
   onCurrent,
+  onNone,
 }: UseSectionSpyOptions): void {
   // Ref-tracked current section text so we notify only on CHANGE (Pitfall 6
   // — non-flooding). Refs are stable across renders so the callbacks always
@@ -96,6 +109,8 @@ export function useSectionSpy({
   // on every render.
   const onCurrentRef = useRef(onCurrent);
   onCurrentRef.current = onCurrent;
+  const onNoneRef = useRef(onNone);
+  onNoneRef.current = onNone;
 
   useEffect(() => {
     if (!articleEl) return;
@@ -118,6 +133,24 @@ export function useSectionSpy({
       timer = window.setTimeout(() => {
         timer = null;
         onCurrentRef.current(current, text);
+      }, NOTIFY_DEBOUNCE_MS);
+    };
+
+    /**
+     * "No heading is current" — only for consumers that asked (onNone), so
+     * the announcer's change tracking is untouched. currentRef "" is the
+     * none state (heading texts are non-empty by the notify guard), so a
+     * later return to the same heading notifies again.
+     */
+    const notifyNone = () => {
+      if (!onNoneRef.current || currentRef.current === "") return;
+      currentRef.current = "";
+      if (timer !== null) {
+        window.clearTimeout(timer);
+      }
+      timer = window.setTimeout(() => {
+        timer = null;
+        onNoneRef.current?.();
       }, NOTIFY_DEBOUNCE_MS);
     };
 
@@ -177,6 +210,7 @@ export function useSectionSpy({
           }
         }
         if (containing) notify(containing);
+        else notifyNone();
       };
       detectPaginated();
       // Fragment swaps are childList mutations under the article (one
@@ -211,6 +245,10 @@ export function useSectionSpy({
       const passed = headings.filter((h) => h.getBoundingClientRect().top < HEADER_PX + 8);
       const current = passed.length > 0 ? passed[passed.length - 1] : null;
       const text = current?.textContent?.trim() ?? "";
+      if (!current) {
+        notifyNone();
+        return;
+      }
       // Pitfall 6: only notify when the section actually changes. A scroll
       // within the same section produces no notify.
       if (text && text !== currentRef.current) {

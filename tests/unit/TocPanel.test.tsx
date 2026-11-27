@@ -393,6 +393,100 @@ describe("TocPanel: paginated aria-current on headingless fragments (D18-12 rest
       vi.useRealTimers();
     }
   });
+
+  it("turning back from a heading page to the opening page returns aria-current to Top", async () => {
+    vi.useFakeTimers();
+    try {
+      // Page 2 (Alpha's heading) is current first…
+      const articleEl = buildPaginatedArticleEl([1, 2]);
+      document.body.append(articleEl);
+      const { container } = mountPanel(article, {
+        articleEl,
+        mode: "paginated",
+      });
+      act(() => {
+        vi.advanceTimersByTime(300);
+      });
+      expect(currentEntries(container)[0]!.textContent).toBe("Alpha section");
+
+      // …then the reader turns back to the intro-only opening page. No
+      // heading contains it, so Top must carry aria-current again (it used
+      // to stay stuck on Alpha: the spy never reported "no section").
+      const fragment = articleEl.querySelector(".page-fragment")!;
+      const intro = document.createElement("p");
+      intro.dataset.blockIndex = "0";
+      intro.textContent = "Intro.";
+      await act(async () => {
+        fragment.replaceChildren(intro);
+        await Promise.resolve();
+        await Promise.resolve();
+        await Promise.resolve();
+      });
+      act(() => {
+        vi.advanceTimersByTime(300);
+      });
+      const current = currentEntries(container);
+      expect(current).toHaveLength(1);
+      expect(current[0]!.textContent).toBe("Top of article");
+      articleEl.remove();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("switching paginated page 1 to scrolling above the first heading returns aria-current to Top (nightly WebKit toc-navigation:665)", () => {
+    vi.useFakeTimers();
+    try {
+      // Paginated page 1 shows Alpha's heading, so the spy settles on Alpha
+      // (after its 250ms debounce — the window the e2e race lived in).
+      const articleEl = buildPaginatedArticleEl([0, 1, 2]);
+      document.body.append(articleEl);
+      const { container, rerender, onActivate } = mountPanel(article, {
+        articleEl,
+        mode: "paginated",
+      });
+      act(() => {
+        vi.advanceTimersByTime(300);
+      });
+      expect(currentEntries(container)[0]!.textContent).toBe("Alpha section");
+
+      // The reader switches to scrolling at the top of the article: the
+      // continuous body replaces the fragment and every heading sits BELOW
+      // the 56px sentinel, so none has been passed.
+      const body = document.createElement("div");
+      article.blocks.forEach((block, idx) => {
+        const el = document.createElement(block.kind === "heading" ? "h2" : "p");
+        el.dataset.blockIndex = String(idx);
+        el.textContent = (block as { content: { text: string }[] }).content
+          .map((r) => r.text)
+          .join("");
+        el.getBoundingClientRect = () => ({ top: 200 + idx * 300 }) as DOMRect;
+        body.append(el);
+      });
+      articleEl.replaceChildren(body);
+      act(() => {
+        rerender(
+          <TocPanel
+            article={article}
+            articleEl={articleEl}
+            open={false}
+            mode="scrolling"
+            onActivate={onActivate}
+          />,
+        );
+      });
+      fireEvent.scroll(window);
+      act(() => {
+        vi.advanceTimersByTime(300);
+      });
+      const current = currentEntries(container);
+      expect(current).toHaveLength(1);
+      expect(current[0]!.textContent).toBe("Top of article");
+      articleEl.remove();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
 });
 
 // ── 6: headingless honesty (D18-13) ─────────────────────────────────────────

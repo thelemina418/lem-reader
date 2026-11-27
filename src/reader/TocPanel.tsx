@@ -123,6 +123,9 @@ export const TocPanel = forwardRef<HTMLDivElement, TocPanelProps>(function TocPa
       const idx = Number(heading.dataset.blockIndex);
       if (Number.isFinite(idx)) setCurrentBlockIndex(idx);
     },
+    // Back above the first heading (or onto a page no heading contains):
+    // Top is current again, not the last section reported.
+    onNone: () => setCurrentBlockIndex(null),
   });
   const currentKey = entries.some((e) => e.blockIndex === currentBlockIndex)
     ? (currentBlockIndex as number)
