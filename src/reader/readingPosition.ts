@@ -66,6 +66,15 @@ export function isFinishedOffset(offset: number, total: number): boolean {
 }
 
 /**
+ * inNotesOffset — spec #66: `total` is the end of the MAIN text
+ * (mainTextLength — every completion total is), so an offset past it is a position inside the notes.
+ * A zero total keeps the opened-zero-length-article edge (finished).
+ */
+export function inNotesOffset(offset: number, total: number): boolean {
+  return total > 0 && offset > total;
+}
+
+/**
  * Scroll-bottom tolerance (260908-oht): within this many CSS px of the
  * document bottom counts as "reached the end" (sub-pixel/rounding slack).
  */
@@ -138,9 +147,10 @@ export function isFinalPage(pageIndex: number, pageCount: number): boolean {
  * Issue #58 — the notes at the end of an article are reference material,
  * not part of reading it through: the article finishes at the end of the
  * main text, never by reaching (or walking) the notes. A saved position
- * inside the notes lies past this pin and reads finished by the threshold's
- * clamp; keeping excursion positions out of the notes is the Footnote
- * excursion's job (CONTEXT.md).
+ * inside the notes lies past this pin and is not a completion signal at all
+ * (inNotesOffset; spec #66 review S1): it neither finishes the article nor
+ * un-finishes one already finished (the completion record carried in at the
+ * notes transition — locationStore.saveLocation — stands).
  */
 export function endPinOffset(article: CanonicalArticle): number {
   return mainTextLength(article);

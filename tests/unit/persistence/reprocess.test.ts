@@ -5,7 +5,11 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import fakeIndexedDB, { IDBKeyRange } from "fake-indexeddb";
 import { Dexie } from "dexie";
 import { ArticleSchema, type CanonicalArticle } from "../../../src/content/schema";
-import { deriveQuoteSelector, normalizeText } from "../../../src/content/normalizeText";
+import {
+  deriveQuoteSelector,
+  mainTextLength,
+  normalizeText,
+} from "../../../src/content/normalizeText";
 import type { IngestionSuccess } from "../../../src/ingestion/IngestionClient";
 
 Dexie.dependencies.indexedDB = fakeIndexedDB;
@@ -300,5 +304,38 @@ describe("reprocessing a URL article", () => {
     await applyReprocess(lost);
     expect(await db.location.get([saved.id, 2])).toBeUndefined();
     expect(await db.location.get([saved.id, 1])).toBeDefined();
+  });
+  // Spec #66 (review S1) — finishing is reaching the end of the MAIN text,
+  // so a finished footnoted article carries its finish to the proposed
+  // article's main-text end, never to the end of its notes (a position
+  // there no longer reads finished).
+  it("keeps a finished footnoted article finished at the main-text end", async () => {
+    const db = await import("../../../src/persistence/db").then((m) => m.db);
+    const footnoted = ArticleSchema.parse({
+      ...saved,
+      footnotes: [
+        { id: "fn-1", content: [{ text: "A note that is reference material.", marks: [] }] },
+      ],
+    });
+    await db.articles.put(footnoted);
+    const { previewReprocess } = await import("../../../src/persistence/reprocessStore");
+    await db.location.put({
+      schemaVersion: 1,
+      articleId: saved.id,
+      revision: 1,
+      graphemeOffset: mainTextLength(footnoted),
+      savedAt: "2026-01-03T00:00:00Z",
+    });
+    const preview = await previewReprocess(
+      saved.id,
+      // The note itself was reworded, so the text after the pin moved too.
+      candidate({
+        footnotes: [{ id: "fn-1", content: [{ text: "A reworded note.", marks: [] }] }],
+      }),
+    );
+    expect(preview.position).toEqual({ kind: "kept", offset: mainTextLength(preview.proposed) });
+    expect(mainTextLength(preview.proposed)).toBeLessThan(
+      [...normalizeText(preview.proposed)].length,
+    );
   });
 });

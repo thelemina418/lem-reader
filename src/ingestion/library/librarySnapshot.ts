@@ -316,7 +316,7 @@ export async function loadLibrarySnapshot(): Promise<LibrarySnapshot> {
   // Issue #58 — the total is the MAIN TEXT (mainTextLength): the notes are
   // reference material, so progress, completion, and Estimated reading time
   // all measure against the end of the main text. A saved position inside
-  // the notes lies past that end and reads finished.
+  // the notes lies past that end and is not a completion signal (spec #66).
   const totalsByArticleId = new Map<string, number>();
   for (const article of articles) {
     totalsByArticleId.set(article.id, mainTextLength(article));

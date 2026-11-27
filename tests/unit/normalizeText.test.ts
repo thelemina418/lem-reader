@@ -178,3 +178,71 @@ describe("multi-paragraph footnote bodies (issue #59)", () => {
     ]);
   });
 });
+
+// Spec #66 review S3 (story 31) — "The marker graphemes stay in the article's
+// normalized text, so ... existing highlight quotes that include a marker are
+// unchanged": a footnote-ref run contributes its graphemes with no inserted
+// separator where the source had none, exactly as the old flattened ingest
+// ("Claim1 more.") did.
+describe("footnote marker runs join their sentence without a separator", () => {
+  const marker = (text: string) => ({
+    text,
+    marks: [{ type: "footnote-ref" as const, footnoteId: "fn-1", occurrence: 1 }],
+  });
+  const withRuns = (content: unknown[]) =>
+    parseArticle({
+      ...baseArticle,
+      blocks: [{ kind: "paragraph", content }],
+      footnotes: [{ id: "fn-1", content: [{ text: "A note.", marks: [] }] }],
+    });
+
+  it('pins "Claim1 more." for a marker glued to its word', () => {
+    const article = withRuns([
+      { text: "Claim", marks: [] },
+      marker("1"),
+      { text: " more.", marks: [] },
+    ]);
+    expect(normalizeText(article).split(BLOCK_SEPARATOR)[0]).toBe("Claim1 more.");
+  });
+
+  it("keeps trailing punctuation glued too", () => {
+    const article = withRuns([
+      { text: "It holds", marks: [] },
+      marker("2"),
+      { text: ".", marks: [] },
+    ]);
+    expect(normalizeText(article).split(BLOCK_SEPARATOR)[0]).toBe("It holds2.");
+  });
+
+  it("keeps source whitespace around a marker as one space", () => {
+    const article = withRuns([
+      { text: "Claim ", marks: [] },
+      marker("[1]"),
+      { text: "more.", marks: [] },
+    ]);
+    expect(normalizeText(article).split(BLOCK_SEPARATOR)[0]).toBe("Claim [1]more.");
+    const spaced = withRuns([
+      { text: "Claim", marks: [] },
+      { text: " ", marks: [] },
+      marker("[1]"),
+      { text: " more.", marks: [] },
+    ]);
+    expect(normalizeText(spaced).split(BLOCK_SEPARATOR)[0]).toBe("Claim [1] more.");
+  });
+
+  it("other run boundaries keep the one-space join", () => {
+    const article = parseArticle({
+      ...baseArticle,
+      blocks: [
+        {
+          kind: "paragraph",
+          content: [
+            { text: "Plain", marks: [] },
+            { text: "bold", marks: [{ type: "strong" }] },
+          ],
+        },
+      ],
+    });
+    expect(normalizeText(article)).toBe("Plain bold");
+  });
+});

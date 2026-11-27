@@ -106,9 +106,10 @@ describe("inline footnote reference destinations (issue #55)", () => {
     expect(index.clusters.slice(first!, first! + 3).join("")).toBe("[1]");
     expect(index.clusters.slice(second!, second! + 3).join("")).toBe("[1]");
     expect(second!).toBeGreaterThan(first!);
-    // Known-good literal: the paragraph stream is "The 👩‍👩‍👧‍👦 claim [1] holds, and again [1] ."
-    expect(text).toContain("The 👩‍👩‍👧‍👦 claim [1] holds, and again [1] .");
-    expect(first! - index.blockStartOffsets[1]!).toBe("The X claim ".length);
+    // Known-good literal: markers keep their source spacing (spec #66 S3),
+    // so the paragraph stream is "The 👩‍👩‍👧‍👦 claim[1] holds, and again[1]."
+    expect(text).toContain("The 👩‍👩‍👧‍👦 claim[1] holds, and again[1].");
+    expect(first! - index.blockStartOffsets[1]!).toBe("The X claim".length);
   });
 
   it.each(["blockquote", "bulleted-list"] as const)(

@@ -41,6 +41,8 @@ import type { ArticleBodyHighlight } from "../content/render/BlockRenderer";
 import type { ListItemSlices } from "../content/render/BlockRenderer";
 import { resolveBlockSlice, footnoteBodyBlock } from "./splitBlock";
 import { FootnoteReturns } from "../content/render/FootnoteReturns";
+import { LegacyReferenceAnchorsContext } from "../content/render/InlineRenderer";
+import { legacyReferenceAnchorIds } from "../content/footnoteReferences";
 import {
   BLOCK_SEPARATOR,
   blockNormalizedText,
@@ -160,138 +162,140 @@ export function PageFragmentView({
   // entries render ONLY in the footnotes region below.
   const bodyEntries = fragment.blocks.filter((entry) => entry.footnoteIndex === undefined);
   return (
-    <section className="page-fragment" aria-label={`Page ${pageIndex + 1}`} style={style}>
-      {bodyEntries.map((entry, i) => {
-        const sourceBlock = article.blocks[entry.blockIndex]!;
-        const resolved = resolveBlockSlice(
-          sourceBlock,
-          entry.startGrapheme,
-          entry.endGrapheme,
-          lang,
-        );
-        // D5-16 cross-fragment slicing: sliceHighlightsForEntry computes this
-        // entry's article-global visible range, intersects each highlight's
-        // range with it, and translates non-empty intersections back to
-        // ENTRY-LOCAL coordinates. The unified slicer then walks the resolved
-        // (already sliced) block with origin 0 + the entry's D-05 visible
-        // length, producing every kind's slice shape in one recursion. A
-        // split-block highlight produces a slice on EACH containing fragment —
-        // both fragments' <mark> elements share the same data-highlight-id.
-        // (Both coordinates are D-05 now — Spike 0007 F2 reconciliation — so
-        // the article-global translation is exact, and the slicer's per-kind
-        // output is byte-identical to the scrolling twin's.)
-        let unified: ReturnType<typeof sliceBlockHighlights> = null;
-        // Issue #42: the spoken marker rides the same intersection path —
-        // one synthetic entry appended to the page's annotation highlights.
-        const entryHighlights: readonly ArticleBodyHighlight[] =
-          spokenRange != null
-            ? [...(highlights ?? []), spokenMarkerEntry(spokenRange)]
-            : (highlights ?? []);
-        if (entryHighlights.length > 0) {
-          const entrySlices = sliceHighlightsForEntry(
-            entryHighlights,
-            article,
-            entry.blockIndex,
+    <LegacyReferenceAnchorsContext.Provider value={legacyReferenceAnchorIds(article)}>
+      <section className="page-fragment" aria-label={`Page ${pageIndex + 1}`} style={style}>
+        {bodyEntries.map((entry, i) => {
+          const sourceBlock = article.blocks[entry.blockIndex]!;
+          const resolved = resolveBlockSlice(
+            sourceBlock,
             entry.startGrapheme,
             entry.endGrapheme,
             lang,
           );
-          if (entrySlices.length > 0) {
-            // The resolved block is already the intra-entry slice; its
-            // rendered stream starts at the entry's first real grapheme
-            // (edge separators clip via sliceHighlightsForEntry) and its
-            // visible length is endGrapheme - startGrapheme minus those
-            // edge graphemes (both D-05).
-            // paragraph/heading (inline), blockquote (per-child), lists
-            // (per-item), figure captions, and code segments all route
-            // through the ONE walk; footnote-reference/unsupported thread
-            // nothing by construction (D19-02). The RENDER ROUTING stays
-            // explicit: every entry renders through the SHARED BlockView
-            // via blockViewSlices — no silent bypass.
-            unified = sliceBlockHighlights({
-              block: resolved,
-              origin: 0,
-              visibleLen: entry.endGrapheme - entry.startGrapheme,
-              highlights: entrySlices,
+          // D5-16 cross-fragment slicing: sliceHighlightsForEntry computes this
+          // entry's article-global visible range, intersects each highlight's
+          // range with it, and translates non-empty intersections back to
+          // ENTRY-LOCAL coordinates. The unified slicer then walks the resolved
+          // (already sliced) block with origin 0 + the entry's D-05 visible
+          // length, producing every kind's slice shape in one recursion. A
+          // split-block highlight produces a slice on EACH containing fragment —
+          // both fragments' <mark> elements share the same data-highlight-id.
+          // (Both coordinates are D-05 now — Spike 0007 F2 reconciliation — so
+          // the article-global translation is exact, and the slicer's per-kind
+          // output is byte-identical to the scrolling twin's.)
+          let unified: ReturnType<typeof sliceBlockHighlights> = null;
+          // Issue #42: the spoken marker rides the same intersection path —
+          // one synthetic entry appended to the page's annotation highlights.
+          const entryHighlights: readonly ArticleBodyHighlight[] =
+            spokenRange != null
+              ? [...(highlights ?? []), spokenMarkerEntry(spokenRange)]
+              : (highlights ?? []);
+          if (entryHighlights.length > 0) {
+            const entrySlices = sliceHighlightsForEntry(
+              entryHighlights,
+              article,
+              entry.blockIndex,
+              entry.startGrapheme,
+              entry.endGrapheme,
               lang,
-            });
-          }
-        }
-        const {
-          highlightSlices,
-          childHighlightSlices,
-          itemHighlightSlices,
-          captionHighlightSlices,
-          codeSegments,
-        } = blockViewSlices(unified);
-        // Per-page first-occurrence pass (Plan 19-04): claim isFirst in
-        // DOCUMENT order across every slice shape this entry produced —
-        // blockquote children walk in render order, list items recurse
-        // depth-first in render order, caption slices and code segments
-        // walk their ordered arrays. Exactly one slice per highlight id
-        // keeps the DOM id on this mounted page.
-        if (childHighlightSlices) {
-          for (const childSlices of childHighlightSlices) {
-            if (childSlices) {
-              claimSlicesFirstOccurrence(childSlices, seenHighlightIds);
+            );
+            if (entrySlices.length > 0) {
+              // The resolved block is already the intra-entry slice; its
+              // rendered stream starts at the entry's first real grapheme
+              // (edge separators clip via sliceHighlightsForEntry) and its
+              // visible length is endGrapheme - startGrapheme minus those
+              // edge graphemes (both D-05).
+              // paragraph/heading (inline), blockquote (per-child), lists
+              // (per-item), figure captions, and code segments all route
+              // through the ONE walk; footnote-reference/unsupported thread
+              // nothing by construction (D19-02). The RENDER ROUTING stays
+              // explicit: every entry renders through the SHARED BlockView
+              // via blockViewSlices — no silent bypass.
+              unified = sliceBlockHighlights({
+                block: resolved,
+                origin: 0,
+                visibleLen: entry.endGrapheme - entry.startGrapheme,
+                highlights: entrySlices,
+                lang,
+              });
             }
           }
-        }
-        if (highlightSlices) {
-          claimSlicesFirstOccurrence(highlightSlices, seenHighlightIds);
-        }
-        if (itemHighlightSlices) {
-          claimItemSlicesFirstOccurrence(itemHighlightSlices, seenHighlightIds);
-        }
-        if (captionHighlightSlices) {
-          claimSlicesFirstOccurrence(captionHighlightSlices, seenHighlightIds);
-        }
-        if (codeSegments) {
-          claimCodeSegmentsFirstOccurrence(codeSegments, seenHighlightIds);
-        }
-        return (
-          <BlockView
-            key={i}
-            block={resolved}
-            // D5-08 paginated-mode capture binding: emit data-block-index on
-            // EVERY fragment entry so captureSelection's findBlockAncestor
-            // resolves the visible page-fragment blocks (not just the
-            // scrolling ArticleBody / hidden measurement body). For a sliced
-            // entry, data-block-grapheme-start carries the slice's intra-
-            // block start offset so capture can offset the intra-block range
-            // (the slice's textContent is a substring of the full block;
-            // without this offset the raw→norm map would misalign).
-            data-block-index={entry.blockIndex}
-            data-block-grapheme-start={entry.startGrapheme}
-            highlightSlices={highlightSlices}
-            childHighlightSlices={childHighlightSlices}
-            itemHighlightSlices={itemHighlightSlices}
-            captionHighlightSlices={captionHighlightSlices}
-            codeSegments={codeSegments}
-          />
-        );
-      })}
-      {footnoteEntries.length > 0 && (
-        <section aria-label="Footnotes">
-          <ol>
-            {footnoteEntries.map((entry) => (
-              <FootnoteEntryView
-                key={`fn-${entry.footnoteIndex}`}
-                entry={entry}
-                article={article}
-                lang={lang}
-                highlights={
-                  spokenRange != null
-                    ? [...(highlights ?? []), spokenMarkerEntry(spokenRange)]
-                    : (highlights ?? [])
-                }
-                seenHighlightIds={seenHighlightIds}
-              />
-            ))}
-          </ol>
-        </section>
-      )}
-    </section>
+          const {
+            highlightSlices,
+            childHighlightSlices,
+            itemHighlightSlices,
+            captionHighlightSlices,
+            codeSegments,
+          } = blockViewSlices(unified);
+          // Per-page first-occurrence pass (Plan 19-04): claim isFirst in
+          // DOCUMENT order across every slice shape this entry produced —
+          // blockquote children walk in render order, list items recurse
+          // depth-first in render order, caption slices and code segments
+          // walk their ordered arrays. Exactly one slice per highlight id
+          // keeps the DOM id on this mounted page.
+          if (childHighlightSlices) {
+            for (const childSlices of childHighlightSlices) {
+              if (childSlices) {
+                claimSlicesFirstOccurrence(childSlices, seenHighlightIds);
+              }
+            }
+          }
+          if (highlightSlices) {
+            claimSlicesFirstOccurrence(highlightSlices, seenHighlightIds);
+          }
+          if (itemHighlightSlices) {
+            claimItemSlicesFirstOccurrence(itemHighlightSlices, seenHighlightIds);
+          }
+          if (captionHighlightSlices) {
+            claimSlicesFirstOccurrence(captionHighlightSlices, seenHighlightIds);
+          }
+          if (codeSegments) {
+            claimCodeSegmentsFirstOccurrence(codeSegments, seenHighlightIds);
+          }
+          return (
+            <BlockView
+              key={i}
+              block={resolved}
+              // D5-08 paginated-mode capture binding: emit data-block-index on
+              // EVERY fragment entry so captureSelection's findBlockAncestor
+              // resolves the visible page-fragment blocks (not just the
+              // scrolling ArticleBody / hidden measurement body). For a sliced
+              // entry, data-block-grapheme-start carries the slice's intra-
+              // block start offset so capture can offset the intra-block range
+              // (the slice's textContent is a substring of the full block;
+              // without this offset the raw→norm map would misalign).
+              data-block-index={entry.blockIndex}
+              data-block-grapheme-start={entry.startGrapheme}
+              highlightSlices={highlightSlices}
+              childHighlightSlices={childHighlightSlices}
+              itemHighlightSlices={itemHighlightSlices}
+              captionHighlightSlices={captionHighlightSlices}
+              codeSegments={codeSegments}
+            />
+          );
+        })}
+        {footnoteEntries.length > 0 && (
+          <section aria-label="Footnotes">
+            <ol>
+              {footnoteEntries.map((entry) => (
+                <FootnoteEntryView
+                  key={`fn-${entry.footnoteIndex}`}
+                  entry={entry}
+                  article={article}
+                  lang={lang}
+                  highlights={
+                    spokenRange != null
+                      ? [...(highlights ?? []), spokenMarkerEntry(spokenRange)]
+                      : (highlights ?? [])
+                  }
+                  seenHighlightIds={seenHighlightIds}
+                />
+              ))}
+            </ol>
+          </section>
+        )}
+      </section>
+    </LegacyReferenceAnchorsContext.Provider>
   );
 }
 

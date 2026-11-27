@@ -401,6 +401,41 @@ ${prose("One B")}`,
     expect(anchors).toEqual(["fn-ref-1", "fn-ref-2", "fn-ref-3", "fn-ref-2-2"]);
   });
 
+  // Review smell — renumberBlocks walks blocks on its own; pin that the
+  // occurrences it assigns are the document order footnoteReferenceSpans
+  // reads (quotations and figure captions included), so every
+  // reference keeps a distinct anchor and each note's returns line up.
+  it("numbers occurrences in the same document order the reader resolves", async () => {
+    const { chapters } = await epubToBooks(
+      buildEpub([
+        {
+          href: "ch1a.xhtml",
+          title: "Chapter One",
+          body: `<h1>Chapter One</h1>
+<p>Early claim<a href="notes.xhtml#note-2" epub:type="noteref">2</a> in prose.</p>
+${prose("One A")}`,
+        },
+        {
+          href: "ch1b.xhtml",
+          title: "Chapter One, continued",
+          inToc: false,
+          body: `${prose("One B")}
+<blockquote><p>Quoted<a href="notes.xhtml#note-2" epub:type="noteref">2</a> words.</p></blockquote>
+<figure><img src="https://example.com/map.png" alt="A map"/><figcaption>The map<a href="notes.xhtml#note-2" epub:type="noteref">2</a>.</figcaption></figure>
+${prose("One B")}`,
+        },
+        NOTES_FILE,
+      ]),
+    );
+    const spans = footnoteReferenceSpans(asArticle(chapterTitled(chapters, "Chapter One")));
+    expect(spans.map((s) => `${s.footnoteId}#${s.occurrence}`)).toEqual([
+      "fn-1#1",
+      "fn-1#2",
+      "fn-1#3",
+    ]);
+    expect(new Set(spans.map((s) => s.anchorId)).size).toBe(spans.length);
+  });
+
   it("admits the book through the orchestrator with each chapter's notes", async () => {
     const response = await ingest({ epub: Buffer.from(buildEpub(SPLIT_BOOK)).toString("base64") });
     if (!response.ok || !("book" in response)) throw new Error(JSON.stringify(response));

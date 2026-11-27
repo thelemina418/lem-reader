@@ -92,8 +92,8 @@ interface UseScrollSaveOptions {
    * Spec #66 / issue #57 — the Footnote excursion's hold. While it returns a
    * number, every SCHEDULED save (scroll, page commit, listened progress)
    * persists that offset — the reference the reader followed — instead of
-   * where the reader is in the notes. Explicit saveLocationNow calls stay
-   * caller-owned (Mark read, chapter departure decide their own offset).
+   * where the reader is in the notes. saveLocationNow is held too (review
+   * S2); callers that leave the excursion on purpose end it first.
    */
   heldOffset?: () => number | null;
 }
@@ -180,7 +180,14 @@ export function useScrollSave(
     const loc = pendingRef.current;
     if (!loc) return;
     pendingRef.current = null;
-    saveLocation(loc)
+    // Spec #66 — the end-pin lets the save carry completion into the notes
+    // (a notes position is not itself a completion signal).
+    const current = articleRef.current;
+    const mainTextEnd =
+      current !== null && current.id === loc.articleId && current.revision === loc.revision
+        ? endPinOffset(current)
+        : undefined;
+    saveLocation(loc, { mainTextEnd })
       .then(() => {
         // Two failure domains, kept separate: the .catch below routes WRITE
         // failures to STATE-05 — the broadcast is not a write, so a throwing
@@ -255,11 +262,16 @@ export function useScrollSave(
   const saveLocationNow = useCallback<ScheduleLocationSave>((graphemeOffset: number) => {
     const currentArticle = articleRef.current;
     if (!currentArticle) return;
+    // Spec #66 review S2 — the excursion's hold covers immediate saves too
+    // (story 14: closing mid-excursion resumes at the reference). A caller
+    // that deliberately leaves the excursion (Mark read, a chapter
+    // departure) ends it before saving.
+    const held = optionsRef.current?.heldOffset?.() ?? null;
     pendingRef.current = {
       schemaVersion: 1,
       articleId: currentArticle.id,
       revision: currentArticle.revision,
-      graphemeOffset,
+      graphemeOffset: held ?? graphemeOffset,
       savedAt: new Date().toISOString(),
     };
     if (saveTimer.current !== null) {
@@ -300,8 +312,8 @@ export function useScrollSave(
       // TEXT: once the notes region comes into view while the top of the
       // viewport is still in the main text, persist the end-pin (the notes
       // are reference material — the reader never has to walk them). A top
-      // offset already inside the notes saves as itself (it lies past the
-      // pin, so it reads finished, and restores into its note).
+      // offset already inside the notes saves as itself (it restores into
+      // its note; it never finishes the article — spec #66).
       const articleEl = articleElRef.current;
       if (
         currentArticle !== null &&

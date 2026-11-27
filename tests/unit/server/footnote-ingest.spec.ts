@@ -497,10 +497,11 @@ describe("half-matched footnotes (issue #60)", () => {
     const json = JSON.stringify(article.blocks);
     expect(json).not.toContain("#fn9");
     expect(json).not.toContain("#fn8");
-    expect(normalizeText(article)).toContain("A second point 2 follows9 and8 again.");
+    expect(normalizeText(article)).toContain("A second point2 follows9 and8 again.");
   });
 
-  it("a note whose only reference sits in a figure caption is still listed", async () => {
+  // Review S4 (stories 2/44/45): a caption marker is a linked reference too.
+  it("a reference in a figure caption links to its note", async () => {
     const html = PANDOC_HTML.replace(
       `<p>${FILLER}</p>`,
       `<figure><img src="https://example.com/map.png" alt="A map"><figcaption>The map<a href="#fn2" id="fnref2b"><sup>2</sup></a>.</figcaption></figure><p>${FILLER}</p>`,
@@ -512,9 +513,18 @@ describe("half-matched footnotes (issue #60)", () => {
       .replace('href="#fnref2"', 'href="#fnref2b"');
     const { article } = await ingest(html);
     expect(noteTexts(article)).toContain("The second note’s text.");
-    expect(refMarks(article).map((r: { footnoteId: string }) => r.footnoteId)).not.toContain(
+    const figure = article.blocks.find((b) => b.kind === "figure");
+    if (figure?.kind !== "figure") throw new Error("expected the figure");
+    expect(figure.caption).toEqual([
+      { text: "The map", marks: [] },
+      { text: "2", marks: [{ type: "footnote-ref", footnoteId: "fn-2", occurrence: 1 }] },
+      { text: ".", marks: [] },
+    ]);
+    // Document order: the caption precedes the body's fn-1 reference.
+    expect(refMarks(article).map((r: { footnoteId: string }) => r.footnoteId)).toEqual([
       "fn-2",
-    );
+      "fn-1",
+    ]);
   });
 
   it("keeps every note of an article with several hundred", async () => {
@@ -568,5 +578,32 @@ describe("the note cap (issue #60)", () => {
     if (!result.ok || !("article" in result)) throw new Error("unreachable");
     expect(result.article.footnotes).toHaveLength(2);
     expect(result.article.ingestionMeta?.extractionWarnings).toEqual([]);
+  });
+});
+
+// Spec #66 review H3 (honesty) — a reference with no visible marker (an
+// empty or image-only link) is not rewritten, but its note still leaves the
+// flow; its same-page link must not stay behind pointing at nothing.
+describe("a reference with no visible marker (review H3)", () => {
+  it("is unlinked once its note is extracted", async () => {
+    const { detectLinkedFootnotes } = await import("../../../server/footnoteLinks");
+    const { JSDOM } = await import("jsdom");
+    const dom = new JSDOM(
+      `<!doctype html><body><article>
+      <p>The claim<a href="#fn1" id="fnref1"><sup>1</sup></a> holds.</p>
+      <p>A silent one<a href="#fn2" id="fnref2"><img src="https://example.com/m.png" alt=""></a> here.</p>
+      <ol>
+        <li id="fn1"><p>First note.<a href="#fnref1">↩</a></p></li>
+        <li id="fn2"><p>Second note.<a href="#fnref2">↩</a></p></li>
+      </ol>
+    </article></body>`,
+      { url: "https://example.com/essay" },
+    );
+    const found = detectLinkedFootnotes(dom.window.document);
+    expect(found.noteHtml).toHaveLength(2);
+    const doc = dom.window.document;
+    expect(doc.querySelector("#fn2")).toBeNull(); // the note left the flow
+    expect(doc.querySelector('a[href="#fn2"]')).toBeNull(); // so no link points at it
+    expect(doc.querySelector("img")).not.toBeNull(); // its content stays
   });
 });

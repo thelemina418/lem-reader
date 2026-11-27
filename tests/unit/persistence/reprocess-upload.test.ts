@@ -110,4 +110,22 @@ describe("reprocessing an uploaded article", () => {
       ),
     ).rejects.toBeInstanceOf(ReprocessRefusal);
   });
+
+  // Spec #66 review S7 — "PDF ingestion is unchanged": PDF articles keep
+  // their own repair flow and are not offered reprocessing.
+  it("does not offer reprocessing for a PDF article", async () => {
+    const { isUploadSource, previewUploadReprocess, ReprocessRefusal } =
+      await import("../../../src/persistence/reprocessStore");
+    const { db } = await import("../../../src/persistence/db");
+    expect(isUploadSource("pdf")).toBe(false);
+    await db.articles.put({
+      ...saved,
+      ingestionMeta: { ...saved.ingestionMeta!, source: "pdf", origin: "upload" },
+    });
+    await expect(
+      previewUploadReprocess(saved.id, file("paper.pdf"), async () =>
+        ingested("sha256:original-bytes"),
+      ),
+    ).rejects.toBeInstanceOf(ReprocessRefusal);
+  });
 });

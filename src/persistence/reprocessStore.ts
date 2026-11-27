@@ -29,6 +29,7 @@
 //   - Chapter-targeted completions and collection entries whose chapter no
 //     longer corresponds are disclosed and need explicit acceptance.
 //   - Image assets are replaced together with the article.
+import type { Collection, Table } from "dexie";
 import {
   ArticleSchema,
   BookSchema,
@@ -45,16 +46,16 @@ import {
   BLOCK_SEPARATOR,
   deriveQuoteSelector,
   graphemeLength,
+  mainTextLength,
   normalizeText,
   resolveQuoteSelector,
 } from "../content/normalizeText";
 import { deriveWorkStructure } from "../content/structure";
-import { isFinishedOffset } from "../reader/readingPosition";
+import { inNotesOffset, isFinishedOffset } from "../reader/readingPosition";
 import {
   ingestEpub,
   ingestHtml,
   ingestMarkdown,
-  ingestPdf,
   ingestUrl,
   IngestionError,
   type EpubIngestionSuccess,
@@ -62,7 +63,7 @@ import {
   type ValidatedAsset,
 } from "../ingestion/IngestionClient";
 import { bytesToBase64 } from "../ingestion/ingestCopy";
-import { EPUB_MAX_BYTES, PDF_MAX_BYTES } from "../ingestion/types";
+import { EPUB_MAX_BYTES } from "../ingestion/types";
 import { bookAssetsForChapters } from "../ingestion/addToLibrary";
 import type { BookAsset } from "./booksStore";
 import { db, type AssetRecordRow } from "./db";
@@ -133,22 +134,19 @@ async function loadSaved(articleId: string): Promise<CanonicalArticle> {
   return parsed.data;
 }
 
+/** Every revision's rows of one article, by the [articleId+revision] key. */
+function everyRevision<T, K>(table: Table<T, K>, articleId: string): Collection<T, K> {
+  return table
+    .where("[articleId+revision]")
+    .between([articleId, 0], [articleId, Number.MAX_SAFE_INTEGER]);
+}
+
 /** Everything apply reads, serialized in a stable order. */
 async function snapshotOf(articleId: string): Promise<string> {
-  const range: [[string, number], [string, number]] = [
-    [articleId, 0],
-    [articleId, Number.MAX_SAFE_INTEGER],
-  ];
   const [row, highlights, locations, completions, collections] = await Promise.all([
     db.articles.get(articleId),
-    db.highlights
-      .where("[articleId+revision]")
-      .between(...range)
-      .toArray(),
-    db.location
-      .where("[articleId+revision]")
-      .between(...range)
-      .toArray(),
+    everyRevision(db.highlights, articleId).toArray(),
+    everyRevision(db.location, articleId).toArray(),
     db.completions.toArray(),
     db.collections.toArray(),
   ]);
@@ -237,10 +235,7 @@ export function passageChanges(before: string[], after: string[]): PassageChange
 
 /** The latest saved position across revisions (the library's own fold). */
 async function latestLocation(articleId: string): Promise<LocationRecord | undefined> {
-  const rows = await db.location
-    .where("[articleId+revision]")
-    .between([articleId, 0], [articleId, Number.MAX_SAFE_INTEGER])
-    .toArray();
+  const rows = await everyRevision(db.location, articleId).toArray();
   return rows
     .flatMap((row) => {
       const parsed = LocationRecordSchema.safeParse(row);
@@ -258,8 +253,15 @@ function carryPosition(
   if (!location) return { kind: "none" };
   if (location.revision !== saved.revision) return { kind: "unmatched" };
   const total = graphemeLength(saved);
-  if (isFinishedOffset(location.graphemeOffset, total))
-    return { kind: "kept", offset: graphemeLength(proposed) };
+  // Spec #66 — finished is reaching the end of the MAIN text; a finish
+  // carries to the proposed article's main-text end (its end-pin), never to
+  // the end of its notes. A position inside the notes re-anchors by quote.
+  const mainEnd = mainTextLength(saved);
+  if (
+    !inNotesOffset(location.graphemeOffset, mainEnd) &&
+    isFinishedOffset(location.graphemeOffset, mainEnd)
+  )
+    return { kind: "kept", offset: mainTextLength(proposed) };
   if (location.graphemeOffset === 0) return { kind: "kept", offset: 0 };
   const start = Math.min(location.graphemeOffset, total);
   const quote = deriveQuoteSelector(saved, { start, end: Math.min(total, start + 48) });
@@ -300,10 +302,7 @@ async function planRevision(
 ): Promise<ReprocessPlan> {
   const articleId = saved.id;
   const highlights: HighlightConsequence[] = [];
-  for (const row of await db.highlights
-    .where("[articleId+revision]")
-    .between([articleId, 0], [articleId, Number.MAX_SAFE_INTEGER])
-    .toArray()) {
+  for (const row of await everyRevision(db.highlights, articleId).toArray()) {
     const parsed = HighlightRecordSchema.safeParse(row);
     if (!parsed.success) continue;
     const resolved = resolveQuoteSelector(proposed, parsed.data.quote, parsed.data.position);
@@ -352,9 +351,12 @@ export async function previewUrlReprocess(
 
 /** Uploaded article sources (#64): Lem Reader keeps no original files, so
  * the reader chooses the original again. An HTML file upload is stored as
- * "paste" (the client posts its text through the paste channel), so paste
- * articles take the same path: the fingerprint check decides. */
-export const UPLOAD_SOURCES = ["markdown", "html-upload", "paste", "pdf"] as const;
+ * "paste" (the client posts its text through the paste channel, origin
+ * "paste" too), so it cannot be told apart from typed paste: paste articles
+ * take the same path and the fingerprint check decides. PDF is not here
+ * (spec #66: "PDF ingestion is unchanged" — PDF articles have their own
+ * repair flow). */
+export const UPLOAD_SOURCES = ["markdown", "html-upload", "paste"] as const;
 export type UploadSource = (typeof UPLOAD_SOURCES)[number];
 
 export const isUploadSource = (source: ArticleSource | undefined): source is UploadSource =>
@@ -371,10 +373,6 @@ export async function ingestOriginalFile(
   file: File,
   source: UploadSource,
 ): Promise<IngestionSuccess> {
-  if (source === "pdf") {
-    if (file.size > PDF_MAX_BYTES) throw new IngestionError("pdf-too-large");
-    return ingestPdf(bytesToBase64(new Uint8Array(await file.arrayBuffer())), file.name);
-  }
   if (file.size > 5 * 1024 * 1024) throw new IngestionError("response-too-large");
   if (source === "markdown") return ingestMarkdown(await file.text(), file.name);
   return ingestHtml(await file.text());
@@ -461,10 +459,7 @@ async function writeRevision(
   const { articleId, proposed } = plan;
   if (plan.position.kind === "kept") {
     const latest = await latestLocation(articleId);
-    await db.location
-      .where("[articleId+revision]")
-      .between([articleId, 0], [articleId, Number.MAX_SAFE_INTEGER])
-      .delete();
+    await everyRevision(db.location, articleId).delete();
     // The savedAt stays the reader's own: reprocessing is not reading.
     await db.location.put({
       schemaVersion: 1,
@@ -581,21 +576,11 @@ async function bookSnapshotOf(bookId: string): Promise<string> {
   const chapterIds = row ? await bookChapterIds(BookSchema.parse(row)) : [];
   const chapters = [];
   for (const id of chapterIds) {
-    const range: [[string, number], [string, number]] = [
-      [id, 0],
-      [id, Number.MAX_SAFE_INTEGER],
-    ];
     chapters.push({
       id,
       row: await db.articles.get(id),
-      highlights: await db.highlights
-        .where("[articleId+revision]")
-        .between(...range)
-        .toArray(),
-      locations: await db.location
-        .where("[articleId+revision]")
-        .between(...range)
-        .toArray(),
+      highlights: await everyRevision(db.highlights, id).toArray(),
+      locations: await everyRevision(db.location, id).toArray(),
       notes: await db.articleNotes.where("articleId").equals(id).toArray(),
     });
   }
@@ -681,10 +666,7 @@ export async function previewBookReprocess(
   const collections = await db.collections.toArray();
   for (const chapter of savedChapters.filter((c) => !matched.has(c.id))) {
     const title = chapter.provenance.title;
-    const highlightCount = await db.highlights
-      .where("[articleId+revision]")
-      .between([chapter.id, 0], [chapter.id, Number.MAX_SAFE_INTEGER])
-      .count();
+    const highlightCount = await everyRevision(db.highlights, chapter.id).count();
     removed.push({ articleId: chapter.id, title, highlightCount });
     consequences.push({
       kind: "chapter-removed",
@@ -781,28 +763,15 @@ export async function applyBookReprocess(
         createdAt,
       );
       for (const { articleId } of preview.removed) {
-        const range: [[string, number], [string, number]] = [
-          [articleId, 0],
-          [articleId, Number.MAX_SAFE_INTEGER],
-        ];
-        const highlightIds = (
-          await db.highlights
-            .where("[articleId+revision]")
-            .between(...range)
-            .primaryKeys()
-        ).map((k) => (Array.isArray(k) ? String(k[0]) : String(k)));
+        const highlightIds = (await everyRevision(db.highlights, articleId).primaryKeys()).map(
+          (k) => (Array.isArray(k) ? String(k[0]) : String(k)),
+        );
         if (highlightIds.length > 0) {
           await db.notes.where("highlightId").anyOf(highlightIds).delete();
           await db.noteDrafts.bulkDelete(highlightIds);
         }
-        await db.highlights
-          .where("[articleId+revision]")
-          .between(...range)
-          .delete();
-        await db.location
-          .where("[articleId+revision]")
-          .between(...range)
-          .delete();
+        await everyRevision(db.highlights, articleId).delete();
+        await everyRevision(db.location, articleId).delete();
         await db.articleNotes.where("articleId").equals(articleId).delete();
         await db.articleNoteDrafts.where("articleId").equals(articleId).delete();
         await db.assets.where("articleId").equals(articleId).delete();

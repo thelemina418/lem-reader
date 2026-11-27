@@ -13,7 +13,6 @@ import "./pdfRepair.css";
 
 const ORIGINAL_ACCEPT: Record<string, string> = {
   markdown: ".md,text/markdown",
-  pdf: ".pdf,application/pdf",
   paste: ".html,.htm,text/html",
   "html-upload": ".html,.htm,text/html",
 };

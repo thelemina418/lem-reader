@@ -16,6 +16,7 @@ import {
   graphemeClusters,
   inlineText,
   normalizeRunText,
+  runSeparators,
 } from "./normalizeText";
 import { blockGraphemeLength } from "../pagination/anchor";
 
@@ -53,18 +54,26 @@ export function footnoteRefOf(run: InlineRun) {
   return undefined;
 }
 
-type Found = { footnoteId: string; occurrence: number; start: number; end: number };
+type Found = {
+  footnoteId: string;
+  occurrence: number;
+  start: number;
+  end: number;
+  /** The legacy block-level reference this occurrence came from. */
+  legacyBlock?: Block;
+};
 
 /** Marker spans within one inline-run array whose stream starts at `origin`,
- * under inlineText's exact rule (runs normalized, empties dropped, joined by
- * one space). */
+ * under inlineText's exact rule (runs normalized, empties dropped, joined per
+ * runSeparators — a marker glued to its word joins with no space). */
 function runSpans(runs: InlineRun[], origin: number, lang: string, out: Found[]): void {
   if (!runs.some((r) => footnoteRefOf(r) !== undefined)) return;
+  const separators = runSeparators(runs);
   let prefix = "";
-  for (const run of runs) {
+  for (const [i, run] of runs.entries()) {
     const norm = normalizeRunText(run.text);
     if (norm.length === 0) continue;
-    const lead = prefix.length > 0 ? `${prefix} ` : "";
+    const lead = separators[i] === 1 ? `${prefix} ` : prefix;
     const ref = footnoteRefOf(run);
     if (ref !== undefined) {
       const start = origin + graphemeClusters(lead, lang).length;
@@ -104,6 +113,7 @@ function blockSpans(block: Block, origin: number, lang: string, out: Found[]): v
         occurrence: 0, // numbered below — legacy rows carry no occurrence
         start: origin,
         end: origin + graphemeClusters(block.marker, lang).length,
+        legacyBlock: block,
       });
       return;
     case "blockquote":
@@ -144,22 +154,33 @@ export function footnoteReferenceSpans(
     blockSpans(block, blockStartOffsets[i]!, article.lang, found),
   );
   const legacyCount = new Map<string, number>();
+  const legacyIds = new Map<Block, string>();
   const spans = found.map((f) => {
     let occurrence = f.occurrence;
     if (occurrence === 0) {
       occurrence = (legacyCount.get(f.footnoteId) ?? 0) + 1;
       legacyCount.set(f.footnoteId, occurrence);
     }
-    return {
-      footnoteId: f.footnoteId,
-      occurrence,
-      anchorId: footnoteReferenceAnchorId(f.footnoteId, occurrence),
-      start: f.start,
-      end: f.end,
-    };
+    const anchorId = footnoteReferenceAnchorId(f.footnoteId, occurrence);
+    if (f.legacyBlock !== undefined) legacyIds.set(f.legacyBlock, anchorId);
+    return { footnoteId: f.footnoteId, occurrence, anchorId, start: f.start, end: f.end };
   });
   spanCache.set(article.blocks, spans);
+  legacyIdCache.set(article.blocks, legacyIds);
   return spans;
+}
+
+const legacyIdCache = new WeakMap<CanonicalArticle["blocks"], ReadonlyMap<Block, string>>();
+
+/**
+ * The anchor id of every legacy block-level reference, keyed by its block
+ * (review H1): legacy rows carry no occurrence, so the renderer reads the
+ * document-order numbering footnoteReferenceSpans gives them — a note cited
+ * twice gets `fn-ref-N` and `fn-ref-N-2`, matching its returns.
+ */
+export function legacyReferenceAnchorIds(article: CanonicalArticle): ReadonlyMap<Block, string> {
+  footnoteReferenceSpans(article);
+  return legacyIdCache.get(article.blocks)!;
 }
 
 /** The first reference to a note — the target of the note's return. */
@@ -169,3 +190,27 @@ export function firstFootnoteReference(
 ): FootnoteReferenceSpan | undefined {
   return footnoteReferenceSpans(article).find((s) => s.footnoteId === footnoteId);
 }
+
+// ── Reference/return vocabulary (shared by the renderer and the excursion) ──
+
+/** a, b, …, z, aa, ab, … — the K-th (1-based) return's letter. */
+export function footnoteReturnLetter(occurrence: number): string {
+  let k = occurrence;
+  let out = "";
+  while (k > 0) {
+    k -= 1;
+    out = String.fromCharCode(97 + (k % 26)) + out;
+    k = Math.floor(k / 26);
+  }
+  return out;
+}
+
+/** Issue #57 / story 9 — a reference marker is announced as a footnote link
+ * with its number. The publisher's marker text stays in the name
+ * (label-in-name), so "1" reads "Footnote 1" and "[2]" reads "Footnote [2]". */
+export function footnoteMarkerLabel(marker: string): string {
+  return `Footnote ${marker.trim()}`;
+}
+
+/** Marks the plain ↩ return; the excursion redirects it to its origin. */
+export const PLAIN_RETURN_ATTR = "data-footnote-return";

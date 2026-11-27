@@ -53,12 +53,8 @@ type ProvenancePartial = {
 // Mirrors scripts/normalize-source.ts L22-27 + src/content/schema.ts Mark
 // union. Emitted objects are structurally validated by ArticleSchema.parse at
 // the orchestrator boundary (07-05).
-type Mark =
-  | { type: "link"; href: string; title?: string }
-  | { type: "code" }
-  | { type: "strong" }
-  | { type: "em" }
-  | { type: "footnote-ref"; footnoteId: string; occurrence: number };
+// Derived from the schema's Mark union (the single source of truth).
+type Mark = InlineRun["marks"][number];
 
 /** Spec #66 / issue #55 — the inline walk's view of the detected notes:
  * which exist (a controlled `#fn-N` href is a reference only when N names a
@@ -70,11 +66,9 @@ interface FootnoteRefWalk {
   occurrences: Map<string, number>;
 }
 
-/** `notes`: the count of notes `fn-1…fn-N`, or the set of note numbers kept. */
-function newFootnoteRefWalk(notes: number | ReadonlySet<number>): FootnoteRefWalk {
-  const isNote =
-    typeof notes === "number" ? (n: number) => n <= notes : (n: number) => notes.has(n);
-  return { isNote, occurrences: new Map() };
+/** `noteNumbers`: the N of every note `fn-N` the article keeps. */
+function newFootnoteRefWalk(noteNumbers: ReadonlySet<number>): FootnoteRefWalk {
+  return { isNote: (n) => noteNumbers.has(n), occurrences: new Map() };
 }
 
 type InlineRunT = { text: string; marks: Mark[] };
@@ -454,7 +448,11 @@ function selectSrcsetCandidate(attr: string, baseUri: string): string | null {
 
 /** Build a FigureBlock from a <figure> or bare <img>; UnsupportedBlock if src
  * is not a valid http(s) URL (T-7-17 — ArticleSchema.httpUrl re-validates). */
-function figureBlock(el: Element, figureSrcResolver?: FigureSrcResolver): Block[] {
+function figureBlock(
+  el: Element,
+  figureSrcResolver?: FigureSrcResolver,
+  refs?: FootnoteRefWalk,
+): Block[] {
   const tag = el.tagName.toLowerCase();
   const img = tag === "img" ? el : el.querySelector("img");
   const figcaption = tag === "figure" ? el.querySelector("figcaption") : null;
@@ -492,7 +490,8 @@ function figureBlock(el: Element, figureSrcResolver?: FigureSrcResolver): Block[
     if (chosen !== null) src = chosen;
   }
   if (/^https?:/i.test(src)) {
-    const caption = figcaption ? tidyRuns(extractInline(figcaption, [])) : [];
+    // Review S4 — caption markers are linked references like body markers.
+    const caption = figcaption ? tidyRuns(extractInline(figcaption, [], refs)) : [];
     return [{ kind: "figure", alt: alt || "", src, caption }];
   }
   // 20-02 Task 2 — a non-http src CLAIMED by the resolver (the EPUB
@@ -500,7 +499,8 @@ function figureBlock(el: Element, figureSrcResolver?: FigureSrcResolver): Block[
   // the raw src for container resolution downstream. Never consulted for
   // http(s) srcs, and absent by default (byte-stable url/paste path).
   if (figureSrcResolver !== undefined && figureSrcResolver(src)) {
-    const caption = figcaption ? tidyRuns(extractInline(figcaption, [])) : [];
+    // Review S4 — caption markers are linked references like body markers.
+    const caption = figcaption ? tidyRuns(extractInline(figcaption, [], refs)) : [];
     return [{ kind: "figure", alt: alt || "", src, caption }];
   }
   return [
@@ -656,7 +656,7 @@ function visit(el: Element, refs: FootnoteRefWalk, figureSrcResolver?: FigureSrc
       return allImgs.flatMap((img, k) =>
         withCaption(
           figureBlock(img, figureSrcResolver),
-          tidyRuns(extractInlineNodes(segments[k + 1] ?? [], [])),
+          tidyRuns(extractInlineNodes(segments[k + 1] ?? [], [], refs)),
         ),
       );
     }
@@ -692,7 +692,7 @@ function visit(el: Element, refs: FootnoteRefWalk, figureSrcResolver?: FigureSrc
   }
 
   if (tag === "figure" || tag === "img") {
-    return figureBlock(el, figureSrcResolver);
+    return figureBlock(el, figureSrcResolver, refs);
   }
 
   if (tag === "pre") {
@@ -745,10 +745,10 @@ export function htmlToBlocks(
   sanitizedDom: Document,
   sourceUrl: string | undefined,
   figureSrcResolver?: FigureSrcResolver,
-  notes: number | ReadonlySet<number> = 0,
+  noteNumbers: ReadonlySet<number> = new Set(),
 ): HtmlToBlocksResult {
   const root = findContentRoot(sanitizedDom);
-  const blocks = visitChildren(root, newFootnoteRefWalk(notes), figureSrcResolver);
+  const blocks = visitChildren(root, newFootnoteRefWalk(noteNumbers), figureSrcResolver);
 
   return {
     blocks,

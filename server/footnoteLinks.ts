@@ -435,7 +435,12 @@ export function detectLinkedFootnotes(
   notes.forEach((note, i) => {
     for (const ref of refsByNote.get(note)!) {
       const marker = (ref.textContent ?? "").replace(/\s+/g, " ").trim();
-      if (marker.length === 0) continue; // nothing visible to link — leave it
+      if (marker.length === 0) {
+        // Nothing visible to link: leave its content, but drop the
+        // same-page href — its note has left the flow (review H3).
+        ref.removeAttribute("href");
+        continue;
+      }
       const replacement = document.createElement("a");
       replacement.setAttribute("href", footnoteHref(i + 1));
       replacement.textContent = marker;
