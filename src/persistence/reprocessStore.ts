@@ -31,8 +31,12 @@
 //   - Image assets are replaced together with the article.
 import {
   ArticleSchema,
+  BookSchema,
   CollectionSchema,
+  type ArticleSource,
+  type Book,
   type CanonicalArticle,
+  type CollectionEntryTarget,
   type LocationRecord,
   LocationRecordSchema,
   HighlightRecordSchema,
@@ -47,10 +51,20 @@ import {
 import { deriveWorkStructure } from "../content/structure";
 import { isFinishedOffset } from "../reader/readingPosition";
 import {
+  ingestEpub,
+  ingestHtml,
+  ingestMarkdown,
+  ingestPdf,
   ingestUrl,
+  IngestionError,
+  type EpubIngestionSuccess,
   type IngestionSuccess,
   type ValidatedAsset,
 } from "../ingestion/IngestionClient";
+import { bytesToBase64 } from "../ingestion/ingestCopy";
+import { EPUB_MAX_BYTES, PDF_MAX_BYTES } from "../ingestion/types";
+import { bookAssetsForChapters } from "../ingestion/addToLibrary";
+import type { BookAsset } from "./booksStore";
 import { db, type AssetRecordRow } from "./db";
 import { chapterConsequences, type ChapterConsequence } from "./chapterConsequences";
 
@@ -71,11 +85,11 @@ export interface HighlightConsequence {
 export type PositionConsequence =
   { kind: "none" } | { kind: "kept"; offset: number } | { kind: "unmatched" };
 
-export interface ReprocessPreview {
+/** What reprocessing one article would do, before any snapshot is taken:
+ * the per-article unit a single-article preview and each kept chapter of a
+ * book preview share. */
+export interface ReprocessPlan {
   articleId: string;
-  /** Snapshot identity of everything apply depends on: never apply a preview
-   * against a newer library state. */
-  snapshot: string;
   proposed: CanonicalArticle;
   assets: ValidatedAsset[];
   /** The source fingerprint differs from the one stored when it was added. */
@@ -84,6 +98,12 @@ export interface ReprocessPreview {
   highlights: HighlightConsequence[];
   position: PositionConsequence;
   consequences: ChapterConsequence[];
+}
+
+export interface ReprocessPreview extends ReprocessPlan {
+  /** Snapshot identity of everything apply depends on: never apply a preview
+   * against a newer library state. */
+  snapshot: string;
 }
 
 export interface PreviewOptions {
@@ -265,8 +285,20 @@ export async function previewReprocess(
   const sourceChanged = saved.provenance.originalHtmlHash !== fresh.provenance.originalHtmlHash;
   if (options.requireSameSource && sourceChanged)
     throw new ReprocessRefusal(options.requireSameSource.refusal);
-  const proposed = adoptCandidate(saved, fresh);
+  return {
+    snapshot,
+    ...(await planRevision(saved, adoptCandidate(saved, fresh), candidate.assets, sourceChanged)),
+  };
+}
 
+/** No writes. Every consequence of replacing `saved` with `proposed`. */
+async function planRevision(
+  saved: CanonicalArticle,
+  proposed: CanonicalArticle,
+  assets: ValidatedAsset[],
+  sourceChanged: boolean,
+): Promise<ReprocessPlan> {
+  const articleId = saved.id;
   const highlights: HighlightConsequence[] = [];
   for (const row of await db.highlights
     .where("[articleId+revision]")
@@ -286,9 +318,8 @@ export async function previewReprocess(
     saved.structure ?? deriveWorkStructure({ ...saved, provenanceTitle: saved.provenance.title });
   return {
     articleId,
-    snapshot,
     proposed,
-    assets: candidate.assets,
+    assets,
     sourceChanged,
     changes: passageChanges(
       normalizeText(saved).split(BLOCK_SEPARATOR),
@@ -319,22 +350,143 @@ export async function previewUrlReprocess(
   return previewReprocess(articleId, await fetchSource(url));
 }
 
-/** Apply a preview as one transaction. Refuses a preview made against an
- * older library state, and chapter consequences that were not accepted. */
-export async function applyReprocess(
-  preview: ReprocessPreview,
-  options: { acceptConsequences?: boolean } = {},
-): Promise<void> {
-  const { articleId, proposed } = preview;
-  const createdAt = new Date().toISOString();
-  const assetRows: AssetRecordRow[] = preview.assets.map((asset) => ({
-    articleId,
+/** Uploaded article sources (#64): Lem Reader keeps no original files, so
+ * the reader chooses the original again. An HTML file upload is stored as
+ * "paste" (the client posts its text through the paste channel), so paste
+ * articles take the same path: the fingerprint check decides. */
+export const UPLOAD_SOURCES = ["markdown", "html-upload", "paste", "pdf"] as const;
+export type UploadSource = (typeof UPLOAD_SOURCES)[number];
+
+export const isUploadSource = (source: ArticleSource | undefined): source is UploadSource =>
+  (UPLOAD_SOURCES as readonly string[]).includes(source ?? "");
+
+/** The copy for a re-chosen file whose fingerprint does not match. */
+export const NOT_THE_ORIGINAL =
+  "This is not the original file for this article: its fingerprint does not match the one saved when you added it. Nothing was changed.";
+
+/** Process a re-chosen original with the SAME ingestion channel the article
+ * was added through (the add dialog's dispatch, keyed by the saved source
+ * rather than the new file's name). */
+export async function ingestOriginalFile(
+  file: File,
+  source: UploadSource,
+): Promise<IngestionSuccess> {
+  if (source === "pdf") {
+    if (file.size > PDF_MAX_BYTES) throw new IngestionError("pdf-too-large");
+    return ingestPdf(bytesToBase64(new Uint8Array(await file.arrayBuffer())), file.name);
+  }
+  if (file.size > 5 * 1024 * 1024) throw new IngestionError("response-too-large");
+  if (source === "markdown") return ingestMarkdown(await file.text(), file.name);
+  return ingestHtml(await file.text());
+}
+
+/**
+ * previewUploadReprocess — the upload source (#64). The re-chosen file must
+ * come from the same bytes as the saved article (its stored source
+ * fingerprint), or the preview is refused calmly with nothing written.
+ */
+export async function previewUploadReprocess(
+  articleId: string,
+  file: File,
+  ingestFile: (file: File, source: UploadSource) => Promise<IngestionSuccess> = ingestOriginalFile,
+): Promise<ReprocessPreview> {
+  const saved = await loadSaved(articleId);
+  const source = saved.ingestionMeta?.source;
+  if (!isUploadSource(source))
+    throw new ReprocessRefusal(
+      "This article was not added from a file, so there is no original file to choose.",
+    );
+  return previewReprocess(articleId, await ingestFile(file, source), {
+    requireSameSource: { refusal: NOT_THE_ORIGINAL },
+  });
+}
+
+const STALE_PREVIEW =
+  "This article or its reader data changed after the preview. Preview again before applying; nothing was changed.";
+const ACCEPTANCE_REQUIRED =
+  "Explicit acceptance is required for the disclosed chapter consequences; nothing was changed.";
+
+function assetRowsOf(
+  assets: readonly (ValidatedAsset & { articleId?: string })[],
+  articleId: string,
+  createdAt: string,
+): AssetRecordRow[] {
+  return assets.map((asset) => ({
+    articleId: asset.articleId ?? articleId,
     assetId: asset.assetId,
     contentType: asset.contentType,
     byteLength: asset.byteLength,
     data: new Blob([new Uint8Array(asset.bytes)], { type: asset.contentType }),
     createdAt,
   }));
+}
+
+/** Inside a transaction: drop the accepted completion and collection-entry
+ * consequences. */
+async function writeConsequences(
+  consequences: readonly ChapterConsequence[],
+  updatedAt: string,
+): Promise<void> {
+  for (const consequence of consequences) {
+    if (consequence.kind === "completion") await db.completions.delete(consequence.id);
+  }
+  const byCollection = new Map<string, Set<string>>();
+  for (const item of consequences) {
+    if (item.kind !== "collection-entry") continue;
+    const set = byCollection.get(item.collectionId) ?? new Set<string>();
+    set.add(item.entryId);
+    byCollection.set(item.collectionId, set);
+  }
+  for (const [id, removed] of byCollection) {
+    const before = CollectionSchema.parse(await db.collections.get(id));
+    await db.collections.put({
+      ...before,
+      entries: before.entries.filter((entry) => !removed.has(entry.id)),
+      updatedAt,
+    });
+    const active = await db.collectionActiveEntries.get(id);
+    if (active && removed.has(active.entryId)) await db.collectionActiveEntries.delete(id);
+  }
+}
+
+/** Inside a transaction: write one planned revision, its re-anchored
+ * position and its replacement assets. `row` adds stored-only fields (the
+ * denormalized chapter `bookId` index). */
+async function writeRevision(
+  plan: Pick<ReprocessPlan, "articleId" | "proposed" | "position">,
+  assetRows: readonly AssetRecordRow[],
+  createdAt: string,
+  row: Record<string, unknown> = {},
+): Promise<void> {
+  const { articleId, proposed } = plan;
+  if (plan.position.kind === "kept") {
+    const latest = await latestLocation(articleId);
+    await db.location
+      .where("[articleId+revision]")
+      .between([articleId, 0], [articleId, Number.MAX_SAFE_INTEGER])
+      .delete();
+    // The savedAt stays the reader's own: reprocessing is not reading.
+    await db.location.put({
+      schemaVersion: 1,
+      articleId,
+      revision: proposed.revision,
+      graphemeOffset: plan.position.offset,
+      savedAt: latest?.savedAt ?? createdAt,
+    });
+  }
+  await db.assets.where("articleId").equals(articleId).delete();
+  await db.articles.put({ ...proposed, ...row });
+  for (const asset of assetRows) await db.assets.put(asset);
+}
+
+/** Apply a preview as one transaction. Refuses a preview made against an
+ * older library state, and chapter consequences that were not accepted. */
+export async function applyReprocess(
+  preview: ReprocessPreview,
+  options: { acceptConsequences?: boolean } = {},
+): Promise<void> {
+  const createdAt = new Date().toISOString();
+  const assetRows = assetRowsOf(preview.assets, preview.articleId, createdAt);
   await db.transaction(
     "rw",
     [
@@ -347,52 +499,327 @@ export async function applyReprocess(
       db.collectionActiveEntries,
     ],
     async () => {
-      if ((await snapshotOf(articleId)) !== preview.snapshot)
+      if ((await snapshotOf(preview.articleId)) !== preview.snapshot)
+        throw new ReprocessRefusal(STALE_PREVIEW);
+      if (preview.consequences.length > 0 && options.acceptConsequences !== true)
+        throw new ReprocessRefusal(ACCEPTANCE_REQUIRED);
+      await writeConsequences(preview.consequences, createdAt);
+      await writeRevision(preview, assetRows, createdAt);
+    },
+  );
+}
+
+// ── EPUB books (#64, spec #66 story 59) ─────────────────────────────────────
+// A book reprocesses as a whole book: the reader re-chooses the original
+// EPUB, whose file fingerprint must match the saved book's. Chapters are
+// matched to the saved chapters by their own source fingerprint (the
+// chapter's source document hash), never by position: a chapter that is
+// admitted, skipped or reordered differently by current ingestion cannot
+// take over another chapter's identity, highlights or progress.
+//   - A matched chapter keeps its article id and becomes its next revision,
+//     with the same carry-over rules as a single article.
+//   - A newly admitted chapter is added under an id no saved chapter ever
+//     used (its fresh positional id may name a different saved chapter).
+//   - A saved chapter with no match leaves the book. That deletes it with
+//     its highlights, notes and position, so it is a disclosed consequence
+//     that needs explicit acceptance, together with every completion and
+//     collection entry that targets it.
+
+export const NOT_THE_ORIGINAL_BOOK =
+  "This is not the original file for this book: its fingerprint does not match the one saved when you added it. Nothing was changed.";
+
+export type BookConsequence =
+  ChapterConsequence | { kind: "chapter-removed"; articleId: string; label: string };
+
+export interface BookChapterSummary {
+  articleId: string;
+  title: string;
+}
+
+export interface BookReprocessPreview {
+  bookId: string;
+  snapshot: string;
+  proposedBook: Book;
+  /** Matched chapters, in the new book order. */
+  kept: ReprocessPlan[];
+  added: (BookChapterSummary & { article: CanonicalArticle })[];
+  removed: (BookChapterSummary & { highlightCount: number })[];
+  chaptersBefore: string[];
+  chaptersAfter: string[];
+  changes: (PassageChange & { chapter: string })[];
+  highlights: (HighlightConsequence & { chapter: string })[];
+  /** Titles of kept chapters whose reading position cannot be matched. */
+  positionsUnmatched: string[];
+  consequences: BookConsequence[];
+  assets: BookAsset[];
+}
+
+const boundTitle = (title: string): string =>
+  `“${title.length > 120 ? `${title.slice(0, 120)}…` : title}”`;
+
+const targetsArticle = (target: CollectionEntryTarget, articleId: string): boolean =>
+  target.kind !== "book" && target.articleId === articleId;
+
+async function loadBook(bookId: string): Promise<Book> {
+  const parsed = BookSchema.safeParse(await db.books.get(bookId));
+  if (!parsed.success)
+    throw new ReprocessRefusal("This book is no longer in your library; nothing was changed.");
+  return parsed.data;
+}
+
+/** Declared TOC ∪ live bookId carriers (the removeBook live-truth rule). */
+async function bookChapterIds(book: Book): Promise<string[]> {
+  const ids = [...book.chapterArticleIds];
+  for (const key of await db.articles.where("bookId").equals(book.id).primaryKeys())
+    if (!ids.includes(String(key))) ids.push(String(key));
+  return ids;
+}
+
+/** Everything a book apply reads, serialized in a stable order. */
+async function bookSnapshotOf(bookId: string): Promise<string> {
+  const row = await db.books.get(bookId);
+  const chapterIds = row ? await bookChapterIds(BookSchema.parse(row)) : [];
+  const chapters = [];
+  for (const id of chapterIds) {
+    const range: [[string, number], [string, number]] = [
+      [id, 0],
+      [id, Number.MAX_SAFE_INTEGER],
+    ];
+    chapters.push({
+      id,
+      row: await db.articles.get(id),
+      highlights: await db.highlights
+        .where("[articleId+revision]")
+        .between(...range)
+        .toArray(),
+      locations: await db.location
+        .where("[articleId+revision]")
+        .between(...range)
+        .toArray(),
+      notes: await db.articleNotes.where("articleId").equals(id).toArray(),
+    });
+  }
+  return JSON.stringify({
+    row,
+    chapters,
+    completions: await db.completions.toArray(),
+    collections: await db.collections.toArray(),
+  });
+}
+
+/** Process a re-chosen original EPUB through the same book channel the add
+ * dialog uses. */
+export async function ingestOriginalBook(file: File): Promise<EpubIngestionSuccess> {
+  if (file.size > EPUB_MAX_BYTES) throw new IngestionError("epub-too-large");
+  return ingestEpub(bytesToBase64(new Uint8Array(await file.arrayBuffer())), file.name);
+}
+
+/**
+ * previewBookReprocess — no writes. Re-ingests the re-chosen original EPUB
+ * and reports the whole book's consequences: chapters before and after,
+ * added and removed chapters, changed passages, every highlight's re-match
+ * outcome and every chapter consequence.
+ */
+export async function previewBookReprocess(
+  bookId: string,
+  file: File,
+  ingestBook: (file: File) => Promise<EpubIngestionSuccess> = ingestOriginalBook,
+): Promise<BookReprocessPreview> {
+  const candidate = await ingestBook(file);
+  const snapshot = await bookSnapshotOf(bookId);
+  const savedBook = await loadBook(bookId);
+  if (candidate.book.originalFileHash !== savedBook.originalFileHash)
+    throw new ReprocessRefusal(NOT_THE_ORIGINAL_BOOK);
+
+  const savedChapters: CanonicalArticle[] = [];
+  for (const id of await bookChapterIds(savedBook)) {
+    const parsed = ArticleSchema.safeParse(await db.articles.get(id));
+    if (parsed.success) savedChapters.push(parsed.data);
+  }
+  const usedIds = new Set(savedChapters.map((c) => c.id));
+  const matched = new Set<string>();
+  const kept: ReprocessPlan[] = [];
+  const added: BookReprocessPreview["added"] = [];
+  const finalChapters: CanonicalArticle[] = [];
+  const addedAt = new Date().toISOString();
+  for (const freshRow of candidate.articles) {
+    const fresh = ArticleSchema.parse(freshRow);
+    const saved = savedChapters.find(
+      (c) =>
+        !matched.has(c.id) && c.provenance.originalHtmlHash === fresh.provenance.originalHtmlHash,
+    );
+    const meta = { ...fresh.ingestionMeta!, bookId };
+    if (saved) {
+      matched.add(saved.id);
+      const proposed = adoptCandidate(saved, { ...fresh, ingestionMeta: meta });
+      kept.push(await planRevision(saved, proposed, [], false));
+      finalChapters.push(proposed);
+      continue;
+    }
+    let id = fresh.id;
+    for (let n = 2; usedIds.has(id) || (await db.articles.get(id)) !== undefined; n++)
+      id = `${fresh.id}-r${n}`;
+    usedIds.add(id);
+    const article = ArticleSchema.parse({
+      ...fresh,
+      id,
+      ingestionMeta: meta,
+      addedAt,
+      structure: undefined,
+    });
+    article.structure = deriveWorkStructure({
+      ...article,
+      provenanceTitle: article.provenance.title,
+    });
+    added.push({ articleId: id, title: article.provenance.title, article });
+    finalChapters.push(article);
+  }
+
+  const removed: BookReprocessPreview["removed"] = [];
+  const consequences: BookConsequence[] = kept.flatMap((plan) => plan.consequences);
+  const completions = await db.completions.toArray();
+  const collections = await db.collections.toArray();
+  for (const chapter of savedChapters.filter((c) => !matched.has(c.id))) {
+    const title = chapter.provenance.title;
+    const highlightCount = await db.highlights
+      .where("[articleId+revision]")
+      .between([chapter.id, 0], [chapter.id, Number.MAX_SAFE_INTEGER])
+      .count();
+    removed.push({ articleId: chapter.id, title, highlightCount });
+    consequences.push({
+      kind: "chapter-removed",
+      articleId: chapter.id,
+      label: `Remove chapter ${boundTitle(title)} with its ${highlightCount} highlight${highlightCount === 1 ? "" : "s"}, notes, and reading position; it is not in the reprocessed book.`,
+    });
+    for (const completion of completions)
+      if (targetsArticle(completion.target, chapter.id))
+        consequences.push({
+          kind: "completion",
+          id: completion.targetKey,
+          label: `Remove ${completion.finished ? "finished" : "unfinished"} status for chapter ${boundTitle(title)}.`,
+        });
+    for (const collection of collections)
+      for (const entry of collection.entries)
+        if (targetsArticle(entry.target, chapter.id))
+          consequences.push({
+            kind: "collection-entry",
+            collectionId: collection.id,
+            entryId: entry.id,
+            label: `Remove chapter ${boundTitle(title)}, entry ${entry.id}, from “${collection.name}”; it is no longer in the book.`,
+          });
+  }
+
+  const titleOf = (id: string) =>
+    kept.find((plan) => plan.articleId === id)?.proposed.provenance.title ?? "";
+  return {
+    bookId,
+    snapshot,
+    proposedBook: BookSchema.parse({
+      ...candidate.book,
+      id: bookId,
+      chapterArticleIds: finalChapters.map((c) => c.id),
+      tags: savedBook.tags,
+      addedAt: savedBook.addedAt,
+    }),
+    kept,
+    added,
+    removed,
+    chaptersBefore: savedChapters.map((c) => c.provenance.title),
+    chaptersAfter: finalChapters.map((c) => c.provenance.title),
+    changes: kept.flatMap((plan) =>
+      plan.changes.map((change) => ({ ...change, chapter: titleOf(plan.articleId) })),
+    ),
+    highlights: kept.flatMap((plan) =>
+      plan.highlights.map((h) => ({ ...h, chapter: titleOf(plan.articleId) })),
+    ),
+    positionsUnmatched: kept
+      .filter((plan) => plan.position.kind === "unmatched")
+      .map((plan) => titleOf(plan.articleId)),
+    consequences,
+    assets: bookAssetsForChapters(finalChapters, candidate.assets),
+  };
+}
+
+/** Apply a book preview as one transaction: every chapter, the removed
+ * chapters' reader data and the book row commit together or not at all. */
+export async function applyBookReprocess(
+  preview: BookReprocessPreview,
+  options: { acceptConsequences?: boolean } = {},
+): Promise<void> {
+  const createdAt = new Date().toISOString();
+  const assetRows = assetRowsOf(preview.assets, "", createdAt);
+  const rowsFor = (id: string) => assetRows.filter((row) => row.articleId === id);
+  await db.transaction(
+    "rw",
+    [
+      db.books,
+      db.articles,
+      db.assets,
+      db.highlights,
+      db.notes,
+      db.noteDrafts,
+      db.articleNotes,
+      db.articleNoteDrafts,
+      db.location,
+      db.readingSessions,
+      db.completions,
+      db.collections,
+      db.collectionActiveEntries,
+    ],
+    async () => {
+      let stale = (await bookSnapshotOf(preview.bookId)) !== preview.snapshot;
+      for (const { articleId } of preview.added)
+        stale ||= (await db.articles.get(articleId)) !== undefined;
+      if (stale)
         throw new ReprocessRefusal(
-          "This article or its reader data changed after the preview. Preview again before applying; nothing was changed.",
+          "This book or its reader data changed after the preview. Preview again before applying; nothing was changed.",
         );
       if (preview.consequences.length > 0 && options.acceptConsequences !== true)
-        throw new ReprocessRefusal(
-          "Explicit acceptance is required for the disclosed chapter consequences; nothing was changed.",
-        );
-      for (const consequence of preview.consequences) {
-        if (consequence.kind === "completion") await db.completions.delete(consequence.id);
-      }
-      const byCollection = new Map<string, Set<string>>();
-      for (const item of preview.consequences) {
-        if (item.kind !== "collection-entry") continue;
-        const set = byCollection.get(item.collectionId) ?? new Set<string>();
-        set.add(item.entryId);
-        byCollection.set(item.collectionId, set);
-      }
-      for (const [id, removed] of byCollection) {
-        const before = CollectionSchema.parse(await db.collections.get(id));
-        await db.collections.put({
-          ...before,
-          entries: before.entries.filter((entry) => !removed.has(entry.id)),
-          updatedAt: createdAt,
-        });
-        const active = await db.collectionActiveEntries.get(id);
-        if (active && removed.has(active.entryId)) await db.collectionActiveEntries.delete(id);
-      }
-      if (preview.position.kind === "kept") {
-        const latest = await latestLocation(articleId);
+        throw new ReprocessRefusal(ACCEPTANCE_REQUIRED);
+      await writeConsequences(
+        preview.consequences.filter((c): c is ChapterConsequence => c.kind !== "chapter-removed"),
+        createdAt,
+      );
+      for (const { articleId } of preview.removed) {
+        const range: [[string, number], [string, number]] = [
+          [articleId, 0],
+          [articleId, Number.MAX_SAFE_INTEGER],
+        ];
+        const highlightIds = (
+          await db.highlights
+            .where("[articleId+revision]")
+            .between(...range)
+            .primaryKeys()
+        ).map((k) => (Array.isArray(k) ? String(k[0]) : String(k)));
+        if (highlightIds.length > 0) {
+          await db.notes.where("highlightId").anyOf(highlightIds).delete();
+          await db.noteDrafts.bulkDelete(highlightIds);
+        }
+        await db.highlights
+          .where("[articleId+revision]")
+          .between(...range)
+          .delete();
         await db.location
           .where("[articleId+revision]")
-          .between([articleId, 0], [articleId, Number.MAX_SAFE_INTEGER])
+          .between(...range)
           .delete();
-        // The savedAt stays the reader's own: reprocessing is not reading.
-        await db.location.put({
-          schemaVersion: 1,
-          articleId,
-          revision: proposed.revision,
-          graphemeOffset: preview.position.offset,
-          savedAt: latest?.savedAt ?? createdAt,
-        });
+        await db.articleNotes.where("articleId").equals(articleId).delete();
+        await db.articleNoteDrafts.where("articleId").equals(articleId).delete();
+        await db.assets.where("articleId").equals(articleId).delete();
+        await db.readingSessions.where("articleId").equals(articleId).delete();
+        await db.articles.delete(articleId);
       }
-      await db.assets.where("articleId").equals(articleId).delete();
-      await db.articles.put(proposed);
-      for (const row of assetRows) await db.assets.put(row);
+      const bookRow = { bookId: preview.bookId };
+      for (const plan of preview.kept)
+        await writeRevision(plan, rowsFor(plan.articleId), createdAt, bookRow);
+      for (const { articleId, article } of preview.added)
+        await writeRevision(
+          { articleId, proposed: article, position: { kind: "none" } },
+          rowsFor(articleId),
+          createdAt,
+          bookRow,
+        );
+      await db.books.put(preview.proposedBook);
     },
   );
 }

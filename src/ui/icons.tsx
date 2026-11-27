@@ -236,6 +236,18 @@ export function ImageIcon(props: IconProps) {
   );
 }
 
+/** Reprocess — run a saved work through current ingestion again. */
+export function ReprocessIcon(props: IconProps) {
+  return (
+    <Svg size={24} {...props}>
+      <path d="M20 12a8 8 0 0 1-14.5 4.6" />
+      <path d="M4 12a8 8 0 0 1 14.5-4.6" />
+      <path d="M19 3v5h-5" />
+      <path d="M5 21v-5h5" />
+    </Svg>
+  );
+}
+
 /** Undo — mark a finished article as unread. */
 export function UndoIcon(props: IconProps) {
   return (

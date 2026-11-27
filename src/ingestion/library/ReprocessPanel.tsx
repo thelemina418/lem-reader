@@ -1,27 +1,29 @@
-import { useState } from "react";
+import { useId, useState } from "react";
 import type { CanonicalArticle } from "../../content/schema";
-import { IngestionError } from "../IngestionClient";
-import { mapReasonToCopy } from "../ingestCopy";
 import {
   applyReprocess,
+  isUploadSource,
+  previewUploadReprocess,
   previewUrlReprocess,
-  ReprocessRefusal,
-  type HighlightOutcome,
   type ReprocessPreview,
 } from "../../persistence/reprocessStore";
 import { StatusRegion } from "../../ui/StatusRegion";
+import { ConsequenceChecklist, HighlightOutcomes, useReprocessRun } from "./reprocessParts";
 import "./pdfRepair.css";
 
-const OUTCOME_COPY: Record<HighlightOutcome, string> = {
-  confident: "re-matches",
-  ambiguous: "ambiguous — it will be shown as needing your attention",
-  orphan: "orphaned — it will be shown as orphaned, never moved",
+const ORIGINAL_ACCEPT: Record<string, string> = {
+  markdown: ".md,text/markdown",
+  pdf: ".pdf,application/pdf",
+  paste: ".html,.htm,text/html",
+  "html-upload": ".html,.htm,text/html",
 };
 
-/** Explicit Reprocessing (#63) inside the library metadata dialog, beside the
- * PDF repair precedent. Fetching and previewing never change the article;
- * only "Apply reprocessing" does, and cancelling the dialog discards the
- * preview. */
+/** Explicit Reprocessing (#63 URL, #64 upload) inside the library metadata
+ * dialog, beside the PDF repair precedent. Fetching, choosing a file and
+ * previewing never change the article; only "Apply reprocessing" does, and
+ * cancelling the dialog discards the preview. An uploaded article asks for
+ * its original file again (Lem Reader keeps no originals), which must match
+ * the fingerprint saved when it was added. */
 export function ReprocessPanel({
   article,
   onSaved,
@@ -31,55 +33,71 @@ export function ReprocessPanel({
   onSaved: () => void;
   onBusy: (busy: boolean) => void;
 }) {
+  const inputId = useId();
+  const source = article.ingestionMeta?.source;
+  const upload = isUploadSource(source);
+  const [file, setFile] = useState<File | null>(null);
   const [preview, setPreview] = useState<ReprocessPreview | null>(null);
   const [accepted, setAccepted] = useState<Set<number>>(new Set());
-  const [busy, setBusy] = useState(false);
-  const [error, setError] = useState("");
-  async function run(action: () => Promise<void>) {
-    setBusy(true);
-    onBusy(true);
-    setError("");
-    try {
-      await action();
-    } catch (cause) {
-      setError(
-        cause instanceof ReprocessRefusal
-          ? cause.message
-          : cause instanceof IngestionError
-            ? `${mapReasonToCopy(cause.reason)} Your article is unchanged.`
-            : "Reprocessing could not be completed. Your article is unchanged; close and try again.",
-      );
-    } finally {
-      setBusy(false);
-      onBusy(false);
-    }
-  }
-  const affected = preview?.highlights.filter((h) => h.outcome !== "confident").length ?? 0;
+  const { busy, error, setError, run } = useReprocessRun("article", onBusy);
   return (
     <details className="pdf-repair-panel">
       <summary>Reprocess article</summary>
-      <p>
-        Fetch this article’s address again and process it with current ingestion. Previewing does
-        not change this article.
-      </p>
+      {upload ? (
+        <>
+          <p>
+            Process this article again with current ingestion. Lem Reader does not keep original
+            files, so choose the file you added; it is checked against the fingerprint saved then.
+            Previewing does not change this article.
+          </p>
+          <label htmlFor={inputId}>Original file</label>
+          <input
+            id={inputId}
+            type="file"
+            accept={ORIGINAL_ACCEPT[source] ?? ""}
+            disabled={busy}
+            onChange={(event) => {
+              setFile(event.target.files?.[0] ?? null);
+              setPreview(null);
+              setAccepted(new Set());
+              setError("");
+            }}
+          />
+        </>
+      ) : (
+        <p>
+          Fetch this article’s address again and process it with current ingestion. Previewing does
+          not change this article.
+        </p>
+      )}
       <button
         type="button"
         className="btn btn-quiet"
-        disabled={busy}
+        disabled={busy || (upload && !file)}
         onClick={() =>
           void run(async () => {
             setPreview(null);
             setAccepted(new Set());
-            setPreview(await previewUrlReprocess(article.id));
+            setPreview(
+              upload && file
+                ? await previewUploadReprocess(article.id, file)
+                : await previewUrlReprocess(article.id),
+            );
           })
         }
       >
-        {busy && !preview ? "Fetching article…" : "Preview reprocessing"}
+        {busy && !preview
+          ? upload
+            ? "Checking file…"
+            : "Fetching article…"
+          : "Preview reprocessing"}
       </button>
       {preview && (
         <section aria-label="Reprocess preview">
           <h3>What will change</h3>
-          {preview.sourceChanged ? (
+          {upload ? (
+            <p>This is the file you added. Only how it was processed changes.</p>
+          ) : preview.sourceChanged ? (
             <p>
               <strong>The page at this address has changed since you added it.</strong> Applying
               replaces your saved version with the page as it is now.
@@ -102,57 +120,19 @@ export function ReprocessPanel({
               </ul>
             </details>
           )}
-          {preview.highlights.length === 0 ? (
-            <p>This article has no highlights.</p>
-          ) : (
-            <>
-              <p>
-                Highlights: {preview.highlights.length - affected} of {preview.highlights.length}{" "}
-                re-match.
-              </p>
-              <ul aria-label="Highlights after reprocessing">
-                {preview.highlights.map((h) => (
-                  <li key={h.highlightId}>
-                    “{h.exact.length > 120 ? `${h.exact.slice(0, 120)}…` : h.exact}” —{" "}
-                    {OUTCOME_COPY[h.outcome]}
-                  </li>
-                ))}
-              </ul>
-            </>
-          )}
+          <HighlightOutcomes highlights={preview.highlights} noun="article" />
           {preview.position.kind === "unmatched" && (
             <p>
               Your reading position cannot be matched in the new version; it opens at the start.
             </p>
           )}
           <p>Article notes, tags, collections, and completion carry over.</p>
-          {preview.consequences.length > 0 && (
-            <>
-              <h3>Reader data that cannot keep its chapter meaning</h3>
-              <ul>
-                {preview.consequences.map((item, index) => (
-                  <li key={index}>
-                    <label>
-                      <input
-                        type="checkbox"
-                        checked={accepted.has(index)}
-                        disabled={busy}
-                        onChange={(event) =>
-                          setAccepted((previous) => {
-                            const next = new Set(previous);
-                            if (event.target.checked) next.add(index);
-                            else next.delete(index);
-                            return next;
-                          })
-                        }
-                      />
-                      {item.label}
-                    </label>
-                  </li>
-                ))}
-              </ul>
-            </>
-          )}
+          <ConsequenceChecklist
+            items={preview.consequences}
+            accepted={accepted}
+            onChange={setAccepted}
+            disabled={busy}
+          />
           <button
             type="button"
             className="btn btn-primary"
