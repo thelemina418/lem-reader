@@ -254,6 +254,16 @@ export function footnoteRowFor(
 }
 
 /**
+ * The canonical row whose text contains article-global `offset`, or
+ * undefined in the main text (issue #65 — which note a highlight lies in).
+ */
+export function footnoteRowAt(article: CanonicalArticle, offset: number): FootnoteRow | undefined {
+  return articleGraphemeIndex(article).footnoteRows.find(
+    (r) => offset >= r.start && offset < r.start + r.length,
+  );
+}
+
+/**
  * The footnotes region's canonical rows for `article` (issue #235).
  *
  * Served by the per-article grapheme index — one derivation per parsed

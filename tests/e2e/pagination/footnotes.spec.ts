@@ -18,8 +18,11 @@
 //      it reads that note (the spoken word renders on it) and stops there.
 //   6. SINGLE TREE — exactly one exposed fn-N / fn-ref-N id per document;
 //      the hidden measurement projection carries none.
-//   7. ELIGIBILITY — note rows render no capture binding: highlights still
-//      cannot attach to footnote bodies.
+//   7. ELIGIBILITY (issue #65 — reversed from #235's "note rows render no
+//      capture binding"): a note accepts a highlight that persists and
+//      re-matches; a selection from the main text into a note is refused;
+//      Annotations review labels a note highlight with its note and opens
+//      it in the notes, whose return leads to the first reference.
 import { test, expect, type Page } from "@playwright/test";
 import { footnotedWorkArticle } from "../../fixtures/footnotedWork";
 import {
@@ -433,14 +436,115 @@ for (const kind of ["blockquote", "bulleted-list", "numbered-list"] as const) {
   });
 }
 
-test("note rows carry no capture binding — eligibility is unchanged", async ({ page }) => {
+/** Select from `startNeedle` (inside `startSel`) to the end of `endNeedle`
+ * (inside `endSel`) on the visible surface, as a DOM Range (never
+ * Selection.toString — cross-engine parity). */
+async function selectText(
+  page: Page,
+  startSel: string,
+  startNeedle: string,
+  endSel: string,
+  endNeedle: string,
+): Promise<void> {
+  const ok = await page.evaluate(
+    ({ startSel, startNeedle, endSel, endNeedle }) => {
+      const point = (sel: string, needle: string, after: boolean): [Text, number] | null => {
+        const root = Array.from(document.querySelectorAll(sel)).find(
+          (el) => el.closest(".article-body-measurement") === null,
+        );
+        if (!root) return null;
+        const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT);
+        for (let n = walker.nextNode() as Text | null; n; n = walker.nextNode() as Text | null) {
+          const at = n.data.indexOf(needle);
+          if (at >= 0) return [n, after ? at + needle.length : at];
+        }
+        return null;
+      };
+      const start = point(startSel, startNeedle, false);
+      const end = point(endSel, endNeedle, true);
+      if (!start || !end) return false;
+      const range = document.createRange();
+      range.setStart(...start);
+      range.setEnd(...end);
+      const sel = window.getSelection()!;
+      sel.removeAllRanges();
+      sel.addRange(range);
+      return true;
+    },
+    { startSel, startNeedle, endSel, endNeedle },
+  );
+  expect(ok, `selection ${startNeedle} … ${endNeedle}`).toBe(true);
+}
+
+// Issue #65 — reversed on purpose: #235 asserted that note rows carry no
+// capture binding and that highlights cannot attach to footnote bodies.
+// Notes are readable, so they are highlightable: the same toolbar, the same
+// creation paths, persistence and re-matching.
+test("a note accepts a highlight, which persists and re-matches after reload", async ({ page }) => {
   await openAtOffset(page, rows[0]!.start);
-  await expect(page.locator("#fn-1")).toBeVisible();
-  // The structural ineligibility fact: no data-block-index on the note row
-  // (capture's findBlockAncestor terminates → "ineligible", exactly as in
-  // scrolling mode), and no marks render inside the notes region.
-  expect(await page.locator("#fn-1[data-block-index]").count()).toBe(0);
-  expect(await page.locator("#fn-1 mark.highlight").count()).toBe(0);
+  const note = page.locator(".page-fragment #fn-1");
+  await expect(note).toBeVisible();
+  await selectText(page, ".page-fragment #fn-1", "north-wing", ".page-fragment #fn-1", "ledger");
+  const toolbar = page.locator(".selection-toolbar");
+  await toolbar.getByRole("button", { name: "Slot 1: Default" }).click();
+  await expect(note.locator("mark.highlight")).toHaveText("north-wing ledger");
+  await page.reload();
+  await waitForPaginationSettled(page);
+  await expect(page.locator(".page-fragment #fn-1 mark.highlight")).toHaveText(
+    "north-wing ledger",
+    { timeout: 15_000 },
+  );
+});
+
+test("scrolling: main text → note is refused; a note highlight is reviewed as its note", async ({
+  page,
+}) => {
+  const scrollingSettings = { ...DEFAULT_SETTINGS, readingMode: "scrolling" as const };
+  const noted = {
+    ...article,
+    id: "scrolling-note-highlights",
+    blocks: article.blocks.slice(0, refBlockIndex + 1),
+    footnotes: [article.footnotes[0]!],
+  };
+  await seedRows(page, {
+    articles: [noted],
+    settings: [{ key: "reader-prefs", value: scrollingSettings }],
+  });
+  await page.addInitScript((seed) => {
+    try {
+      localStorage.setItem("lem-settings-mirror-v1", seed);
+    } catch {
+      /* best-effort */
+    }
+  }, JSON.stringify(scrollingSettings));
+  await page.goto("about:blank");
+  await page.setViewportSize({ width: 360, height: 700 });
+  await page.goto(`${BASE}/#/article/${noted.id}`);
+  const note = page.locator("article #fn-1");
+  await expect(note).toBeAttached();
+  const toolbar = page.locator(".selection-toolbar");
+
+  // A selection from the main text into the note creates nothing.
+  const lastPassage = `[data-block-index="${refBlockIndex - 1}"]`;
+  await selectText(page, lastPassage, "This is the end", "article #fn-1", "north-wing");
+  await expect(toolbar).toContainText("This selection includes content that can't be highlighted.");
+  await expect(toolbar.getByRole("button", { name: "Slot 1: Default" })).toHaveCount(0);
+
+  // Inside the note alone, the selection highlights.
+  await selectText(page, "article #fn-1", "shelf", "article #fn-1", "folio 3");
+  await toolbar.getByRole("button", { name: "Slot 1: Default" }).click();
+  await expect(note.locator("mark.highlight")).toHaveText("shelf 12, folio 3");
+
+  // Annotations review labels it with its note; opening it lands on the
+  // passage, and the note's return leads to its first reference.
+  await page.goto(`${BASE}/#/annotations`);
+  const jump = page.getByRole("link", { name: "Go to highlight: shelf 12, folio 3" });
+  await expect(jump.locator("xpath=ancestor::li[1]")).toContainText("Note 1");
+  await jump.click();
+  await expect(page.locator("article #fn-1 mark.highlight")).toBeFocused();
+  await expect(page.locator("article #fn-1 mark.highlight")).toBeInViewport();
+  await page.locator('article #fn-1 a[href="#fn-ref-1"]').click();
+  await expect(page.locator("article #fn-ref-1")).toBeFocused();
 });
 
 // Issue #58 — scrolling mode: the end of the main text finishes the work as

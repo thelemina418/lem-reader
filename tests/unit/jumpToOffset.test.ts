@@ -202,6 +202,36 @@ describe("jumpToOffset — scrolling branch", () => {
     expect(blocks[3]!.scrollIntoView).toHaveBeenCalledTimes(1);
   });
 
+  it("scrolls a passage inside a note to that note (issue #65)", () => {
+    const noted = parseArticle({
+      ...article,
+      footnotes: [
+        { id: "fn-1", content: [{ text: "A first note." }] },
+        { id: "fn-2", content: [{ text: "A second note." }] },
+      ],
+    });
+    const blocks = buildBlocks();
+    const notes = ["fn-1", "fn-2"].map((id) => {
+      const li = document.createElement("li");
+      li.id = id;
+      li.scrollIntoView = vi.fn();
+      document.body.appendChild(li);
+      return li;
+    });
+    // fn-2's row starts after the body (73), the separator, fn-1 (13) and
+    // another separator: 88.
+    jumpToOffset(noted, 90, {
+      mode: "scrolling",
+      surface: null,
+      blocks,
+      scrollAlignment: "center",
+    });
+    expect(notes[1]!.scrollIntoView).toHaveBeenCalledWith({ block: "center" });
+    expect(notes[0]!.scrollIntoView).not.toHaveBeenCalled();
+    expect(blocks[3]!.scrollIntoView).not.toHaveBeenCalled();
+    for (const li of notes) li.remove();
+  });
+
   it("never scrolls when the blocks array is empty", () => {
     const blocks = buildBlocks();
     jumpToOffset(article, 0, { mode: "scrolling", surface: null, blocks: [] });
