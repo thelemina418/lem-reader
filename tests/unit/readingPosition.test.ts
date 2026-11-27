@@ -28,6 +28,8 @@ import {
   isAtArticleEnd,
   landingForRestore,
   latestLocationByArticle,
+  fromLegacyEndPin,
+  noteListenEndOffset,
 } from "../../src/reader/readingPosition";
 import { ArticleSchema, LocationRecordSchema } from "../../src/content/schema";
 import type { CanonicalArticle } from "../../src/content/types";
@@ -315,5 +317,38 @@ describe("mainTextEndInView — scrolling-mode main-text end (viewport 800)", ()
     expect(mainTextEndInView({ notesTop: -500, viewportHeight: 800 })).toBe(true);
     expect(mainTextEndInView({ notesTop: 800, viewportHeight: 800 })).toBe(false);
     expect(mainTextEndInView({ notesTop: null, viewportHeight: 800 })).toBe(false);
+  });
+});
+
+// Spec #66 — the legacy end pin: before #66 a footnoted article's end pin was
+// the end of its notes (the whole coordinate stream). A saved offset exactly
+// there reads as the modern end pin (the main-text end); every other offset,
+// including one inside the notes, reads as saved.
+describe("fromLegacyEndPin (spec #66)", () => {
+  it.each([
+    // offset, mainEnd, textEnd, expected
+    [180, 100, 180, 100], // the legacy pin → the main-text end
+    [179, 100, 180, 179], // inside the notes → as saved
+    [140, 100, 180, 140],
+    [100, 100, 180, 100], // the modern pin → unchanged
+    [40, 100, 180, 40],
+    [100, 100, 100, 100], // no notes: the pin is the end
+    [0, 0, 0, 0],
+  ])("offset %i (main end %i, text end %i) reads as %i", (offset, mainEnd, textEnd, expected) => {
+    expect(fromLegacyEndPin(offset, mainEnd, textEnd)).toBe(expected);
+  });
+});
+
+// Spec #66 — listening to a note pins the reader at that note's end, but the
+// LAST note's end is the legacy end pin (the article's whole length), which
+// reads finished. The pin stays one grapheme inside that note instead.
+describe("noteListenEndOffset (spec #66)", () => {
+  it.each([
+    // note end, text end, expected
+    [150, 180, 150], // an earlier note: its own end
+    [180, 180, 179], // the last note: never the legacy end pin
+  ])("note end %i (text end %i) pins %i", (noteEnd, textEnd, expected) => {
+    expect(noteListenEndOffset(noteEnd, textEnd)).toBe(expected);
+    expect(fromLegacyEndPin(noteListenEndOffset(noteEnd, textEnd), 100, textEnd)).toBe(expected);
   });
 });

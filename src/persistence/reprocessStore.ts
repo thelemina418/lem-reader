@@ -51,7 +51,7 @@ import {
   resolveQuoteSelector,
 } from "../content/normalizeText";
 import { deriveWorkStructure } from "../content/structure";
-import { inNotesOffset, isFinishedOffset } from "../reader/readingPosition";
+import { fromLegacyEndPin, inNotesOffset, isFinishedOffset } from "../reader/readingPosition";
 import {
   ingestEpub,
   ingestHtml,
@@ -256,11 +256,10 @@ function carryPosition(
   // Spec #66 — finished is reaching the end of the MAIN text; a finish
   // carries to the proposed article's main-text end (its end-pin), never to
   // the end of its notes. A position inside the notes re-anchors by quote.
+  // The legacy end pin (a pre-#66 finish at the end of the notes) is a finish.
   const mainEnd = mainTextLength(saved);
-  if (
-    !inNotesOffset(location.graphemeOffset, mainEnd) &&
-    isFinishedOffset(location.graphemeOffset, mainEnd)
-  )
+  const saveOffset = fromLegacyEndPin(location.graphemeOffset, mainEnd, total);
+  if (!inNotesOffset(saveOffset, mainEnd) && isFinishedOffset(saveOffset, mainEnd))
     return { kind: "kept", offset: mainTextLength(proposed) };
   if (location.graphemeOffset === 0) return { kind: "kept", offset: 0 };
   const start = Math.min(location.graphemeOffset, total);

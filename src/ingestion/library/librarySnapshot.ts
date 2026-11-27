@@ -98,7 +98,7 @@ import type {
   ReadingSessionRecord,
 } from "../../content/schema";
 import type { ArticleNote } from "../../persistence/articleNotesStore";
-import { mainTextLength } from "../../content/normalizeText";
+import { graphemeLength, mainTextLength } from "../../content/normalizeText";
 import { listArticles } from "../../content/repository";
 import { loadAllLocations } from "../../persistence/locationStore";
 import { loadAllHighlights } from "../../persistence/highlightsStore";
@@ -113,7 +113,7 @@ import { loadAllTags } from "./tagsStore";
 // Issue #117 — the ONE pure tag-text vocabulary backs the highlight-tag
 // fold (the tagText module header's "every seam that touches tag strings").
 import { normalizeTags } from "./tagText";
-import { latestLocationByArticle } from "../../reader/readingPosition";
+import { fromLegacyEndPin, latestLocationByArticle } from "../../reader/readingPosition";
 
 /**
  * The one consistent library read model. All fields derive from ONE settled
@@ -323,7 +323,22 @@ export async function loadLibrarySnapshot(): Promise<LibrarySnapshot> {
   }
 
   // THE latest-location fold — readingPosition's one fold (Issue #2).
+  // Spec #66 — a row at the legacy end pin (a footnoted article finished
+  // before #66, pinned at the end of its notes) folds as today's end pin, so
+  // every completion/progress consumer of this fold reads it finished.
   const latestLocationByArticleId = latestLocationByArticle(locations);
+  for (const article of articles) {
+    const loc = latestLocationByArticleId.get(article.id);
+    if (loc === undefined || loc.revision !== article.revision) continue;
+    const offset = fromLegacyEndPin(
+      loc.graphemeOffset,
+      totalsByArticleId.get(article.id)!,
+      graphemeLength(article),
+    );
+    if (offset !== loc.graphemeOffset) {
+      latestLocationByArticleId.set(article.id, { ...loc, graphemeOffset: offset });
+    }
+  }
 
   // Issue #76 — THE per-article highlight-count fold (one pass per load;
   // the library rows' review entry reads it — highlight-only).

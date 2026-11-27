@@ -33,6 +33,7 @@ import type { CanonicalArticle } from "../content/types";
 import type { LocationRecord } from "../content/schema";
 import { computeTopVisibleOffset, notesRegionTop, queryBlocks } from "./restoreLocation";
 import { atScrollBottom, endPinOffset, mainTextEndInView } from "./readingPosition";
+import { graphemeLength } from "../content/normalizeText";
 import { saveLocation } from "../persistence/locationStore";
 import { classifyStorageError } from "../persistence/errors";
 // Issue #102 — the write-followup broadcast. The bus module is the
@@ -183,11 +184,13 @@ export function useScrollSave(
     // Spec #66 — the end-pin lets the save carry completion into the notes
     // (a notes position is not itself a completion signal).
     const current = articleRef.current;
-    const mainTextEnd =
-      current !== null && current.id === loc.articleId && current.revision === loc.revision
-        ? endPinOffset(current)
-        : undefined;
-    saveLocation(loc, { mainTextEnd })
+    const sameArticle =
+      current !== null && current.id === loc.articleId && current.revision === loc.revision;
+    const mainTextEnd = sameArticle ? endPinOffset(current) : undefined;
+    // …and the whole length lets it read a pre-#66 finish (the legacy end
+    // pin, fromLegacyEndPin) as the finish it was.
+    const textEnd = sameArticle ? graphemeLength(current) : undefined;
+    saveLocation(loc, { mainTextEnd, textEnd })
       .then(() => {
         // Two failure domains, kept separate: the .catch below routes WRITE
         // failures to STATE-05 — the broadcast is not a write, so a throwing
