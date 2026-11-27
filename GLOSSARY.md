@@ -31,3 +31,25 @@ _Avoid_: chapter (for a generated subdivision with no authorial basis)
 **Reading plan**:
 A self-paced use of a collection to follow readings in a chosen order, without an implied calendar, deadlines, or reminders.
 _Avoid_: schedule, assignment calendar
+
+## Channels
+
+**Channel**:
+A named, always-on place where readers use Lem Reader, each holding its own separate local library, settings, and annotations. Moving between channels never carries a library along; export and import do.
+_Avoid_: environment (for the reader-facing place), instance, site
+
+**Production**:
+The channel readers rely on, showing the most recently published release.
+_Avoid_: live, stable, prod site (when meaning a particular address)
+
+**Next**:
+The pre-release channel showing the latest merged work before it is released, marked as Next wherever it is shown so its library is never mistaken for the Production one.
+_Avoid_: preview (a per-change deploy, which Lem Reader does not have), nightly (Next is not scheduled), beta, staging
+
+**Legacy domain**:
+The original Production address, kept serving Production so existing readers' libraries stay reachable, and nudging them once to carry their library to the primary address by export and import.
+_Avoid_: old site, mirror (it is the same Production, not a copy)
+
+**Release**:
+A published, versioned decision that a specific build already proven on Next becomes Production.
+_Avoid_: deploy (for the act of going live), tag (for the decision itself)
