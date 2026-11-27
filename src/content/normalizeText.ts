@@ -8,6 +8,7 @@
 // (annotations) persist offsets against this contract — it cannot change after
 // release without corrupting every saved location and highlight.
 import type { Block, CanonicalArticle, InlineRun } from "./types";
+import { footnoteBodyAsBlock, type FootnoteBodyT } from "./footnoteBody";
 
 /** Separator between consecutive blocks (and between body and footnotes region). */
 export const BLOCK_SEPARATOR = "\n";
@@ -69,6 +70,17 @@ function blockText(block: Block): string {
 }
 
 /**
+ * A Footnote body's normalized text contribution (issue #59): its block-shaped
+ * view's text — one paragraph's inline text, or a multi-paragraph note's
+ * paragraphs joined with BLOCK_SEPARATOR. A one-paragraph note's text is
+ * byte-identical to the pre-#59 `inlineText(fn.content)`, so stored offsets
+ * never move. The ONE derivation every footnote-text consumer reads.
+ */
+export function footnoteText(fn: FootnoteBodyT): string {
+  return blockText(footnoteBodyAsBlock(fn));
+}
+
+/**
  * Exported alias for `blockText` — Phase 4 Plan 04-04 anchor helpers
  * (src/pagination/anchor.ts) need per-block normalized text to compute
  * article-global grapheme offsets for the D4-10 mode-switch + D4-11
@@ -90,11 +102,8 @@ export function blockNormalizedText(block: Block): string {
  */
 export function normalizeText(article: CanonicalArticle): string {
   const bodyText = article.blocks.map(blockText).join(BLOCK_SEPARATOR);
-  const footnoteText = article.footnotes
-    .map((fn) => inlineText(fn.content))
-    .filter(Boolean)
-    .join(BLOCK_SEPARATOR);
-  return [bodyText, footnoteText].filter(Boolean).join(BLOCK_SEPARATOR);
+  const notesText = article.footnotes.map(footnoteText).filter(Boolean).join(BLOCK_SEPARATOR);
+  return [bodyText, notesText].filter(Boolean).join(BLOCK_SEPARATOR);
 }
 
 // ── Locale-keyed Intl.Segmenter cache (260819-tld) ───────────────────────────
@@ -222,7 +231,7 @@ function deriveFootnoteRows(
   const bodyEmpty = perBlockLengths.every((len) => len === 0);
   let cursor = bodyEmpty ? 0 : (blockStartOffsets[article.blocks.length] ?? 0);
   for (const [i, fn] of article.footnotes.entries()) {
-    const length = graphemeClusters(inlineText(fn.content), article.lang).length;
+    const length = graphemeClusters(footnoteText(fn), article.lang).length;
     if (length === 0) continue;
     rows.push({ index: i, start: cursor, length });
     cursor += length + BLOCK_SEPARATOR.length;

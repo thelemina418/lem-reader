@@ -139,10 +139,21 @@ describe("Markdown footnotes (issue #62)", () => {
     const { footnotes } = await markdownToBlocks(
       `Text[^long].\n\n[^long]: First paragraph of the note.\n\n    Second paragraph, *emphasised*.\n\n    - a listed point\n`,
     );
-    expect(footnotes).toHaveLength(1);
-    const text = footnotes[0]!.content.map((r) => r.text).join("");
-    expect(text).toBe("First paragraph of the note. Second paragraph, emphasised. a listed point");
-    expect(footnotes[0]!.content).toContainEqual({ text: "emphasised", marks: [{ type: "em" }] });
+    // Issue #59 — the note keeps its paragraphs; its list flattens to one.
+    expect(footnotes).toEqual([
+      {
+        id: "fn-1",
+        content: [{ text: "First paragraph of the note.", marks: [] }],
+        laterParagraphs: [
+          [
+            { text: "Second paragraph, ", marks: [] },
+            { text: "emphasised", marks: [{ type: "em" }] },
+            { text: ".", marks: [] },
+          ],
+          [{ text: "a listed point", marks: [] }],
+        ],
+      },
+    ]);
   });
 
   it("leaves a reference without a definition as plain text, and keeps an unreferenced note", async () => {
@@ -185,9 +196,11 @@ describe("Markdown footnotes (issue #62)", () => {
     const { footnotes } = await markdownToBlocks(
       `X[^h].\n\n[^h]: Before.\n\n    <script>alert(1)</script>\n`,
     );
-    expect(footnotes[0]!.content).toEqual([
-      { text: "Before. <script>alert(1)</script>", marks: [] },
-    ]);
+    expect(footnotes[0]).toEqual({
+      id: "fn-1",
+      content: [{ text: "Before.", marks: [] }],
+      laterParagraphs: [[{ text: "<script>alert(1)</script>", marks: [] }]],
+    });
   });
 
   it("produces byte-identical output for Markdown without footnotes", async () => {

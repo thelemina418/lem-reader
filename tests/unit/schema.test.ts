@@ -148,6 +148,33 @@ describe("footnote-ref inline mark (issue #55)", () => {
 
 // ── URL scheme rejection (Pitfall 5 — stored XSS) ────────────────────────────
 
+// ── Multi-paragraph Footnote bodies (spec #66 / issue #59) ──────────────────
+
+describe("footnote bodies with several paragraphs (issue #59)", () => {
+  it("a stored single-content note parses unchanged, with no paragraphs field", () => {
+    const stored = { id: "fn-1", content: [{ text: "One note.", marks: [] }] };
+    const parsed = ArticleSchema.parse(validArticle({ footnotes: [stored] }));
+    expect(parsed.footnotes).toEqual([stored]);
+    expect(JSON.stringify(parsed.footnotes[0])).toBe(JSON.stringify(stored));
+  });
+
+  it("round-trips a note with later paragraphs", () => {
+    const note = {
+      id: "fn-1",
+      content: [{ text: "First.", marks: [] }],
+      laterParagraphs: [[{ text: "Second.", marks: [] }], [{ text: "Third.", marks: [] }]],
+    };
+    const parsed = ArticleSchema.parse(validArticle({ footnotes: [note] }));
+    expect(parsed.footnotes).toEqual([note]);
+    expect(ArticleSchema.parse(JSON.parse(JSON.stringify(parsed)))).toEqual(parsed);
+  });
+
+  it("rejects an empty later-paragraphs list (a one-paragraph note omits it)", () => {
+    const note = { id: "fn-1", content: [{ text: "Only." }], laterParagraphs: [] };
+    expect(ArticleSchema.safeParse(validArticle({ footnotes: [note] })).success).toBe(false);
+  });
+});
+
 describe("LinkMark href scheme allow-list (Pitfall 5)", () => {
   it.each([
     ["javascript:", "javascript:alert(1)"],

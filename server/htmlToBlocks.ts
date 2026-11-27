@@ -29,6 +29,10 @@ import { JSDOM } from "jsdom";
 import DOMPurify, { clearWindow } from "isomorphic-dompurify";
 import { Readability, isProbablyReaderable } from "@mozilla/readability";
 import type { Block, InlineRun } from "../src/content/schema";
+import {
+  footnoteBodyFromParagraphs,
+  type FootnoteBodyT as CanonicalFootnote,
+} from "../src/content/footnoteBody";
 import { normalizeRunText } from "../src/content/normalizeText";
 import { publisherEntryMatchesHeading } from "../src/content/structure";
 import { attachAdjacentCaptions, withCaption } from "./figureCaptions";
@@ -529,7 +533,7 @@ function findContentRoot(document: Document): Element {
 /** The result shape of htmlToBlocks + extractAndNormalize (minus isReaderable). */
 export interface HtmlToBlocksResult {
   blocks: Block[];
-  footnotes: { id: string; content: InlineRun[] }[];
+  footnotes: CanonicalFootnote[];
   lang: string;
   provenancePartial: ProvenancePartial;
   /** Issue #236 — the source's own chapter index (nav fragment links whose
@@ -766,34 +770,94 @@ const TRAILING_RETURN_GLYPHS = /(?:\s|[\u21A9\u21AA]|\uFE0E|\uFE0F)+$/u;
  * gone (Wikipedia's "^ a b": the letters were the links, the caret is text). */
 const LEADING_RETURN_GLYPHS = /^(?:\s|\^|[\u21A9\u21AA\u2191]|\uFE0E|\uFE0F)+/u;
 
-/** The detected notes' raw HTML → each note's inline runs, through the
- * SHARED sanitizer and inline walk (the mXSS-suite surface — no fork). One
- * document parses every note in turn (its body is reset per note), so a
- * heavily annotated work does not build a jsdom per note. */
-function footnoteBodies(noteHtml: readonly string[], url: string | undefined): InlineRun[][] {
+/** Elements that open a new paragraph inside a note (issue #59). Quotations,
+ * lists and any other block structure inside a note flatten into
+ * paragraphs: each block-level descendant's own inline content is one
+ * paragraph, its text intact. */
+const NOTE_PARAGRAPH_BREAK_TAGS = new Set([
+  ...BLOCK_TAGS,
+  "li",
+  "div",
+  "section",
+  "article",
+  "aside",
+  "header",
+  "footer",
+  "dl",
+  "dt",
+  "dd",
+]);
+
+/** Flatten a note's DOM into paragraphs of raw inline nodes. */
+function noteParagraphNodes(root: Node): Node[][] {
+  const paragraphs: Node[][] = [];
+  let current: Node[] = [];
+  const flush = () => {
+    if (current.length > 0) paragraphs.push(current);
+    current = [];
+  };
+  const walk = (parent: Node) => {
+    for (const child of Array.from(parent.childNodes ?? [])) {
+      if (isEl(child) && NOTE_PARAGRAPH_BREAK_TAGS.has(child.tagName.toLowerCase())) {
+        flush();
+        walk(child);
+        flush();
+      } else {
+        current.push(child);
+      }
+    }
+  };
+  walk(root);
+  flush();
+  return paragraphs;
+}
+
+/** The detected notes' raw HTML → each note's paragraphs of inline runs,
+ * through the SHARED sanitizer and inline walk (the mXSS-suite surface — no
+ * fork). One document parses every note in turn (its body is reset per
+ * note), so a heavily annotated work (issue #60: up to ~1,000 notes) does
+ * not build a jsdom per note. */
+function footnoteBodiesParagraphs(
+  noteHtml: readonly string[],
+  url: string | undefined,
+): InlineRun[][][] {
   const sanitized = sanitizeExtractedHtmlEach(noteHtml);
   const body = new JSDOM("<body></body>", { url: url ?? undefined }).window.document.body;
   return sanitized.map((html) => {
     body.innerHTML = html;
-    return footnoteBodyRuns(body);
+    return footnoteBodyParagraphs(body);
   });
 }
 
-/** One note's parsed body → its inline runs. References inside a note are
- * never live (note-to-note citations read as text). */
-function footnoteBodyRuns(body: HTMLElement): InlineRun[] {
-  const runs = tidyRuns(extractInline(body, []));
-  while (runs[0] !== undefined) {
-    runs[0].text = runs[0].text.replace(LEADING_RETURN_GLYPHS, "");
-    if (runs[0].text.length > 0) break;
-    runs.shift();
+/** One note's parsed body → its paragraphs of inline runs. References
+ * inside a note are never live (note-to-note citations read as text). Empty
+ * paragraphs are dropped, and publisher return glyphs and carets are
+ * stripped from the note's start and end. */
+function footnoteBodyParagraphs(body: HTMLElement): InlineRun[][] {
+  const paragraphs = noteParagraphNodes(body)
+    .map((nodes) => tidyRuns(extractInlineNodes(nodes, [])))
+    .filter((runs) => runs.length > 0);
+  // The note's start: carets and return glyphs left once back-links are gone.
+  while (paragraphs.length > 0) {
+    const runs = paragraphs[0]!;
+    while (runs[0] !== undefined) {
+      runs[0].text = runs[0].text.replace(LEADING_RETURN_GLYPHS, "");
+      if (runs[0].text.length > 0) break;
+      runs.shift();
+    }
+    if (runs.length > 0) break;
+    paragraphs.shift();
   }
-  const last = runs[runs.length - 1];
-  if (last !== undefined) {
+  // The note's end: return glyphs publishers leave beside a back-link.
+  while (paragraphs.length > 0) {
+    const runs = paragraphs[paragraphs.length - 1]!;
+    const last = runs[runs.length - 1]!;
     last.text = last.text.replace(TRAILING_RETURN_GLYPHS, "");
     if (last.text.length === 0) runs.pop();
+    if (runs.length > 0) break;
+    paragraphs.pop();
   }
-  return runs;
+  return paragraphs;
 }
 
 // ── Publisher outline evidence (issue #236) ─────────────────────────────────
@@ -1094,8 +1158,8 @@ export async function extractAndNormalize(
   // controlled marker links and lifts matched notes out of the body flow,
   // BEFORE Readability sees the document.
   const linked = detectLinkedFootnotes(document);
-  const footnotes = footnoteBodies(linked.noteHtml, url)
-    .map((content, i) => ({ id: `fn-${i + 1}`, content }))
+  const footnotes = footnoteBodiesParagraphs(linked.noteHtml, url)
+    .map((paragraphs, i) => footnoteBodyFromParagraphs(`fn-${i + 1}`, paragraphs))
     .filter((fn) => fn.content.length > 0);
   // Issue #60: a reference to a note that came out empty would lead nowhere —
   // only the notes kept are live reference targets.

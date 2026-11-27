@@ -201,9 +201,16 @@ export const BlockSchema: z.ZodType<Block> = z.discriminatedUnion("kind", [
 
 // ── Footnote bodies — participate in the coordinate stream at the footnotes region ──
 
+// Issue #59 — a Footnote can hold several paragraphs. `content` is the note's
+// FIRST paragraph (a stored single-content note parses as a one-paragraph
+// note, byte-identically); `laterParagraphs` carries the rest and is ABSENT
+// for a one-paragraph note, so single-paragraph rows and exports are
+// unchanged. Read a note's paragraphs through `footnoteParagraphs`
+// (src/content/footnoteBody.ts), never the fields directly.
 export const FootnoteBody = z.object({
   id: z.string().regex(/^fn-\d+$/), // Pitfall 4 — DOM clobbering guard
   content: z.array(InlineRun),
+  laterParagraphs: z.array(z.array(InlineRun)).min(1).optional(),
 });
 
 // ── Work structure (issue #236 — stable chapter/reading-part destinations) ──

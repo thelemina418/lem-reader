@@ -33,6 +33,7 @@
 import type { BlockKind } from "../measurement/engine";
 import type { Block, CanonicalArticle, InlineRun } from "../content/types";
 import type { SplitDecision } from "./types";
+import { footnoteBodyAsBlock } from "../content/footnoteBody";
 import {
   BLOCK_SEPARATOR,
   blockNormalizedText,
@@ -559,8 +560,9 @@ const atomicCoordinateCache = new WeakMap<
 >();
 
 // ── Footnote-body slicing view (issue #235) ────────────────────────────
-// A footnote body is a pure InlineRun[] stream — exactly a paragraph's
-// content shape. This cached VIEW lets the ONE slicing/classification
+// A one-paragraph footnote body is a pure InlineRun[] stream — exactly a
+// paragraph's content shape; a multi-paragraph body (issue #59) is a
+// container of paragraphs (src/content/footnoteBody.ts). This cached VIEW lets the ONE slicing/classification
 // machinery (classifyBlock, blockSliceBoundary, blockCharOffsetToNorm-
 // Grapheme, resolveBlockSlice, blockRawPrefixUtf16) address a footnote row
 // without a fork: the view is a slicing coordinate over footnote content,
@@ -577,7 +579,7 @@ export function footnoteBodyBlock(
 ): Block {
   const hit = footnoteViewCache.get(footnote);
   if (hit && hit.lang === lang) return hit.block;
-  const block: Block = { kind: "paragraph", content: footnote.content };
+  const block: Block = footnoteBodyAsBlock(footnote);
   footnoteViewCache.set(footnote, { lang, block });
   return block;
 }

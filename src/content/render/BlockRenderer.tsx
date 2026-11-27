@@ -78,7 +78,7 @@ import { ImageIcon } from "../../ui/icons";
 // split-semantic kind through the ONE shared primitive (the same slicing
 // page fragments use — never a fork).
 import { footnoteBodyBlock, resolveBlockSlice } from "../../pagination/splitBlock";
-import { firstFootnoteReference } from "../footnoteReferences";
+import { FootnoteReturns, footnoteMarkerLabel } from "./FootnoteReturns";
 
 /**
  * The subset of a ResolvedHighlight the renderer needs. Defined locally so
@@ -394,7 +394,7 @@ export function BlockView({
       }
       return (
         <sup {...elementProps}>
-          <a id={`fn-ref-${n}`} href={`#fn-${n}`}>
+          <a id={`fn-ref-${n}`} href={`#fn-${n}`} aria-label={footnoteMarkerLabel(block.marker)}>
             {block.marker}
           </a>
         </sup>
@@ -446,6 +446,54 @@ export function BlockView({
  * placeholder's visible alt text is media-box text — unmarkable (D19-02
  * gap rule extends to visible alt, UI-SPEC Auto-Resolved #13).
  */
+/**
+ * A Footnote body's visible content (issue #59) — the ONE renderer every
+ * footnote surface shares (scrolling notes section, windowed measurement
+ * rows, paged entries), so the hidden measurement rows and the visible page
+ * always lay out the same paragraphs. `body` is the note's block-shaped view
+ * (footnoteBodyBlock), optionally sliced through resolveBlockSlice:
+ *
+ * - a one-paragraph note renders its runs inline (byte-identical to the
+ *   pre-#59 markup), in `<span data-footnote-content>` when `contentWrapper`;
+ * - a multi-paragraph note renders one `<p>` per paragraph (never a
+ *   blockquote — the container is a coordinate view only) inside
+ *   `.footnote-paragraphs`. Its last paragraph runs inline (app.css), so the
+ *   return the caller places after this element trails the note's text.
+ *
+ * `contentWrapper` marks the element the overflow guard reads: its
+ * textContent is exactly the note's raw run text, chrome-free.
+ */
+export function FootnoteBodyContent({
+  body,
+  highlightSlices,
+  childHighlightSlices,
+  contentWrapper = false,
+}: {
+  body: Block;
+  highlightSlices?: HighlightSlice[];
+  childHighlightSlices?: (HighlightSlice[] | undefined)[];
+  contentWrapper?: boolean;
+}): React.ReactElement {
+  const wrapperProps = contentWrapper ? { "data-footnote-content": "" } : {};
+  if (body.kind !== "blockquote") {
+    const runs = body.kind === "paragraph" ? body.content : [];
+    const inline = <InlineList runs={runs} highlightSlices={highlightSlices} />;
+    return contentWrapper ? <span {...wrapperProps}>{inline}</span> : inline;
+  }
+  return (
+    <div className="footnote-paragraphs" {...wrapperProps}>
+      {body.children.map((child, i) => (
+        <p key={i}>
+          <InlineList
+            runs={child.kind === "paragraph" ? child.content : []}
+            highlightSlices={childHighlightSlices?.[i]}
+          />
+        </p>
+      ))}
+    </div>
+  );
+}
+
 function FigureMedia({ block }: { block: Extract<Block, { kind: "figure" }> }) {
   const objectUrl = useAssetUrl(block.src);
   const [broken, setBroken] = useState(false);
@@ -801,10 +849,9 @@ export const ArticleBody = memo(
                       endCut ?? Number.POSITIVE_INFINITY,
                       article.lang,
                     );
-                    const runs = resolved.kind === "paragraph" ? resolved.content : fn.content;
                     return (
                       <li key={fn.id} data-footnote-index={row.index}>
-                        <InlineList runs={runs} />
+                        <FootnoteBodyContent body={resolved} />
                       </li>
                     );
                   })}
@@ -825,27 +872,20 @@ export const ArticleBody = memo(
                 // react/no-danger rule forbids raw-HTML injection here.
                 // Issue #235: the measurement projection renders WITHOUT
                 // the li id — the visible page is the only place fn-N exists.
-                const n = fn.id.replace(/^fn-/, "");
-                // Issue #60: a note nothing in the body references (an
-                // unreferenced note, or one whose marker was lost at ingest)
-                // gets no return — never a link that leads nowhere.
-                const referenced = firstFootnoteReference(article, fn.id) !== undefined;
+                // Issue #57: tabIndex -1 lets a followed reference land
+                // focus ON the note; the returns are the shared chrome.
                 return (
-                  <li key={fn.id} id={measurementProjection ? undefined : fn.id}>
-                    <InlineList runs={fn.content} />
-                    {!referenced ? null : measurementProjection ? (
-                      <>
-                        {" "}
-                        <span aria-hidden="true">{"\u21A9"}</span>
-                      </>
-                    ) : (
-                      <>
-                        {" "}
-                        <a href={`#fn-ref-${n}`} aria-label={`Return to reference ${n}`}>
-                          {"\u21A9"}
-                        </a>
-                      </>
-                    )}
+                  <li
+                    key={fn.id}
+                    id={measurementProjection ? undefined : fn.id}
+                    tabIndex={measurementProjection ? undefined : -1}
+                  >
+                    <FootnoteBodyContent body={footnoteBodyBlock(fn, article.lang)} />{" "}
+                    <FootnoteReturns
+                      article={article}
+                      footnoteId={fn.id}
+                      measurementProjection={measurementProjection}
+                    />
                   </li>
                 );
               })}
