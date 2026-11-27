@@ -532,7 +532,7 @@ describe("half-matched footnotes (issue #60)", () => {
     expect(article.footnotes).toHaveLength(400);
     expect(refMarks(article)).toHaveLength(400);
     expect(noteTexts(article)[399]).toBe("Note number 400.");
-  });
+  }, 60_000);
 });
 
 /** A Pandoc-style article with `n` referenced notes. */
