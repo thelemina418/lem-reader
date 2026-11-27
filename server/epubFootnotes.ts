@@ -219,17 +219,20 @@ export function copyReferencedNotes(
  * copies: the source key of each detected note (undefined for the
  * document's own notes), and the leftover copies removed. Detected notes
  * are in document order and the copies trail the document, so the
- * extracted copies are the tail of the detected notes.
+ * extracted copies are the tail of the found notes; notes past the cap
+ * (issue #60, `omittedCount`) leave the flow too but are not kept.
  */
 export function settleCopiedNotes(
   copied: CopiedNotes | undefined,
   detectedCount: number,
+  omittedCount = 0,
 ): (string | undefined)[] {
   const sources: (string | undefined)[] = new Array(detectedCount).fill(undefined);
   if (copied === undefined) return sources;
   const extracted = copied.copies.filter((c) => !c.element.isConnected);
+  const firstCopy = detectedCount + omittedCount - extracted.length;
   extracted.forEach((c, i) => {
-    sources[detectedCount - extracted.length + i] = c.source;
+    if (firstCopy + i < detectedCount) sources[firstCopy + i] = c.source;
   });
   copied.wrapper.remove(); // anything not detected never reaches the flow
   return sources;

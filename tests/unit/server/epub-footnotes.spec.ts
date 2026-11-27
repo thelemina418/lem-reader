@@ -415,3 +415,42 @@ ${prose("One B")}`,
     expect(notesChapter!.footnotes).toEqual([]);
   });
 });
+
+// ── The note cap (issue #60) ────────────────────────────────────────────────
+
+describe("EPUB footnotes — the note cap (#60)", () => {
+  it("keeps a chapter's first 1,000 notes and admits it flagged with the count", async () => {
+    const n = 1003;
+    const refs = Array.from(
+      { length: n },
+      (_, i) => `Point ${i + 1}<a epub:type="noteref" href="#n${i + 1}">${i + 1}</a>.`,
+    ).join(" ");
+    const asides = Array.from(
+      { length: n },
+      (_, i) => `<aside epub:type="footnote" id="n${i + 1}"><p>Note number ${i + 1}.</p></aside>`,
+    ).join("\n");
+    const book = buildEpub([
+      {
+        href: "ch1.xhtml",
+        title: "Chapter One",
+        body: `<section epub:type="chapter">
+<h1>Chapter One</h1>
+<p>${refs}</p>
+${asides}
+${prose("One")}
+</section>`,
+      },
+    ]);
+    const response = await ingest({ epub: Buffer.from(book).toString("base64") });
+    if (!response.ok || !("book" in response)) throw new Error(JSON.stringify(response));
+    const chapter = ArticleSchema.parse(response.articles[0]);
+    expect(chapter.footnotes).toHaveLength(1000);
+    expect(chapter.ingestionMeta?.extractionWarnings).toEqual([
+      "3 notes past the first 1,000 could not be included",
+    ]);
+    // The cut notes are not in the body, and their markers are plain text.
+    const text = chapter.blocks.map((b) => runsText(allRuns([b]))).join("\n");
+    expect(text).not.toContain("Note number 1001.");
+    expect(text).toContain("Point 10011001.");
+  }, 60_000);
+});

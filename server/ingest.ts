@@ -472,6 +472,7 @@ async function ingestEpubBook(input: {
                   } could not be included`,
                 ]
               : []),
+            ...footnotesOmittedWarning(draft.omittedFootnoteCount),
           ],
           bookId: bookBase,
           chapterIndex: i,

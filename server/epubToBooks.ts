@@ -720,6 +720,8 @@ interface WalkedDocument {
   footnoteSources: (string | undefined)[];
   /** Spine paths this document copied referenced notes from. */
   notesCopiedFrom: string[];
+  /** Notes past MAX_LINKED_FOOTNOTES left out of this document (issue #60). */
+  omittedFootnoteCount: number;
   /** The document's own <title> text, extracted from the RAW markup before
    * sanitize strips the head — the document-title step of the chapter title
    * chain. */
@@ -752,7 +754,7 @@ function walkChapterDocument(
   // detection (with EPUB note semantics) extracts every note.
   const copied = copyReferencedNotes({ path, document: rawDocument }, noteSources, resolveBookHref);
   const linked = detectLinkedFootnotes(rawDocument, { epubSemantics: true });
-  const footnoteSources = settleCopiedNotes(copied, linked.noteHtml.length);
+  const footnoteSources = settleCopiedNotes(copied, linked.noteHtml.length, linked.omittedCount);
   const footnotes = footnoteBodiesParagraphs(linked.noteHtml, undefined).map((paragraphs, i) =>
     footnoteBodyFromParagraphs(`fn-${i + 1}`, paragraphs),
   );
@@ -768,6 +770,7 @@ function walkChapterDocument(
     footnotes,
     footnoteSources,
     notesCopiedFrom: (copied?.copies ?? []).map((c) => c.notePath),
+    omittedFootnoteCount: linked.omittedCount,
     docTitle,
   };
 }
@@ -1045,6 +1048,9 @@ export interface ChapterDraft {
   /** 20-06: per-figure refusals, disclosed through extractionWarnings
    * (D12-11 honesty mirror — refused figures are never silently dropped). */
   figureRefusedCount: number;
+  /** Issue #60: notes past the cap left out of the chapter's documents,
+   * disclosed through extractionWarnings (footnotesOmittedWarning). */
+  omittedFootnoteCount: number;
 }
 
 /** The adapter output (12-RESEARCH Pattern 1 — planner-confirmed shape). */
@@ -1213,6 +1219,7 @@ function emitChapter(
     sourceHtmlHash: hasher.digest("hex"),
     assets,
     figureRefusedCount,
+    omittedFootnoteCount: unitDocs.reduce((n, d) => n + d.walked.omittedFootnoteCount, 0),
   };
 }
 
