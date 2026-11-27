@@ -86,19 +86,22 @@ test("paged: the inline marker jumps to its note and the return lands on the mar
   await expect(ref.locator("xpath=ancestor::p")).toContainText(
     "cites the north wing1 and the claim holds.",
   );
-  const before = (await readPagination(page))!.anchorOffset;
+  const before = (await readPagination(page))?.anchorOffset;
+  expect(typeof before).toBe("number");
 
   await ref.click();
   const note = page.locator(".page-fragment #fn-1");
   await expect(note).toBeFocused();
   await expect(note).toContainText(NOTE);
-  await expect(note).not.toContainText("↩︎");
+  // The note's own text carries no publisher return glyph (the ↩ beside it
+  // is the reader's return link).
+  await expect(note.locator("[data-footnote-content]")).not.toContainText("↩");
 
   await note.locator('a[href="#fn-ref-1"]').click();
   await expect(page.locator(".page-fragment #fn-ref-1")).toBeFocused();
   await waitForPaginationSettled(page);
   // Back on the page it was left from (the anchor sits at or before the marker).
-  expect((await readPagination(page))!.anchorOffset).toBeLessThanOrEqual(before);
+  expect((await readPagination(page))?.anchorOffset).toBeLessThanOrEqual(before as number);
   // Single tree: one exposed reference id; the hidden projection has none.
   expect(await page.locator('[id="fn-ref-1"]').count()).toBe(1);
   expect(await page.locator('.article-body-measurement [id^="fn-"]').count()).toBe(0);
