@@ -362,6 +362,12 @@ test("ACPT-07 — the v2.1 core flow as one unbroken journey: nothing lost acros
       mimeType: "text/markdown",
       buffer: Buffer.from(MARKDOWN_WITH_FRONTMATTER, "utf-8"),
     });
+    // Issue #163 — "Open after adding" is REMEMBERED: ingestion #1 above
+    // unchecked it, so this drive must check it explicitly. Relying on the
+    // default only worked while the remembered write lost the race with the
+    // reload (Mac); on Linux Firefox it lands first and the save quietly
+    // closes onto the library (lem-reader#2 attempt 2).
+    await setOpenAfterAdding(pageA, true);
     await pageA.getByRole("button", { name: /add file/i }).click();
     // Issue #163 — the CHECKED landing: the save itself opens the saved
     // article (the md- id shape asserted on the landed route).
