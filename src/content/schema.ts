@@ -36,7 +36,7 @@ export const httpUrl = z
     message: "Only http and https schemes allowed",
   });
 
-// ── D-04: locked inline mark set (exactly 4 — link, code, strong, em) ────────
+// ── D-04: locked inline mark set (link, code, strong, em + footnote-ref #55) ──
 
 export const LinkMark = z.object({
   type: z.literal("link"),
@@ -46,7 +46,18 @@ export const LinkMark = z.object({
 export const CodeMark = z.object({ type: z.literal("code") });
 export const StrongMark = z.object({ type: z.literal("strong") });
 export const EmMark = z.object({ type: z.literal("em") });
-export const Mark = z.union([LinkMark, CodeMark, StrongMark, EmMark]);
+/** Spec #66 / issue #55 — the inline Footnote reference (the fifth member of
+ * the locked mark set). The run's text is the publisher's marker ("1",
+ * "[12]", "†") and stays in the D-05 stream; `footnoteId` names the note in
+ * the controlled `fn-<n>` format (DOM-clobbering guard, Pitfall 4), and
+ * `occurrence` (1-based, document order per note) gives each reference its
+ * own controlled anchor identity — see src/content/footnoteReferences.ts. */
+export const FootnoteRefMark = z.object({
+  type: z.literal("footnote-ref"),
+  footnoteId: z.string().regex(/^fn-\d+$/),
+  occurrence: z.number().int().min(1).default(1),
+});
+export const Mark = z.union([LinkMark, CodeMark, StrongMark, EmMark, FootnoteRefMark]);
 
 export const InlineRun = z.object({
   text: z.string().min(1),

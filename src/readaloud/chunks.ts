@@ -26,6 +26,7 @@ import {
   graphemeClusters,
   inlineText,
 } from "../content/normalizeText";
+import { footnoteReferenceSpans } from "../content/footnoteReferences";
 
 /** The skip units (issue #43): sentenceIndex — the ordinal of a chunk's
  * sentence across the whole speakable stream (all pieces of one over-budget
@@ -106,6 +107,7 @@ export function chunkArticleForSpeech(
   const segmenter = new Intl.Segmenter(article.lang, {
     granularity: "sentence",
   });
+  const silent = silentMarkerClusters(article, clusters);
   let sentenceIndex = 0;
   for (const [paragraphIndex, fullRange] of speakableRanges(article, index).entries()) {
     // Issue #244 — a chapter assignment clips the speakable channel to its
@@ -137,10 +139,7 @@ export function chunkArticleForSpeech(
       while (start < end && isWhitespaceCluster(clusters[start]!)) start++;
       while (end > start && isWhitespaceCluster(clusters[end - 1]!)) end--;
       if (end <= start) continue; // whitespace-only segment
-      pushChunksForRange(clusters, start, end, chunks, {
-        sentenceIndex,
-        paragraphIndex,
-      });
+      pushChunksForRange(clusters, start, end, chunks, { sentenceIndex, paragraphIndex }, silent);
       sentenceIndex += 1;
     }
   }
@@ -173,9 +172,10 @@ function speakableRanges(
       case "blockquote":
       case "bulleted-list":
       case "numbered-list":
-      case "footnote-reference":
         ranges.push({ start, end: start + len });
         break;
+      case "footnote-reference":
+        break; // issue #55 — a marker is never spoken (legacy block form)
       case "figure": {
         // O7 — the figure is skipped but its caption reads. The figure's
         // normalized contribution is `[alt, captionText].filter(Boolean)
@@ -217,12 +217,17 @@ function pushChunksForRange(
   to: number,
   out: SpeechChunk[],
   units: SkipUnits,
+  silent: ReadonlySet<number>,
 ): void {
+  const push = (start: number, end: number) => {
+    const chunk = buildChunk(clusters, start, end, units, silent);
+    if (chunk.text.trim().length > 0) out.push(chunk); // a marker-only piece says nothing
+  };
   let cursor = from;
   while (cursor < to) {
     const remaining = to - cursor;
     if (remaining <= MAX_CHUNK_GRAPHEMES) {
-      out.push(buildChunk(clusters, cursor, to, units));
+      push(cursor, to);
       return;
     }
     // Prefer a cut just after a whitespace cluster at or before the budget
@@ -237,10 +242,10 @@ function pushChunksForRange(
     }
     if (cut <= cursor) {
       // No whitespace in the window — hard cut at the budget edge.
-      out.push(buildChunk(clusters, cursor, budgetEdge, units));
+      push(cursor, budgetEdge);
       cursor = budgetEdge;
     } else {
-      out.push(buildChunk(clusters, cursor, cut, units));
+      push(cursor, cut);
       cursor = cut + 1; // skip the separator whitespace
     }
   }
@@ -278,16 +283,64 @@ function buildUtf16ToGraphemeMap(
   return map;
 }
 
+/**
+ * Issue #55 — the canonical clusters read-aloud never speaks: every Footnote
+ * reference marker plus the one whitespace cluster before it (the run-join
+ * space) — and the one after it when punctuation follows — so "The claim 1
+ * is supported" is spoken "The claim is supported" and "Next † ." "Next.".
+ * The clusters keep their place in the coordinate stream — chunks still
+ * cover them, only the utterance text omits them.
+ */
+function silentMarkerClusters(
+  article: CanonicalArticle,
+  clusters: readonly string[],
+): ReadonlySet<number> {
+  const silent = new Set<number>();
+  for (const span of footnoteReferenceSpans(article)) {
+    for (let g = span.start; g < span.end; g++) silent.add(g);
+    if (span.start > 0 && isWhitespaceCluster(clusters[span.start - 1]!))
+      silent.add(span.start - 1);
+    // "Next † ." — the run-join space before trailing punctuation goes too.
+    const after = clusters[span.end];
+    const next = clusters[span.end + 1];
+    if (
+      after !== undefined &&
+      isWhitespaceCluster(after) &&
+      next !== undefined &&
+      !/^[\p{L}\p{N}\s]/u.test(next)
+    ) {
+      silent.add(span.end);
+    }
+  }
+  return silent;
+}
+
 /** Build one chunk covering [start, end): the spoken text and its per-chunk
- * UTF-16 → chunk-grapheme map. The text is exactly clusters[start..end)
- * joined, so segmenting it reproduces those clusters one-for-one. */
+ * UTF-16 → chunk-grapheme map. The text is clusters[start..end) joined,
+ * minus the silent marker clusters; the map still points every UTF-16 index
+ * at its true chunk-local grapheme ordinal, so boundaries stay aligned. */
 function buildChunk(
   clusters: readonly string[],
   start: number,
   end: number,
   units: SkipUnits,
+  silent: ReadonlySet<number>,
 ): SpeechChunk {
-  const text = clusters.slice(start, end).join("");
-  const utf16ToGrapheme = buildUtf16ToGraphemeMap(clusters, start, end);
+  let hasSilent = false;
+  for (let g = start; g < end && !hasSilent; g++) hasSilent = silent.has(g);
+  if (!hasSilent) {
+    const text = clusters.slice(start, end).join("");
+    const utf16ToGrapheme = buildUtf16ToGraphemeMap(clusters, start, end);
+    return { text, startGrapheme: start, endGrapheme: end, utf16ToGrapheme, units };
+  }
+  let text = "";
+  const utf16ToGrapheme: number[] = [];
+  for (let g = start; g < end; g++) {
+    if (silent.has(g)) continue;
+    const cluster = clusters[g]!;
+    for (let k = 0; k < cluster.length; k++) utf16ToGrapheme.push(g - start);
+    text += cluster;
+  }
+  utf16ToGrapheme.push(end - start);
   return { text, startGrapheme: start, endGrapheme: end, utf16ToGrapheme, units };
 }

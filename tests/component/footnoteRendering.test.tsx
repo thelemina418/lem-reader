@@ -223,3 +223,74 @@ describe("PageFragmentView — footnote entries", () => {
     a.unmount();
   });
 });
+
+// ── Inline footnote references (spec #66 / issue #55) ────────────────────────
+
+const inlineArticle = (): CanonicalArticle => ({
+  id: "inline-footnote-render",
+  revision: 1,
+  lang: "en",
+  provenance: {
+    title: "Inline footnotes",
+    retrievedAt: "2026-01-01T00:00:00Z",
+    originalHtmlHash: "inline-footnote-render-v1",
+  },
+  blocks: [
+    {
+      kind: "paragraph",
+      content: [
+        { text: "The claim", marks: [] },
+        { text: "1", marks: [{ type: "footnote-ref", footnoteId: "fn-1", occurrence: 1 }] },
+        { text: " holds, as it did", marks: [] },
+        { text: "1", marks: [{ type: "footnote-ref", footnoteId: "fn-1", occurrence: 2 }] },
+        { text: " before.", marks: [] },
+      ],
+    },
+  ],
+  footnotes: [{ id: "fn-1", content: [{ text: "The note.", marks: [] }] }],
+});
+
+describe("inline footnote references (issue #55)", () => {
+  it("render inside their sentence as superscript links to the note, one id per occurrence", () => {
+    const { container } = render(<ArticleBody article={inlineArticle()} highlights={[]} />);
+    const p = container.querySelector("p")!;
+    expect(p.textContent).toBe("The claim1 holds, as it did1 before.");
+    const first = p.querySelector("sup > a#fn-ref-1");
+    const second = p.querySelector("sup > a#fn-ref-1-2");
+    expect(first?.getAttribute("href")).toBe("#fn-1");
+    expect(second?.getAttribute("href")).toBe("#fn-1");
+    expect(first?.textContent).toBe("1");
+    // The note's return leads back to the first reference.
+    expect(container.querySelector('#fn-1 a[href="#fn-ref-1"]')).not.toBeNull();
+  });
+
+  it("the hidden measurement projection carries the marker text but no identifiers or links", () => {
+    const { container } = render(
+      <ArticleBody article={inlineArticle()} highlights={[]} measurementProjection />,
+    );
+    expect(container.querySelector('[id^="fn-"]')).toBeNull();
+    expect(container.querySelector('a[href^="#fn-"]')).toBeNull();
+    expect(container.querySelector("p")!.textContent).toBe("The claim1 holds, as it did1 before.");
+    expect(container.querySelectorAll("p sup")).toHaveLength(2);
+  });
+
+  it("a paged fragment renders the same reference anchor", () => {
+    const article = inlineArticle();
+    const page: PageFragment = {
+      schemaVersion: 1,
+      pageIndex: 0,
+      blocks: [
+        {
+          blockIndex: 0,
+          startGrapheme: 0,
+          endGrapheme: articleGraphemeIndex(article).perBlockLengths[0]!,
+        },
+      ],
+    };
+    const { container } = render(
+      <PageFragmentView fragment={page} pageIndex={0} article={article} lang="en" />,
+    );
+    expect(container.querySelector('sup > a#fn-ref-1[href="#fn-1"]')).not.toBeNull();
+    expect(container.querySelector('sup > a#fn-ref-1-2[href="#fn-1"]')).not.toBeNull();
+  });
+});

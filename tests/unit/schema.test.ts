@@ -92,6 +92,60 @@ describe("FootnoteReferenceBlock footnoteId regex (Pitfall 4)", () => {
   });
 });
 
+// ── Inline footnote reference (spec #66 / issue #55) ─────────────────────────
+
+describe("footnote-ref inline mark (issue #55)", () => {
+  it.each([
+    ["main", "main"],
+    ["fn-abc (non-numeric)", "fn-abc"],
+    ["missing prefix", "1"],
+    ["uppercase", "FN-1"],
+  ])("rejects footnoteId %s (DOM-clobbering guard)", (_label, footnoteId) => {
+    expect(() => Mark.parse({ type: "footnote-ref", footnoteId, occurrence: 1 })).toThrow();
+  });
+
+  it("rejects a non-positive occurrence", () => {
+    expect(() => Mark.parse({ type: "footnote-ref", footnoteId: "fn-1", occurrence: 0 })).toThrow();
+  });
+
+  it("round-trips an article carrying an inline reference", () => {
+    const input = validArticle({
+      blocks: [
+        {
+          kind: "paragraph",
+          content: [
+            { text: "The claim", marks: [] },
+            { text: "1", marks: [{ type: "footnote-ref", footnoteId: "fn-1", occurrence: 1 }] },
+            { text: " holds.", marks: [] },
+          ],
+        },
+      ],
+      footnotes: [{ id: "fn-1", content: [{ text: "A note.", marks: [] }] }],
+    });
+    const parsed = ArticleSchema.parse(input);
+    expect(ArticleSchema.parse(JSON.parse(JSON.stringify(parsed)))).toEqual(parsed);
+    expect(parsed.blocks[0]).toEqual((input as { blocks: unknown[] }).blocks[0]);
+  });
+
+  it("stored rows with the legacy block-level reference and single-content notes still parse", () => {
+    const parsed = ArticleSchema.parse(
+      validArticle({
+        blocks: [
+          { kind: "paragraph", content: [{ text: "Claim", marks: [] }] },
+          { kind: "footnote-reference", footnoteId: "fn-1", marker: "[1]" },
+        ],
+        footnotes: [{ id: "fn-1", content: [{ text: "A note.", marks: [] }] }],
+      }),
+    );
+    expect(parsed.blocks[1]).toEqual({
+      kind: "footnote-reference",
+      footnoteId: "fn-1",
+      marker: "[1]",
+    });
+    expect(parsed.footnotes).toEqual([{ id: "fn-1", content: [{ text: "A note.", marks: [] }] }]);
+  });
+});
+
 // ── URL scheme rejection (Pitfall 5 — stored XSS) ────────────────────────────
 
 describe("LinkMark href scheme allow-list (Pitfall 5)", () => {
@@ -267,9 +321,9 @@ describe("FigureBlock asset evolution (Phase 20 — IMG-01/IMG-02 substrate)", (
   });
 });
 
-// ── Inline marks — locked set of 4 (D-04) ────────────────────────────────────
+// ── Inline marks — locked set (D-04 four + footnote-ref, issue #55) ──────────
 
-describe("Mark union is locked to exactly 4 marks (D-04)", () => {
+describe("Mark union is locked (D-04 + footnote-ref)", () => {
   it("parses a run carrying [strong, em, code, link]", () => {
     const run = {
       text: "rich text",

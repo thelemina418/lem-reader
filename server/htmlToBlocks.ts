@@ -32,6 +32,7 @@ import type { Block, InlineRun } from "../src/content/schema";
 import { normalizeRunText } from "../src/content/normalizeText";
 import { publisherEntryMatchesHeading } from "../src/content/structure";
 import { attachAdjacentCaptions, withCaption } from "./figureCaptions";
+import { detectLinkedFootnotes, footnoteNumberFromHref } from "./footnoteLinks";
 
 /** Partial Provenance — the subset htmlToBlocks can extract from meta/link
  * tags. Structurally compatible with `Partial<Provenance>` (z.infer); the
@@ -52,7 +53,21 @@ type Mark =
   | { type: "link"; href: string; title?: string }
   | { type: "code" }
   | { type: "strong" }
-  | { type: "em" };
+  | { type: "em" }
+  | { type: "footnote-ref"; footnoteId: string; occurrence: number };
+
+/** Spec #66 / issue #55 — the inline walk's view of the detected notes:
+ * how many exist (a controlled `#fn-N` href is a reference only when N names
+ * one) and the per-note occurrence counter, advanced in document order so
+ * each reference gets its own anchor identity. */
+interface FootnoteRefWalk {
+  noteCount: number;
+  occurrences: Map<string, number>;
+}
+
+function newFootnoteRefWalk(noteCount: number): FootnoteRefWalk {
+  return { noteCount, occurrences: new Map() };
+}
 
 type InlineRunT = { text: string; marks: Mark[] };
 
@@ -158,7 +173,7 @@ export function sanitizeExtractedHtml(html: string): string {
  * it (and the issue #19 paragraph segmentation reuses it directly so caption
  * runs flow through the IDENTICAL mark logic — no drift, Pitfall 8-1
  * discipline). */
-function extractInlineNodes(nodes: Node[], marks: Mark[]): InlineRunT[] {
+function extractInlineNodes(nodes: Node[], marks: Mark[], refs?: FootnoteRefWalk): InlineRunT[] {
   const runs: InlineRunT[] = [];
   for (const child of nodes) {
     if (isText(child)) {
@@ -175,6 +190,23 @@ function extractInlineNodes(nodes: Node[], marks: Mark[]): InlineRunT[] {
       // D-04 mark set. sub/sup/del/strike/s are intentionally NOT carried.
       if (tag === "a") {
         const href = child.getAttribute("href") ?? "";
+        // Issue #55 — a controlled reference (rewritten by
+        // detectLinkedFootnotes) naming a detected note becomes the inline
+        // footnote-ref mark; its text is the publisher's marker.
+        const noteNumber = refs ? footnoteNumberFromHref(href) : null;
+        if (refs && noteNumber !== null && noteNumber <= refs.noteCount) {
+          const footnoteId = `fn-${noteNumber}`;
+          const occurrence = (refs.occurrences.get(footnoteId) ?? 0) + 1;
+          refs.occurrences.set(footnoteId, occurrence);
+          const text = normalizeRunText(child.textContent ?? "");
+          if (text.length > 0) {
+            runs.push({
+              text,
+              marks: [...marks, { type: "footnote-ref", footnoteId, occurrence }],
+            });
+          }
+          continue;
+        }
         // T-7-17: only http(s)/mailto hrefs become LinkMark; others are demoted
         // to plain text (the run recurses without a link mark). The schema's
         // linkableUrl refinement re-validates at ArticleSchema.parse time.
@@ -189,15 +221,15 @@ function extractInlineNodes(nodes: Node[], marks: Mark[]): InlineRunT[] {
       } else if (tag === "em" || tag === "i") {
         next.push({ type: "em" });
       }
-      runs.push(...extractInlineNodes(Array.from(child.childNodes ?? []), next));
+      runs.push(...extractInlineNodes(Array.from(child.childNodes ?? []), next, refs));
     }
   }
   return runs;
 }
 
 /** Extract inline runs from one node's children (the historical shape). */
-function extractInline(node: Node, marks: Mark[]): InlineRunT[] {
-  return extractInlineNodes(Array.from(node.childNodes ?? []), marks);
+function extractInline(node: Node, marks: Mark[], refs?: FootnoteRefWalk): InlineRunT[] {
+  return extractInlineNodes(Array.from(node.childNodes ?? []), marks, refs);
 }
 
 /** Collapse leading/trailing whitespace-only runs; merge adjacent identical-mark runs. */
@@ -521,11 +553,11 @@ function splitDirectChildSegments(el: Element): Node[][] {
  */
 function visitChildren(
   el: Element,
-  footnoteCounter: { n: number },
+  refs: FootnoteRefWalk,
   figureSrcResolver?: FigureSrcResolver,
 ): Block[] {
   return attachAdjacentCaptions(
-    Array.from(el.children).flatMap((c) => visit(c, footnoteCounter, figureSrcResolver)),
+    Array.from(el.children).flatMap((c) => visit(c, refs, figureSrcResolver)),
   );
 }
 
@@ -541,11 +573,7 @@ function visitChildren(
  * Returns Block[] (rather than pushing into a shared closure) so nested
  * containers (blockquote children, list-item content) compose cleanly.
  */
-function visit(
-  el: Element,
-  footnoteCounter: { n: number },
-  figureSrcResolver?: FigureSrcResolver,
-): Block[] {
+function visit(el: Element, refs: FootnoteRefWalk, figureSrcResolver?: FigureSrcResolver): Block[] {
   const tag = el.tagName.toLowerCase();
 
   // Skip obvious chrome / non-content decoration.
@@ -556,32 +584,20 @@ function visit(
     return [];
   }
 
-  // In-text footnote reference: <sup class="reference"> (Wikipedia/SEP).
-  if (
-    tag === "sup" &&
-    ((el as Element & { classList?: DOMTokenList }).classList?.contains("reference") ||
-      (el as Element & { classList?: DOMTokenList }).classList?.contains("footnote"))
-  ) {
-    const marker = (el.textContent ?? "").trim();
-    footnoteCounter.n += 1;
-    const num = /^=?\s*(\d+)/.exec(marker)?.[1] ?? String(footnoteCounter.n);
-    return [
-      {
-        kind: "footnote-reference",
-        footnoteId: `fn-${num}`,
-        marker: marker || `[${num}]`,
-      },
-    ];
-  }
+  // Issue #55: in-text footnote references are INLINE marks now (the
+  // footnote-ref arm of extractInlineNodes). New ingests never produce the
+  // legacy block-level footnote-reference kind; stored rows keep parsing.
 
   const level = headingLevel(tag);
   if (level !== null) {
-    const content = tidyRuns(extractInline(el, []));
+    const content = tidyRuns(extractInline(el, [], refs));
     return content.length ? [{ kind: "heading", level, content }] : [];
   }
 
   if (tag === "p") {
-    const content = tidyRuns(extractInline(el, []));
+    // Extracted lazily: the image-first caption branch never uses the
+    // paragraph channel, and must not advance the reference occurrences.
+    const paragraphContent = () => tidyRuns(extractInline(el, [], refs));
     // 260908-ef5 — inline-image hoisting (Honesty: no silent garbage). An
     // img inside a paragraph used to be silently dropped by the inline-run
     // extractor; now each el.querySelectorAll("img") match becomes its own
@@ -615,6 +631,7 @@ function visit(
     // lost text.
     const allImgs = Array.from(el.querySelectorAll("img"));
     if (allImgs.length === 0) {
+      const content = paragraphContent();
       return content.length ? [{ kind: "paragraph", content }] : [];
     }
     const directOnly = allImgs.every((img) => img.parentElement === el);
@@ -628,6 +645,7 @@ function visit(
       );
     }
     const hoistedFigures = allImgs.flatMap((img) => figureBlock(img, figureSrcResolver));
+    const content = paragraphContent();
     if (content.length) {
       return hoistedFigures.length
         ? [{ kind: "paragraph", content }, ...hoistedFigures]
@@ -637,10 +655,10 @@ function visit(
   }
 
   if (tag === "blockquote") {
-    const children = visitChildren(el, footnoteCounter, figureSrcResolver);
+    const children = visitChildren(el, refs, figureSrcResolver);
     if (children.length) return [{ kind: "blockquote", children }];
     // Fallback: capture the blockquote's own inline text as a paragraph.
-    const content = tidyRuns(extractInline(el, []));
+    const content = tidyRuns(extractInline(el, [], refs));
     return content.length ? [{ kind: "paragraph", content }] : [];
   }
 
@@ -648,7 +666,7 @@ function visit(
     const items: { content: Block[] }[] = [];
     for (const li of Array.from(el.children)) {
       if (li.tagName.toLowerCase() !== "li") continue;
-      const liContent = visitChildren(li, footnoteCounter, figureSrcResolver);
+      const liContent = visitChildren(li, refs, figureSrcResolver);
       if (liContent.length) items.push({ content: liContent });
     }
     if (!items.length) return [];
@@ -685,7 +703,7 @@ function visit(
   // Container-ish elements (div, section, aside, main, article, span, dl):
   // recurse into children to find nested block content.
   if (!BLOCK_TAGS.has(tag)) {
-    return visitChildren(el, footnoteCounter, figureSrcResolver);
+    return visitChildren(el, refs, figureSrcResolver);
   }
 
   // Catch-all (no `default:` clause — the unsupported branch IS the default).
@@ -711,14 +729,16 @@ export function htmlToBlocks(
   sanitizedDom: Document,
   sourceUrl: string | undefined,
   figureSrcResolver?: FigureSrcResolver,
+  noteCount = 0,
 ): HtmlToBlocksResult {
-  const footnoteCounter = { n: 0 };
   const root = findContentRoot(sanitizedDom);
-  const blocks = visitChildren(root, footnoteCounter, figureSrcResolver);
+  const blocks = visitChildren(root, newFootnoteRefWalk(noteCount), figureSrcResolver);
 
   return {
     blocks,
-    footnotes: extractFootnoteBodies(sanitizedDom),
+    // Footnote bodies come from link-graph detection on the ORIGINAL DOM
+    // (extractAndNormalize); a sanitized DOM carries no ids to detect with.
+    footnotes: [],
     lang: detectLang(sanitizedDom),
     provenancePartial: buildProvenance(sanitizedDom, sourceUrl),
     // The sanitized content fragment has no original nav — outline evidence
@@ -727,28 +747,24 @@ export function htmlToBlocks(
   };
 }
 
-// ── Footnote body extraction (copy of normalize-source.ts L256-271) ──────────
-/** Extract footnote bodies from a references/footnotes list. IDs match /^fn-\d+$/. */
-function extractFootnoteBodies(
-  document: Document,
-  max = 50,
-): { id: string; content: InlineRun[] }[] {
-  const out: { id: string; content: InlineRun[] }[] = [];
-  const lists = document.querySelectorAll(
-    "ol.references, .references ol, #References ol, section#notes ol, section.footnotes ol, ol.citation",
-  );
-  let n = 0;
-  for (const list of Array.from(lists)) {
-    for (const li of Array.from(list.children)) {
-      if (li.tagName.toLowerCase() !== "li") continue;
-      if (n >= max) break;
-      n += 1;
-      const content = tidyRuns(extractInline(li, []));
-      if (content.length) out.push({ id: `fn-${n}`, content });
-    }
-    if (out.length >= max) break;
+// ── Footnote bodies (issue #55) ──────────────────────────────────────────────
+/** Return glyphs publishers leave beside (not inside) a back-link. */
+const TRAILING_RETURN_GLYPHS = /(?:\s|[\u21A9\u21AA]|\uFE0E|\uFE0F)+$/u;
+
+/** One detected note's raw HTML → its inline runs, through the SHARED
+ * sanitizer and inline walk (the mXSS-suite surface — no fork). References
+ * inside a note are never live (note-to-note citations read as text). */
+function footnoteBodyRuns(noteHtml: string, url: string | undefined): InlineRun[] {
+  const dom = new JSDOM(`<body>${sanitizeExtractedHtml(noteHtml)}</body>`, {
+    url: url ?? undefined,
+  });
+  const runs = tidyRuns(extractInline(dom.window.document.body, []));
+  const last = runs[runs.length - 1];
+  if (last !== undefined) {
+    last.text = last.text.replace(TRAILING_RETURN_GLYPHS, "");
+    if (last.text.length === 0) runs.pop();
   }
-  return out;
+  return runs;
 }
 
 // ── Publisher outline evidence (issue #236) ─────────────────────────────────
@@ -1040,6 +1056,15 @@ export async function extractAndNormalize(
   // entry linking back to the imported document itself is not a chapter).
   const outlineEvidence = collectOutlineEvidence(document, finalUrl);
 
+  // Issue #55 — link-graph footnote detection on the ORIGINAL DOM (ids are
+  // still present; sanitization discards them). Rewrites references into
+  // controlled marker links and lifts matched notes out of the body flow,
+  // BEFORE Readability sees the document.
+  const linked = detectLinkedFootnotes(document);
+  const footnotes = linked.noteHtml
+    .map((html, i) => ({ id: `fn-${i + 1}`, content: footnoteBodyRuns(html, url) }))
+    .filter((fn) => fn.content.length > 0);
+
   // 4. Readability on a clone (Readability MUTATES its input). cloneNode
   // returns Node per the DOM lib types; Readability expects a Document.
   const reader = new Readability(document.cloneNode(true) as Document);
@@ -1053,13 +1078,13 @@ export async function extractAndNormalize(
   // 6. Sanitize the extracted content, re-parse, walk to Block tree.
   const sanitized = sanitizeExtractedHtml(article.content);
   const cleanDom = new JSDOM(sanitized, { url: url ?? undefined });
-  const walked = htmlToBlocks(cleanDom.window.document, url);
+  const walked = htmlToBlocks(cleanDom.window.document, url, undefined, linked.noteHtml.length);
 
   // The original-document lang + provenance are richer than what htmlToBlocks
   // can extract from the sanitized content fragment — prefer them.
   return {
     blocks: walked.blocks,
-    footnotes: walked.footnotes,
+    footnotes,
     lang,
     provenancePartial,
     outlineEvidence,

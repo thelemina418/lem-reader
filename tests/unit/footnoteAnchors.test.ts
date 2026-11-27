@@ -70,3 +70,66 @@ describe("footnote anchor destinations", () => {
     }
   });
 });
+
+// ── Inline footnote references (spec #66 / issue #55) ────────────────────────
+
+function inlineRef(occurrence: number, marker = "1") {
+  return {
+    text: marker,
+    marks: [{ type: "footnote-ref" as const, footnoteId: "fn-1", occurrence }],
+  };
+}
+
+/** A paragraph citing fn-1 twice, after awkward whitespace and a grapheme
+ * cluster, so the run → stream mapping is exercised (runs join with a space
+ * in the D-05 stream). */
+const citing: Block = {
+  kind: "paragraph",
+  content: [
+    { text: "  The 👩‍👩‍👧‍👦 claim", marks: [] },
+    inlineRef(1, "[1]"),
+    { text: " holds, and again", marks: [{ type: "em" }] },
+    inlineRef(2, "[1]"),
+    { text: ".", marks: [] },
+  ],
+};
+
+describe("inline footnote reference destinations (issue #55)", () => {
+  it("resolves each occurrence to its own marker in the canonical stream", () => {
+    const article = articleWith(citing);
+    const index = articleGraphemeIndex(article);
+    const text = index.clusters.join("");
+    const first = footnoteAnchorOffset(article, "#fn-ref-1");
+    const second = footnoteAnchorOffset(article, "#fn-ref-1-2");
+    expect(first).not.toBeNull();
+    expect(second).not.toBeNull();
+    expect(index.clusters.slice(first!, first! + 3).join("")).toBe("[1]");
+    expect(index.clusters.slice(second!, second! + 3).join("")).toBe("[1]");
+    expect(second!).toBeGreaterThan(first!);
+    // Known-good literal: the paragraph stream is "The 👩‍👩‍👧‍👦 claim [1] holds, and again [1] ."
+    expect(text).toContain("The 👩‍👩‍👧‍👦 claim [1] holds, and again [1] .");
+    expect(first! - index.blockStartOffsets[1]!).toBe("The X claim ".length);
+  });
+
+  it.each(["blockquote", "bulleted-list"] as const)(
+    "finds an inline reference nested in %s",
+    (kind) => {
+      const children: Block[] = [prose, citing];
+      const container: Block =
+        kind === "blockquote"
+          ? { kind, children }
+          : { kind, items: [{ content: [] }, { content: children }] };
+      const article = articleWith(container);
+      const index = articleGraphemeIndex(article);
+      const offset = footnoteAnchorOffset(article, "#fn-ref-1");
+      expect(offset).toBe(index.clusters.indexOf("["));
+    },
+  );
+
+  it("an occurrence that does not exist has no destination", () => {
+    const article = articleWith(citing);
+    for (const href of ["#fn-ref-1-3", "#fn-ref-1-1", "#fn-ref-1-0"]) {
+      expect(footnoteAnchorOffset(article, href)).toBeNull();
+    }
+  });
+});
