@@ -55,7 +55,6 @@ import {
   ingestEpub,
   ingestHtml,
   ingestMarkdown,
-  ingestPdf,
   ingestUrl,
   IngestionError,
   type EpubIngestionSuccess,
@@ -63,7 +62,7 @@ import {
   type ValidatedAsset,
 } from "../ingestion/IngestionClient";
 import { bytesToBase64 } from "../ingestion/ingestCopy";
-import { EPUB_MAX_BYTES, PDF_MAX_BYTES } from "../ingestion/types";
+import { EPUB_MAX_BYTES } from "../ingestion/types";
 import { bookAssetsForChapters } from "../ingestion/addToLibrary";
 import type { BookAsset } from "./booksStore";
 import { db, type AssetRecordRow } from "./db";
@@ -360,9 +359,12 @@ export async function previewUrlReprocess(
 
 /** Uploaded article sources (#64): Lem Reader keeps no original files, so
  * the reader chooses the original again. An HTML file upload is stored as
- * "paste" (the client posts its text through the paste channel), so paste
- * articles take the same path: the fingerprint check decides. */
-export const UPLOAD_SOURCES = ["markdown", "html-upload", "paste", "pdf"] as const;
+ * "paste" (the client posts its text through the paste channel, origin
+ * "paste" too), so it cannot be told apart from typed paste: paste articles
+ * take the same path and the fingerprint check decides. PDF is not here
+ * (spec #66: "PDF ingestion is unchanged" — PDF articles have their own
+ * repair flow). */
+export const UPLOAD_SOURCES = ["markdown", "html-upload", "paste"] as const;
 export type UploadSource = (typeof UPLOAD_SOURCES)[number];
 
 export const isUploadSource = (source: ArticleSource | undefined): source is UploadSource =>
@@ -379,10 +381,6 @@ export async function ingestOriginalFile(
   file: File,
   source: UploadSource,
 ): Promise<IngestionSuccess> {
-  if (source === "pdf") {
-    if (file.size > PDF_MAX_BYTES) throw new IngestionError("pdf-too-large");
-    return ingestPdf(bytesToBase64(new Uint8Array(await file.arrayBuffer())), file.name);
-  }
   if (file.size > 5 * 1024 * 1024) throw new IngestionError("response-too-large");
   if (source === "markdown") return ingestMarkdown(await file.text(), file.name);
   return ingestHtml(await file.text());
