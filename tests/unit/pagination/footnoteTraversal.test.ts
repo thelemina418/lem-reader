@@ -537,6 +537,118 @@ describe("footnote windows through the pagination engine (issue #235)", () => {
   });
 });
 
+describe("a note with several paragraphs longer than a page (issue #59)", () => {
+  /** The long work with one multi-paragraph note in place of fn-1. */
+  function multiParagraphNoteWork(paragraphs: string[]) {
+    const base = longFootnotedWork();
+    return ArticleSchema.parse({
+      ...base,
+      footnotes: [
+        {
+          id: "fn-1",
+          content: [{ text: paragraphs[0]!, marks: [] }],
+          laterParagraphs: paragraphs.slice(1).map((text) => [{ text, marks: [] }]),
+        },
+        base.footnotes[1],
+      ],
+    });
+  }
+
+  /** Every footnote entry the work's footnote windows paginate to, in order. */
+  function footnoteEntries(article: CanonicalArticle, measure: typeof measurementFor) {
+    const entries: { footnoteIndex: number; start: number; end: number }[] = [];
+    for (const window of blockWindows(article).filter((w) => w.startFootnote !== undefined)) {
+      const result = paginateDocument({
+        article,
+        measurement: measure(article, window),
+        pageContentBoxHeightPx: 120,
+        diagnostics: new DiagnosticBus(),
+        signal: new AbortController().signal,
+      });
+      expect(result.status).toBe("ok");
+      for (const entry of result.pages.flatMap((page) => page.blocks)) {
+        entries.push({
+          footnoteIndex: entry.footnoteIndex!,
+          start: entry.startGrapheme,
+          end: entry.endGrapheme,
+        });
+      }
+    }
+    return entries;
+  }
+
+  /** Line boxes that walk the row's whole raw text, 40 raw units per line
+   * (the DOM measurer's shape: offsets into the row's rendered text). */
+  function lineWalkMeasurement(
+    article: CanonicalArticle,
+    window: ReturnType<typeof blockWindows>[number],
+  ): MeasurementResult {
+    const base = measurementFor(article, window);
+    const rows = footnoteRows(article).filter(
+      (row) => row.index >= window.startFootnote! && row.index < window.endFootnote!,
+    );
+    return {
+      ...base,
+      blocks: rows.map((row) => {
+        const fn = article.footnotes[row.index]!;
+        const raw = [fn.content, ...(fn.laterParagraphs ?? [])]
+          .map((runs) => runs.map((r) => r.text).join(""))
+          .join("");
+        const start = row.index === window.startFootnote ? (window.startFootnoteGrapheme ?? 0) : 0;
+        const lines = Math.ceil(Math.max(raw.length - start, 1) / 40);
+        return {
+          kind: "footnote-body",
+          heightPx: lines * 10,
+          lineCount: lines,
+          lineBoxes: Array.from({ length: lines }, (_, line) => ({
+            charOffset: line * 40,
+            topPx: line * 10,
+            bottomPx: (line + 1) * 10,
+          })),
+        };
+      }),
+    };
+  }
+
+  it("continues across pages, covering the note exactly once", () => {
+    const paragraphs = [
+      "The note opens. ".repeat(20).trim(),
+      "A quoted source continues the argument. ".repeat(15).trim(),
+      "The note closes. ".repeat(20).trim(),
+    ];
+    const article = multiParagraphNoteWork(paragraphs);
+    const row = footnoteRows(article)[0]!;
+    expect(row.length).toBe(graphemeClusters(paragraphs.join("\n"), "en").length);
+    const noteEntries = footnoteEntries(article, lineWalkMeasurement).filter(
+      (e) => e.footnoteIndex === 0,
+    );
+    expect(noteEntries.length).toBeGreaterThan(1); // it really crosses a page
+    let expected = 0;
+    for (const slice of noteEntries) {
+      expect(slice.start).toBe(expected);
+      expect(slice.end).toBeGreaterThan(slice.start);
+      expected = slice.end;
+    }
+    expect(expected).toBe(row.length);
+  });
+
+  it("a note larger than a source window continues across windows exactly once", () => {
+    const giant = "Ledger line. ".repeat(700);
+    const article = multiParagraphNoteWork([giant, giant, "Closing line."]);
+    const row = footnoteRows(article)[0]!;
+    const noteEntries = footnoteEntries(article, measurementFor).filter(
+      (e) => e.footnoteIndex === 0,
+    );
+    let expected = 0;
+    for (const slice of noteEntries) {
+      expect(slice.start).toBe(expected);
+      expect(slice.end).toBeGreaterThan(slice.start);
+      expected = slice.end;
+    }
+    expect(expected).toBe(row.length);
+  });
+});
+
 describe("anchors speak footnote coordinates (issue #235)", () => {
   it("gives a short footnoted work a reachable completing note page", () => {
     const article = articleWith();

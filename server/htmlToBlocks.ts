@@ -29,6 +29,7 @@ import { JSDOM } from "jsdom";
 import DOMPurify, { clearWindow } from "isomorphic-dompurify";
 import { Readability, isProbablyReaderable } from "@mozilla/readability";
 import type { Block, InlineRun } from "../src/content/schema";
+import type { FootnoteBodyT as CanonicalFootnote } from "../src/content/footnoteBody";
 import { normalizeRunText } from "../src/content/normalizeText";
 import { publisherEntryMatchesHeading } from "../src/content/structure";
 import { attachAdjacentCaptions, withCaption } from "./figureCaptions";
@@ -517,7 +518,7 @@ function findContentRoot(document: Document): Element {
 /** The result shape of htmlToBlocks + extractAndNormalize (minus isReaderable). */
 export interface HtmlToBlocksResult {
   blocks: Block[];
-  footnotes: { id: string; content: InlineRun[] }[];
+  footnotes: CanonicalFootnote[];
   lang: string;
   provenancePartial: ProvenancePartial;
   /** Issue #236 — the source's own chapter index (nav fragment links whose
@@ -751,20 +752,78 @@ export function htmlToBlocks(
 /** Return glyphs publishers leave beside (not inside) a back-link. */
 const TRAILING_RETURN_GLYPHS = /(?:\s|[\u21A9\u21AA]|\uFE0E|\uFE0F)+$/u;
 
-/** One detected note's raw HTML → its inline runs, through the SHARED
- * sanitizer and inline walk (the mXSS-suite surface — no fork). References
- * inside a note are never live (note-to-note citations read as text). */
-function footnoteBodyRuns(noteHtml: string, url: string | undefined): InlineRun[] {
+/** Elements that open a new paragraph inside a note (issue #59). Quotations,
+ * lists and any other block structure inside a note flatten into
+ * paragraphs: each block-level descendant's own inline content is one
+ * paragraph, its text intact. */
+const NOTE_PARAGRAPH_BREAK_TAGS = new Set([
+  ...BLOCK_TAGS,
+  "li",
+  "div",
+  "section",
+  "article",
+  "aside",
+  "header",
+  "footer",
+  "dl",
+  "dt",
+  "dd",
+]);
+
+/** Flatten a note's DOM into paragraphs of raw inline nodes. */
+function noteParagraphNodes(root: Node): Node[][] {
+  const paragraphs: Node[][] = [];
+  let current: Node[] = [];
+  const flush = () => {
+    if (current.length > 0) paragraphs.push(current);
+    current = [];
+  };
+  const walk = (parent: Node) => {
+    for (const child of Array.from(parent.childNodes ?? [])) {
+      if (isEl(child) && NOTE_PARAGRAPH_BREAK_TAGS.has(child.tagName.toLowerCase())) {
+        flush();
+        walk(child);
+        flush();
+      } else {
+        current.push(child);
+      }
+    }
+  };
+  walk(root);
+  flush();
+  return paragraphs;
+}
+
+/** One detected note's raw HTML → its paragraphs of inline runs, through the
+ * SHARED sanitizer and inline walk (the mXSS-suite surface — no fork).
+ * References inside a note are never live (note-to-note citations read as
+ * text). Empty paragraphs are dropped, and publisher return glyphs are
+ * stripped from the note's end. */
+function footnoteBodyParagraphs(noteHtml: string, url: string | undefined): InlineRun[][] {
   const dom = new JSDOM(`<body>${sanitizeExtractedHtml(noteHtml)}</body>`, {
     url: url ?? undefined,
   });
-  const runs = tidyRuns(extractInline(dom.window.document.body, []));
-  const last = runs[runs.length - 1];
-  if (last !== undefined) {
+  const paragraphs = noteParagraphNodes(dom.window.document.body)
+    .map((nodes) => tidyRuns(extractInlineNodes(nodes, [])))
+    .filter((runs) => runs.length > 0);
+  while (paragraphs.length > 0) {
+    const runs = paragraphs[paragraphs.length - 1]!;
+    const last = runs[runs.length - 1]!;
     last.text = last.text.replace(TRAILING_RETURN_GLYPHS, "");
     if (last.text.length === 0) runs.pop();
+    if (runs.length > 0) break;
+    paragraphs.pop();
   }
-  return runs;
+  return paragraphs;
+}
+
+/** The canonical Footnote body for one note's paragraphs: the first paragraph
+ * is `content`; later ones ride `laterParagraphs`, absent for a one-paragraph
+ * note (the pre-#59 shape, byte-identical). Null when the note is empty. */
+function footnoteBody(id: string, paragraphs: InlineRun[][]): CanonicalFootnote | null {
+  const [first, ...later] = paragraphs;
+  if (first === undefined) return null;
+  return later.length > 0 ? { id, content: first, laterParagraphs: later } : { id, content: first };
 }
 
 // ── Publisher outline evidence (issue #236) ─────────────────────────────────
@@ -1062,8 +1121,8 @@ export async function extractAndNormalize(
   // BEFORE Readability sees the document.
   const linked = detectLinkedFootnotes(document);
   const footnotes = linked.noteHtml
-    .map((html, i) => ({ id: `fn-${i + 1}`, content: footnoteBodyRuns(html, url) }))
-    .filter((fn) => fn.content.length > 0);
+    .map((html, i) => footnoteBody(`fn-${i + 1}`, footnoteBodyParagraphs(html, url)))
+    .filter((fn): fn is CanonicalFootnote => fn !== null);
 
   // 4. Readability on a clone (Readability MUTATES its input). cloneNode
   // returns Node per the DOM lib types; Readability expects a Document.

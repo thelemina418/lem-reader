@@ -36,7 +36,7 @@
 // Plan 05's corpus matrix lands container coverage and proves the recursive
 // slicing path.
 import type { CanonicalArticle } from "../content/types";
-import { BlockView } from "../content/render/BlockRenderer";
+import { BlockView, FootnoteBodyContent } from "../content/render/BlockRenderer";
 import type { ArticleBodyHighlight } from "../content/render/BlockRenderer";
 import type { ListItemSlices } from "../content/render/BlockRenderer";
 import { resolveBlockSlice, footnoteBodyBlock } from "./splitBlock";
@@ -45,7 +45,7 @@ import {
   blockNormalizedText,
   footnoteRowFor,
   graphemeClusters,
-  inlineText,
+  footnoteText,
   isWhitespaceCluster,
 } from "../content/normalizeText";
 import { blockGraphemeLength } from "./anchor";
@@ -60,7 +60,6 @@ import type { CodeSegment } from "../annotations/highlightRanges";
 // and the pagination engine address the SAME D-05 coordinate stream, so the
 // spike's measureChild parameter is gone — there is one child measure.
 import { blockViewSlices, sliceBlockHighlights } from "../annotations/unifiedHighlightSlicer";
-import { InlineList } from "../content/render/InlineRenderer";
 import type { GraphemeRange } from "../annotations/unifiedHighlightSlicer";
 // Issue #42: the synthetic spoken-word marker entry — appended to the SAME
 // per-entry highlight translation the annotation highlights ride, then
@@ -330,11 +329,10 @@ function FootnoteEntryView({
     entry.endGrapheme,
     lang,
   );
-  const runs = resolved.kind === "paragraph" ? resolved.content : fn.content;
   // Cross-fragment slicing for the annotation/spoken overlay (the paginated
   // twin of the body-entry path): article-global intersection translated to
   // entry-local coordinates against the footnote ROW's canonical origin.
-  let highlightSlices: ReturnType<typeof blockViewSlices>["highlightSlices"] = undefined;
+  let viewSlices: ReturnType<typeof blockViewSlices> = {};
   if (highlights.length > 0) {
     const row = footnoteRowFor(article, footnoteIndex);
     if (row) {
@@ -355,19 +353,25 @@ function FootnoteEntryView({
           highlights: entrySlices,
           lang,
         });
-        highlightSlices = blockViewSlices(unified).highlightSlices;
+        viewSlices = blockViewSlices(unified);
       }
     }
   }
-  if (highlightSlices) {
-    claimSlicesFirstOccurrence(highlightSlices, seenHighlightIds);
+  if (viewSlices.highlightSlices) {
+    claimSlicesFirstOccurrence(viewSlices.highlightSlices, seenHighlightIds);
+  }
+  for (const childSlices of viewSlices.childHighlightSlices ?? []) {
+    if (childSlices) claimSlicesFirstOccurrence(childSlices, seenHighlightIds);
   }
   const n = fn.id.replace(/^fn-/, "");
   return (
     <li id={fn.id} tabIndex={-1} data-footnote-index={footnoteIndex}>
-      <span data-footnote-content>
-        <InlineList runs={runs} highlightSlices={highlightSlices} />
-      </span>{" "}
+      <FootnoteBodyContent
+        body={resolved}
+        highlightSlices={viewSlices.highlightSlices}
+        childHighlightSlices={viewSlices.childHighlightSlices}
+        contentWrapper
+      />{" "}
       <a href={`#fn-ref-${n}`} aria-label={`Return to reference ${n}`}>
         {"\u21A9"}
       </a>
@@ -410,7 +414,7 @@ function sliceHighlightsForEntry(
   const row = footnoteIndex !== undefined ? footnoteRowFor(article, footnoteIndex) : undefined;
   const windowClusters =
     row !== undefined
-      ? graphemeClusters(inlineText(article.footnotes[row.index]!.content), lang)
+      ? graphemeClusters(footnoteText(article.footnotes[row.index]!), lang)
       : graphemeClusters(blockNormalizedText(article.blocks[blockIndex]!), lang);
   const blockGlobalStart =
     row !== undefined

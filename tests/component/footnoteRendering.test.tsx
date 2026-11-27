@@ -294,3 +294,113 @@ describe("inline footnote references (issue #55)", () => {
     expect(container.querySelector('sup > a#fn-ref-1-2[href="#fn-1"]')).not.toBeNull();
   });
 });
+
+// ── Footnotes with several paragraphs (spec #66 / issue #59) ─────────────────
+
+const multiParagraphArticle = (): CanonicalArticle => ({
+  id: "multi-paragraph-notes",
+  revision: 1,
+  lang: "en",
+  provenance: {
+    title: "Long notes",
+    retrievedAt: "2026-01-01T00:00:00Z",
+    originalHtmlHash: "multi-paragraph-notes-v1",
+  },
+  blocks: [
+    {
+      kind: "paragraph",
+      content: [
+        { text: "The claim", marks: [] },
+        { text: "1", marks: [{ type: "footnote-ref", footnoteId: "fn-1", occurrence: 1 }] },
+        { text: " holds.", marks: [] },
+      ],
+    },
+  ],
+  footnotes: [
+    {
+      id: "fn-1",
+      content: [{ text: "The first paragraph of the note.", marks: [] }],
+      laterParagraphs: [
+        [{ text: "The second paragraph, ", marks: [] }, { text: "quoted", marks: [{ type: "em" }] }],
+        [{ text: "The closing paragraph.", marks: [] }],
+      ],
+    },
+  ],
+});
+
+const NOTE_PARAGRAPHS = [
+  "The first paragraph of the note.",
+  "The second paragraph, quoted",
+  "The closing paragraph.",
+];
+
+describe("footnotes with several paragraphs (issue #59)", () => {
+  it("the scrolling notes section renders each paragraph as a paragraph, then the return", () => {
+    const { container } = render(
+      <ArticleBody article={multiParagraphArticle()} highlights={[]} />,
+    );
+    const li = container.querySelector('section[aria-label="Footnotes"] li#fn-1')!;
+    expect(Array.from(li.querySelectorAll("p"), (p) => p.textContent)).toEqual(NOTE_PARAGRAPHS);
+    expect(li.querySelector("blockquote")).toBeNull();
+    expect(li.querySelector("p em")?.textContent).toBe("quoted");
+    const back = li.querySelector('a[href="#fn-ref-1"]');
+    expect(back?.getAttribute("aria-label")).toBe("Return to reference 1");
+    // The return follows the note's text — it is not inside a paragraph.
+    expect(back?.closest("p")).toBeNull();
+  });
+
+  it("the windowed measurement rows render the same paragraphs, id-less", () => {
+    const article = multiParagraphArticle();
+    const { container } = render(
+      <ArticleBody
+        article={article}
+        highlights={[]}
+        blockWindow={{
+          startBlock: article.blocks.length,
+          endBlock: article.blocks.length,
+          startFootnote: 0,
+          endFootnote: 1,
+        }}
+      />,
+    );
+    const li = container.querySelector("li[data-footnote-index]")!;
+    expect(li.id).toBe("");
+    expect(Array.from(li.querySelectorAll("p"), (p) => p.textContent)).toEqual(NOTE_PARAGRAPHS);
+  });
+
+  it("a note split across pages renders each page's paragraphs exactly once", () => {
+    const article = multiParagraphArticle();
+    const row = footnoteRows(article)[0]!;
+    // Cut inside the second paragraph ("The second | paragraph, quoted").
+    const cut = "The first paragraph of the note.\nThe second".length;
+    const entryPage = (start: number, end: number): PageFragment => ({
+      schemaVersion: 1,
+      pageIndex: 0,
+      blocks: [
+        {
+          blockIndex: article.blocks.length,
+          footnoteIndex: 0,
+          startGrapheme: start,
+          endGrapheme: end,
+        },
+      ],
+    });
+    const first = render(
+      <PageFragmentView fragment={entryPage(0, cut)} pageIndex={0} article={article} lang="en" />,
+    ).container;
+    const second = render(
+      <PageFragmentView
+        fragment={entryPage(cut, row.length)}
+        pageIndex={1}
+        article={article}
+        lang="en"
+      />,
+    ).container;
+    const paragraphs = (c: HTMLElement) =>
+      Array.from(c.querySelectorAll("[data-footnote-content] p"), (p) => p.textContent?.trim());
+    expect(paragraphs(first)).toEqual(["The first paragraph of the note.", "The second"]);
+    expect(paragraphs(second)).toEqual(["paragraph, quoted", "The closing paragraph."]);
+    const note = second.querySelector("li#fn-1");
+    expect(note?.querySelector('a[href="#fn-ref-1"]')).not.toBeNull();
+  });
+});

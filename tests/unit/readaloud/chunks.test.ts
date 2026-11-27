@@ -431,3 +431,35 @@ describe("chunkArticleForSpeech — edges", () => {
     }
   });
 });
+
+describe("chunkArticleForSpeech — notes with several paragraphs (issue #59)", () => {
+  it("reads every paragraph of a note, in order, as that note's one paragraph unit", () => {
+    const article = ArticleSchema.parse({
+      ...baseArticle,
+      blocks: [{ kind: "paragraph", content: [{ text: "Body text here." }] }],
+      footnotes: [
+        {
+          id: "fn-1",
+          content: [{ text: "The note opens" }],
+          laterParagraphs: [[{ text: "and continues" }], [{ text: "Then it ends." }]],
+        },
+        { id: "fn-2", content: [{ text: "Second source." }] },
+      ],
+    }) as CanonicalArticle;
+    const chunks = chunkArticleForSpeech(article);
+    const clusters = graphemeClusters(normalizeText(article), "en");
+    // A paragraph boundary is a spoken break: no words glue across it.
+    expect(chunks.map((c) => c.text)).toEqual([
+      "Body text here.",
+      "The note opens",
+      "and continues",
+      "Then it ends.",
+      "Second source.",
+    ]);
+    expect(chunks.map((c) => c.units.paragraphIndex)).toEqual([0, 1, 1, 1, 2]);
+    // Each chunk addresses its own words in the canonical stream.
+    for (const c of chunks) {
+      expect(clusters.slice(c.startGrapheme, c.endGrapheme).join("")).toBe(c.text);
+    }
+  });
+});
