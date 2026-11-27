@@ -285,3 +285,53 @@ describe("countByState (D14-24 — counts cannot disagree with membership)", () 
     expect(counts.unread + counts["in-progress"] + counts.finished).toBe(6);
   });
 });
+
+// Spec #66 (review S1) — "Reaching or reading the notes never finishes an
+// article". `total` is the end of the MAIN text (mainTextLength); an offset
+// past it is a position inside the notes. Such a position is not a
+// completion signal on its own: a reader who jumps to the notes early is not
+// finished, while a reader who already finished stays finished (the
+// completion record carried in when they entered the notes stands).
+describe("a saved position inside the notes (spec #66 S1)", () => {
+  const record = (finished: boolean, updatedAt: string) =>
+    CompletionRecordSchema.parse({
+      schemaVersion: 1,
+      target: { kind: "article", articleId: "art-a" },
+      targetKey: "article:art-a",
+      finished,
+      source: "reading",
+      updatedAt,
+    });
+
+  it("a notes position with no completion record reads in-progress, never finished", () => {
+    expect(articleReadingState(loc("art-a", 140, "2026-01-02T00:00:00.000Z"), 100)).toBe(
+      "in-progress",
+    );
+  });
+
+  it("an older finished record stands against a newer notes position", () => {
+    expect(
+      articleReadingState(
+        loc("art-a", 140, "2026-01-04T00:00:00.000Z"),
+        100,
+        record(true, "2026-01-03T00:00:00.000Z"),
+      ),
+    ).toBe("finished");
+  });
+
+  it("an older unfinished record stands against a newer notes position", () => {
+    expect(
+      articleReadingState(
+        loc("art-a", 140, "2026-01-04T00:00:00.000Z"),
+        100,
+        record(false, "2026-01-03T00:00:00.000Z"),
+      ),
+    ).toBe("in-progress");
+  });
+
+  it("the end of the main text itself still finishes", () => {
+    expect(articleReadingState(loc("art-a", 100, "2026-01-02T00:00:00.000Z"), 100)).toBe(
+      "finished",
+    );
+  });
+});

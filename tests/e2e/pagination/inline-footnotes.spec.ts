@@ -18,6 +18,7 @@ import { readPagination, waitForPaginationSettled, waitForTurnAcknowledged } fro
 import { BASE } from "../_base";
 import { switchMode, waitForReadingSurface } from "../annotations/_fixtures";
 import { footnoteReferenceSpans } from "../../../src/content/footnoteReferences";
+import { mainTextLength } from "../../../src/content/normalizeText";
 import { locationSaveMarker, waitForLocationSaved } from "../location-readiness";
 
 const NOTE = "The north-wing ledger, shelf 12, folio 3.";
@@ -243,6 +244,27 @@ test("paged excursion: turning a page from the notes reads on and saves normally
   expect(await savedOffset(page)).toBeGreaterThan(SECOND_REF.end);
 });
 
+// Spec #66 review S1 (reverses #58's "a notes position reads finished"):
+// reaching or reading the notes never finishes an article. Following a
+// reference and then reading on through the notes saves a notes position,
+// and the library keeps the article in progress.
+test("reading on through the notes after an excursion does not finish the article", async ({
+  page,
+}) => {
+  await open(page, twice);
+  await followAndSave(page, await pageToSecondRef(page));
+  const marker = await locationSaveMarker(page);
+  await page.keyboard.press("ArrowRight");
+  await waitForPaginationSettled(page);
+  await waitForLocationSaved(page, twice.id, marker);
+  expect(await savedOffset(page)).toBeGreaterThan(mainTextLength(twice));
+
+  await page.goto(`${BASE}/`);
+  const row = page.locator(".library-row").filter({ hasText: twice.provenance.title });
+  await expect(row.getByRole("button", { name: /^Mark as read:/ })).toBeVisible();
+  await expect(row.getByText("Finished", { exact: true })).toHaveCount(0);
+});
+
 test("excursion survives a mode toggle; scrolling returns focus to the marker", async ({
   page,
 }) => {
@@ -272,7 +294,7 @@ test("scrolling excursion: focus lands on the note; scrolling the notes ends it"
   expect(await savedOffset(page)).toBe(SECOND_REF.start);
 
   // A deliberate scroll within the notes is reading on: the position saves
-  // normally again (inside the notes — by #58's rule that reads finished).
+  // normally again (inside the notes — which never finishes the article).
   const marker = await locationSaveMarker(page);
   await page.mouse.move(180, 350);
   await page.mouse.wheel(0, -120);

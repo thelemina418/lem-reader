@@ -44,7 +44,7 @@
 // revisions carries several rows; the latest-savedAt row is the live truth
 // for BOTH the finished check and the resume pick.
 import type { Book, CanonicalArticle, LocationRecord } from "../../content/schema";
-import { isFinishedOffset } from "../../reader/readingPosition";
+import { inNotesOffset, isFinishedOffset } from "../../reader/readingPosition";
 
 /**
  * deriveBookProgress (D12-03) — chapters-finished ratio in [0, 1].
@@ -76,7 +76,8 @@ export function deriveBookProgress(
     if (!loc) continue; // never opened → unfinished
     const len = textLengthOf(chapterId);
     if (len === undefined) continue; // unknown text length → unfinished
-    if (isFinishedOffset(loc.graphemeOffset, len)) {
+    // Spec #66 — a chapter position inside its notes never finishes it.
+    if (!inNotesOffset(loc.graphemeOffset, len) && isFinishedOffset(loc.graphemeOffset, len)) {
       finished += 1;
     }
   }

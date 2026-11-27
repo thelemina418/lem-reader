@@ -45,11 +45,12 @@ import {
   BLOCK_SEPARATOR,
   deriveQuoteSelector,
   graphemeLength,
+  mainTextLength,
   normalizeText,
   resolveQuoteSelector,
 } from "../content/normalizeText";
 import { deriveWorkStructure } from "../content/structure";
-import { isFinishedOffset } from "../reader/readingPosition";
+import { inNotesOffset, isFinishedOffset } from "../reader/readingPosition";
 import {
   ingestEpub,
   ingestHtml,
@@ -258,8 +259,15 @@ function carryPosition(
   if (!location) return { kind: "none" };
   if (location.revision !== saved.revision) return { kind: "unmatched" };
   const total = graphemeLength(saved);
-  if (isFinishedOffset(location.graphemeOffset, total))
-    return { kind: "kept", offset: graphemeLength(proposed) };
+  // Spec #66 — finished is reaching the end of the MAIN text; a finish
+  // carries to the proposed article's main-text end (its end-pin), never to
+  // the end of its notes. A position inside the notes re-anchors by quote.
+  const mainEnd = mainTextLength(saved);
+  if (
+    !inNotesOffset(location.graphemeOffset, mainEnd) &&
+    isFinishedOffset(location.graphemeOffset, mainEnd)
+  )
+    return { kind: "kept", offset: mainTextLength(proposed) };
   if (location.graphemeOffset === 0) return { kind: "kept", offset: 0 };
   const start = Math.min(location.graphemeOffset, total);
   const quote = deriveQuoteSelector(saved, { start, end: Math.min(total, start + 48) });

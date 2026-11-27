@@ -99,6 +99,9 @@ export async function recordCompletion(
   target: CollectionEntryTarget,
   finished: boolean,
   source: "reading" | "reader",
+  /** The signal's own stamp when it is not "now" (spec #66: the notes
+   * transition stamps the record with the location save it carries over). */
+  updatedAt: string = nowIso(),
 ): Promise<CompletionRecord> {
   const record: CompletionRecord = {
     schemaVersion: 1,
@@ -106,7 +109,7 @@ export async function recordCompletion(
     target,
     finished,
     source,
-    updatedAt: nowIso(),
+    updatedAt,
   };
   await db.completions.put(record);
   return record;

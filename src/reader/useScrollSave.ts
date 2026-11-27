@@ -180,7 +180,14 @@ export function useScrollSave(
     const loc = pendingRef.current;
     if (!loc) return;
     pendingRef.current = null;
-    saveLocation(loc)
+    // Spec #66 — the end-pin lets the save carry completion into the notes
+    // (a notes position is not itself a completion signal).
+    const current = articleRef.current;
+    const mainTextEnd =
+      current !== null && current.id === loc.articleId && current.revision === loc.revision
+        ? endPinOffset(current)
+        : undefined;
+    saveLocation(loc, { mainTextEnd })
       .then(() => {
         // Two failure domains, kept separate: the .catch below routes WRITE
         // failures to STATE-05 — the broadcast is not a write, so a throwing
@@ -300,8 +307,8 @@ export function useScrollSave(
       // TEXT: once the notes region comes into view while the top of the
       // viewport is still in the main text, persist the end-pin (the notes
       // are reference material — the reader never has to walk them). A top
-      // offset already inside the notes saves as itself (it lies past the
-      // pin, so it reads finished, and restores into its note).
+      // offset already inside the notes saves as itself (it restores into
+      // its note; it never finishes the article — spec #66).
       const articleEl = articleElRef.current;
       if (
         currentArticle !== null &&
