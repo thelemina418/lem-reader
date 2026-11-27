@@ -22,7 +22,7 @@
 //     assertion reads the live transform: scaleX(<value>) inline style; the
 //     continue-reading strip count + ordering assertions read the live DOM.
 import { test, expect, type Page } from "@playwright/test";
-import { fixtures } from "../../../src/fixtures";
+import { libraryFixtures } from "../../../src/fixtures";
 import { ArticleSchema } from "../../../src/content/schema";
 import type { CanonicalArticle } from "../../../src/content/schema";
 import { normalizeText, graphemeClusters } from "../../../src/content/normalizeText";
@@ -33,11 +33,11 @@ import { BASE } from "../_base";
 // A representative fixture for hairline + finished assertions. Picked for
 // stable content (won't drift between releases) + a non-trivial grapheme
 // length so a 50% offset is comfortably mid-article. Since the 260907-pw1
-// single-article starter library, `fixtures` carries ONE bundled article —
+// single-article starter library, `libraryFixtures` carries ONE bundled article —
 // the two continue-reading strip articles are Node-built schema-valid
 // standalones (the library-restore.spec.ts makeStandalone discipline) and
 // are SEEDED as article rows so the library actually lists them.
-const HAIRLINE_FIXTURE = fixtures[0]!;
+const HAIRLINE_FIXTURE = libraryFixtures[0]!;
 const HAIRLINE_TOTAL = graphemeClusters(
   normalizeText(HAIRLINE_FIXTURE),
   HAIRLINE_FIXTURE.lang,
@@ -434,6 +434,6 @@ test.describe("SC#5 + LIB-06 — progress hairline + continue-reading strip + fi
     await expect(page.locator(".continue-reading-strip")).toHaveCount(0);
 
     // The library list still renders fixtures (one row per fixture).
-    await expect(page.locator(".library-list > li")).toHaveCount(fixtures.length);
+    await expect(page.locator(".library-list > li")).toHaveCount(libraryFixtures.length);
   });
 });

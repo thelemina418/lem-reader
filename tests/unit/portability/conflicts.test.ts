@@ -47,7 +47,7 @@ import type {
   ReaderSettings,
 } from "../../../src/content/schema";
 import { graphemeClusters, normalizeText } from "../../../src/content/normalizeText";
-import { fixtures } from "../../../src/fixtures";
+import { libraryFixtures } from "../../../src/fixtures";
 import { ExportBundleSchema } from "../../../src/portability/bundle";
 import type { ExportBundle } from "../../../src/portability/bundle";
 import type { Overrides, PerKindOverride } from "../../../src/portability/conflicts";
@@ -500,7 +500,7 @@ describe("detectImportPreview — tri-state re-resolution (09-03 Task 1)", () =>
 
   it("resolves a highlight keyed to a bundled fixture article against the fixture (Pitfall 4: NOT orphan)", async () => {
     const { detectImportPreview } = await loadConflicts();
-    const fixture = fixtures[0]!;
+    const fixture = libraryFixtures[0]!;
 
     const preview = await detectImportPreview(
       sampleBundle({
@@ -551,7 +551,7 @@ describe("detectImportPreview — tri-state re-resolution (09-03 Task 1)", () =>
 
   it("lets a bundled article shadow a same-id fixture (T-9-10): resolution uses the bundle article, never fixture text", async () => {
     const { detectImportPreview } = await loadConflicts();
-    const fixture = fixtures[0]!;
+    const fixture = libraryFixtures[0]!;
 
     // The bundle carries a REAL article whose id collides with a fixture id
     // but whose text is unrelated. Pattern 8 precedence: bundle.articles win.
@@ -638,7 +638,7 @@ describe("detectImportPreview — preferences + zero writes (09-03 Task 1)", () 
 
     // A bundle touching every conflict kind + the fixture tier — the fullest
     // read surface — must not write a single row anywhere.
-    const fixture = fixtures[0]!;
+    const fixture = libraryFixtures[0]!;
     const bundle = sampleBundle({
       articles: [sampleArticle({ id: "art-local", revision: 2 })],
       highlights: [

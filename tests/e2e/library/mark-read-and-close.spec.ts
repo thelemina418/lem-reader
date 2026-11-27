@@ -26,12 +26,12 @@
 // image stub + goto BASE + "Saved articles" h1 wait + raw IndexedDB
 // clear-rows (never deleteDatabase — the webkit race).
 import { test, expect, type Page } from "@playwright/test";
-import { fixtures } from "../../../src/fixtures";
+import { libraryFixtures } from "../../../src/fixtures";
 import { normalizeText, graphemeClusters } from "../../../src/content/normalizeText";
 import { BASE } from "../_base";
 
 /** The sole starter-library fixture is the gesture's corpus. */
-const ARTICLE = fixtures[0]!;
+const ARTICLE = libraryFixtures[0]!;
 const ARTICLE_TITLE = ARTICLE.provenance.title;
 const ARTICLE_HREF = `#/article/${ARTICLE.id}`;
 

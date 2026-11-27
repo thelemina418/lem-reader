@@ -202,7 +202,8 @@ test.describe("SC#4 + ING-03 — markdown + html upload intake", () => {
       window.location.hash = "#/";
     });
     await expect(page.getByRole("heading", { level: 1, name: "Saved articles" })).toBeVisible();
-    const expectedRowsAfterFirst = (await import("../../../src/fixtures")).fixtures.length + 1;
+    const expectedRowsAfterFirst =
+      (await import("../../../src/fixtures")).libraryFixtures.length + 1;
     await expect(page.locator(".library-list > li")).toHaveCount(expectedRowsAfterFirst);
 
     // Second upload — reopen the dialog (article success closed it) and

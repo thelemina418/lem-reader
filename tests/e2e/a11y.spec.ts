@@ -11,7 +11,7 @@
 // Verifications (performed before each manual verification round).
 import { test, expect, type Page } from "@playwright/test";
 import AxeBuilder from "@axe-core/playwright";
-import { fixtures } from "../../src/fixtures";
+import { bundledFixtures } from "../../src/fixtures";
 import { wipeDatabase, waitForReadingSurface } from "./annotations/_fixtures";
 // Issue #185 round 6 — the observable page-commit wait for the chapter
 // page-turn walks below (the same pagination/_harness seam the pagination
@@ -363,7 +363,11 @@ test("a11y #163: the book quiet landing (skip sentence live) is axe-clean", asyn
   expect(serious).toEqual([]);
 });
 
-for (const article of fixtures) {
+// Issue #34: every bundled article — the starter library AND the regression
+// corpus (addressable by id even though only the starter is on the shelf).
+// Iterating the starter-only list silently narrowed this gate to one
+// article from 2026-09-07 until #34.
+for (const article of bundledFixtures) {
   test.describe(`a11y ${article.id}`, () => {
     test("zero serious/critical violations; no heading-order or list violations (Pitfall 10)", async ({
       page,

@@ -92,7 +92,7 @@ import type { CanonicalArticle } from "../../src/content/types";
  * regression corpus (FIXTURES) stays URL-addressable but does NOT render
  * as library rows since the Getting Started split (b13eba5) — counting it
  * here was the pre-refresh rot (issue #81). */
-const BASELINE_ROWS = (await import("../../src/fixtures")).fixtures.length;
+const BASELINE_ROWS = (await import("../../src/fixtures")).libraryFixtures.length;
 
 /** The calm status line inside the Add dialog's live region. */
 function ingestStatus(page: Page, text: string): import("@playwright/test").Locator {

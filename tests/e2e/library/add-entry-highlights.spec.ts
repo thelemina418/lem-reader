@@ -27,7 +27,7 @@
 // names.
 import { test, expect, type Page } from "@playwright/test";
 import { BASE, wipeDatabase } from "../annotations/_fixtures";
-import { fixtures } from "../../../src/fixtures";
+import { libraryFixtures } from "../../../src/fixtures";
 import { awaitAutoOpened } from "./add-dialog";
 
 /** The header Add icon (the decision-#70 trigger — class hook). */
@@ -76,7 +76,7 @@ test.describe("Add entry points (#84 — the Highlights header Add icon)", () =>
     await expect(navLinks).toHaveCount(3); // empty library: Read is hidden
 
     // Reader: quiet chrome — no Add icon next to the reading controls.
-    await page.goto(`${BASE}/#/article/${fixtures[0]!.id}`);
+    await page.goto(`${BASE}/#/article/${libraryFixtures[0]!.id}`);
     await expect(page.getByRole("heading", { level: 1 })).toBeVisible();
     await expect(addTrigger(page)).toHaveCount(0);
   });
@@ -112,7 +112,7 @@ test.describe("Add entry points (#84 — the Highlights header Add icon)", () =>
   }) => {
     // First submission refuses with the bot-check reason; the retry (same
     // URL) succeeds so the walk ends in the reader.
-    const fixtureArticle = fixtures[0]!;
+    const fixtureArticle = libraryFixtures[0]!;
     let calls = 0;
     await page.route("**/api/ingest", (route) => {
       calls += 1;
@@ -182,7 +182,7 @@ test.describe("Add entry points (#84 — the Highlights header Add icon)", () =>
   test("an article ingest opened from Highlights closes the dialog, then opens the reader (D16-12)", async ({
     page,
   }) => {
-    const fixtureArticle = fixtures[0]!;
+    const fixtureArticle = libraryFixtures[0]!;
     await page.route("**/api/ingest", (route) =>
       route.fulfill({
         status: 200,

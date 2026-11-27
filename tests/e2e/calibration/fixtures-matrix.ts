@@ -30,8 +30,8 @@ type SpacingKey = ReaderSettings["spacing"];
  * The calibration corpus: the six regression fixtures the committed
  * calibration/fingerprint.json was measured on (D3-10, 2026-08-05).
  *
- * Named explicitly rather than taken from `src/fixtures` `fixtures`: that
- * export means "the public starter library" since the Getting Started guide
+ * Named explicitly rather than taken from the former `src/fixtures` `fixtures`
+ * alias (retired in #34): it meant "the public starter library" since the Getting Started guide
  * (f934c9fb, 2026-09-07), and the harness silently shrank to that one
  * onboarding article, 432 samples instead of 2592. fingerprint.compare.ts
  * refuses a fresh run whose fixture coverage differs from the baseline's, so

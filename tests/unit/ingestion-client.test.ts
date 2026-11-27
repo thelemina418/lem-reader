@@ -555,7 +555,7 @@ describe("compositeLibraryRepository (07-06 Task 1)", () => {
 
   it("list UNIONs fixtures (inMemoryRepository) with Dexie rows", async () => {
     const { compositeLibraryRepository } = await loadLibrarySource();
-    const { fixtures } = await import("../../src/fixtures");
+    const { libraryFixtures } = await import("../../src/fixtures");
     const { DexieLibrarySource } = await loadLibrarySource();
     const source = new DexieLibrarySource();
     await source.save(sampleArticle({ id: "ingested-only" }));
@@ -564,7 +564,7 @@ describe("compositeLibraryRepository (07-06 Task 1)", () => {
     const ids = new Set(merged.map((a) => a.id));
 
     // Every fixture id is present.
-    for (const f of fixtures) {
+    for (const f of libraryFixtures) {
       expect(ids.has(f.id)).toBe(true);
     }
     // The ingested-only id is present.
@@ -573,10 +573,10 @@ describe("compositeLibraryRepository (07-06 Task 1)", () => {
 
   it("list dedupes by id — re-ingesting a fixture id does not double it", async () => {
     const { compositeLibraryRepository, DexieLibrarySource } = await loadLibrarySource();
-    const { fixtures } = await import("../../src/fixtures");
+    const { libraryFixtures } = await import("../../src/fixtures");
     const source = new DexieLibrarySource();
     // Save a row with the SAME id as the first fixture.
-    const firstFixture = fixtures[0]!;
+    const firstFixture = libraryFixtures[0]!;
     const firstFixtureId = firstFixture.id;
     await source.save(sampleArticle({ id: firstFixtureId }));
 
@@ -587,14 +587,14 @@ describe("compositeLibraryRepository (07-06 Task 1)", () => {
 
   it("open finds an article in either source (Dexie preferred)", async () => {
     const { compositeLibraryRepository, DexieLibrarySource } = await loadLibrarySource();
-    const { fixtures } = await import("../../src/fixtures");
+    const { libraryFixtures } = await import("../../src/fixtures");
     const source = new DexieLibrarySource();
     await source.save(sampleArticle({ id: "ingested-only" }));
 
     // From Dexie.
     expect((await compositeLibraryRepository.open("ingested-only"))?.id).toBe("ingested-only");
     // From fixtures.
-    const first = fixtures[0]!;
+    const first = libraryFixtures[0]!;
     expect((await compositeLibraryRepository.open(first.id))?.id).toBe(first.id);
     // Absent.
     expect(await compositeLibraryRepository.open("does-not-exist")).toBeNull();

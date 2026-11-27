@@ -31,7 +31,7 @@
 // unready DOM) → every restore assertion waits for the ready signal
 // (parenthetical All count) before touching scroll/focus.
 import { test, expect, type Page } from "@playwright/test";
-import { fixtures } from "../../../src/fixtures";
+import { libraryFixtures } from "../../../src/fixtures";
 import { ArticleSchema } from "../../../src/content/schema";
 import type { CanonicalArticle } from "../../../src/content/schema";
 import { BASE } from "../_base";
@@ -90,7 +90,7 @@ const CORPUS: CanonicalArticle[] = Array.from({ length: 12 }, (_, i) => {
 });
 
 /** The full row count after seeding: corpus + the six bundled fixtures. */
-const SEEDED_ROW_COUNT = CORPUS.length + fixtures.length;
+const SEEDED_ROW_COUNT = CORPUS.length + libraryFixtures.length;
 
 // ── Seeding helpers (raw IndexedDB puts — the seedArticleRows discipline) ──
 
@@ -491,7 +491,7 @@ test.describe("NAV-03 — library return-context restore matrix", () => {
     });
     await expect(libraryH1).toBeVisible({ timeout: 10_000 });
     // 12 corpus − 1 deleted + 1 starter fixture (the 13-06 realignment
-    // precedent — the starter library shrank `fixtures` to one article).
+    // precedent — the starter library shrank the starter list (`libraryFixtures`) to one article).
     await expect(page.getByRole("link", { name: /^All \(12\)/ })).toBeVisible({ timeout: 10_000 });
 
     // The truthful degrade: h1 focused with DEFAULT scroll (reset to

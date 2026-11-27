@@ -1,10 +1,14 @@
 // tests/e2e/open-every-fixture.spec.ts
-// DOC-01 smoke test across the full curated corpus. Iterates the canonical
-// `fixtures` array (so the spec exercises exactly what the app loads) and
-// opens each article via its hash route. Per fixture: asserts the <h1> (from
+// DOC-01 smoke test across the full curated corpus. Iterates
+// `bundledFixtures` — the starter library plus the regression corpus, every
+// article the app bundles and serves by id (issue #34: the former
+// `fixtures` alias meant the starter library only, which silently shrank
+// this smoke to one article) — and opens each article via its hash route. Per fixture: asserts the <h1> (from
 // provenance.title) is visible, the DOC-03 source-URL link is present, the
 // article body region renders, and no JS-level console errors were emitted
-// during load. Also asserts the fixture-list route exposes one row per fixture.
+// during load. Also asserts the library lists one row per starter-library
+// article (`libraryFixtures` — the regression corpus is addressable but
+// never shelved).
 //
 // External images are stubbed to a 1×1 SVG so the suite is deterministic and
 // not at the mercy of network availability. We assert against JS errors /
@@ -18,7 +22,7 @@
 // naturalWidth > 0 — the new model admits the stronger pin; nothing was
 // deleted or weakened).
 import { test, expect } from "@playwright/test";
-import { fixtures } from "../../src/fixtures";
+import { bundledFixtures, libraryFixtures } from "../../src/fixtures";
 import { DEFAULT_SETTINGS } from "../../src/settings/defaults";
 import { seedRows, prepareFreshPage } from "./portability/_portability";
 import { BASE } from "./_base";
@@ -34,7 +38,7 @@ test.beforeEach(async ({ page }) => {
   );
 });
 
-for (const article of fixtures) {
+for (const article of bundledFixtures) {
   test.describe(`open ${article.id}`, () => {
     test("renders title, source link, body; no console errors", async ({ page }) => {
       const errors: string[] = [];
@@ -102,7 +106,7 @@ for (const article of fixtures) {
 test("fixture list exposes one row per curated fixture (DOC-01)", async ({ page }) => {
   await page.goto(`${BASE}/`);
   const articleLinks = page.locator('a[href^="#/article/"]');
-  await expect(articleLinks).toHaveCount(fixtures.length);
+  await expect(articleLinks).toHaveCount(libraryFixtures.length);
 });
 
 // Gap 3 / UAT test 10: the footnote round-trip stays in-article. Clicking a

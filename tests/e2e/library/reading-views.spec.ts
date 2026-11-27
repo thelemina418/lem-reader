@@ -36,7 +36,7 @@ import { seedStoreRows } from "./seedStoreRows";
 // row is built through the shipped Zod schemas in Node (test-local raw
 // IndexedDB writes, cleared per-test; no production code path touched).
 import { test, expect, type Page } from "@playwright/test";
-import { fixtures } from "../../../src/fixtures";
+import { libraryFixtures } from "../../../src/fixtures";
 import { normalizeText, graphemeClusters } from "../../../src/content/normalizeText";
 import { ArticleSchema, BookSchema, LocationRecordSchema } from "../../../src/content/schema";
 import type { Book, CanonicalArticle, LocationRecord } from "../../../src/content/schema";
@@ -327,7 +327,7 @@ const CORPUS_LOCATIONS: LocationRecord[] = [
 // ── Expected values — the SAME policy module the app renders (structural) ────
 
 const TOTALS_BY_ID = new Map<string, number>();
-for (const f of fixtures) TOTALS_BY_ID.set(f.id, totalOf(f));
+for (const f of libraryFixtures) TOTALS_BY_ID.set(f.id, totalOf(f));
 for (const a of CORPUS_ARTICLES) TOTALS_BY_ID.set(a.id, totalOf(a));
 const textLengthOf = (articleId: string): number | undefined => TOTALS_BY_ID.get(articleId);
 
@@ -343,7 +343,7 @@ const STANDALONE_ENTRIES = [
     location: LATEST_BY_ARTICLE.get(a.id),
     total: TOTALS_BY_ID.get(a.id)!,
   })),
-  ...fixtures.map((f) => ({
+  ...libraryFixtures.map((f) => ({
     id: f.id,
     location: LATEST_BY_ARTICLE.get(f.id),
     total: TOTALS_BY_ID.get(f.id)!,
@@ -359,7 +359,7 @@ const EXPECTED_COUNTS = countByState(
 const EXPECTED_ALL_COUNT = STANDALONE_ENTRIES.length + CORPUS_BOOKS.length;
 
 /** The zero-seed expectation (bundled fixtures only — all unread). */
-const FIXTURE_ENTRIES = fixtures.map((f) => ({
+const FIXTURE_ENTRIES = libraryFixtures.map((f) => ({
   id: f.id,
   location: undefined,
   total: TOTALS_BY_ID.get(f.id)!,
@@ -510,7 +510,7 @@ test.describe("LIB-07/LIB-08 — views/counts/rows/empty agreement (D14-20/23/24
     // detection for the corpus constants above (never a page test).
     // Realignment history (the 13-06 stale-expectation precedent — never a
     // weakened assertion): Phase 19 gained the 7th regression fixture; the
-    // starter-library rollout then shrank `fixtures` to the ONE
+    // starter-library rollout then shrank the starter list (`libraryFixtures`) to the ONE
     // getting-started article, so unread and the All count each lost six.
     expect(EXPECTED_COUNTS.unread).toBe(3); // 1 starter fixture + unread standalone + unread book
     expect(EXPECTED_COUNTS["in-progress"]).toBe(3); // mid standalone + 3-of-4 book + missing-row book
@@ -575,11 +575,11 @@ test.describe("LIB-07/LIB-08 — views/counts/rows/empty agreement (D14-20/23/24
 
     await openView(page, "#/unread");
     await expect(page.getByRole("heading", { name: "Nothing unread" })).toHaveCount(0);
-    await expect(page.locator(".library-list > li")).toHaveCount(fixtures.length);
+    await expect(page.locator(".library-list > li")).toHaveCount(libraryFixtures.length);
 
     await openView(page, "#/");
     await expect(page.getByRole("heading", { name: "Your library is empty" })).toHaveCount(0);
-    await expect(page.locator(".library-list > li")).toHaveCount(fixtures.length);
+    await expect(page.locator(".library-list > li")).toHaveCount(libraryFixtures.length);
   });
 
   test("per-view empty state joins the shared library measure (2026-09-08 gutter fix)", async ({
@@ -733,10 +733,10 @@ test.describe("NAV-04 — focus/title/history matrix", () => {
     await seedCorpus(page);
     await openView(page, "#/");
 
-    // fixtures[0] has NO location in this corpus → the fresh-article path:
+    // libraryFixtures[0] has NO location in this corpus → the fresh-article path:
     // the h1 default is the most specific focus target (D14-05 layering).
-    const fixtureTitle = fixtures[0]!.provenance.title;
-    const rowLink = page.locator(`.library-list a[href="#/article/${fixtures[0]!.id}"]`);
+    const fixtureTitle = libraryFixtures[0]!.provenance.title;
+    const rowLink = page.locator(`.library-list a[href="#/article/${libraryFixtures[0]!.id}"]`);
     await rowLink.click();
     const articleH1 = page.getByRole("heading", { level: 1, name: fixtureTitle });
     await expect(articleH1).toBeVisible({ timeout: 10_000 });
@@ -766,9 +766,9 @@ test.describe("NAV-04 — focus/title/history matrix", () => {
     // this session, so no departure capture exists (D15-12 — session state
     // only). The library list still sees the seeded corpus on arrival.
     await page.goto("about:blank");
-    await page.goto(`${BASE}/#/article/${fixtures[0]!.id}`);
+    await page.goto(`${BASE}/#/article/${libraryFixtures[0]!.id}`);
     await expect(
-      page.getByRole("heading", { level: 1, name: fixtures[0]!.provenance.title }),
+      page.getByRole("heading", { level: 1, name: libraryFixtures[0]!.provenance.title }),
     ).toBeVisible({ timeout: 10_000 });
 
     // hasAppHistory is false (no in-app hashchange yet) → the literal "#/"

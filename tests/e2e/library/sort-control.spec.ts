@@ -23,7 +23,7 @@ import { seedStoreRows } from "./seedStoreRows";
 // (orderLibraryEntries + the reading-state membership + the filters) —
 // structural agreement, never a hand-written expectation.
 import { test, expect, type Page } from "@playwright/test";
-import { fixtures } from "../../../src/fixtures";
+import { libraryFixtures } from "../../../src/fixtures";
 import { normalizeText, graphemeClusters } from "../../../src/content/normalizeText";
 import { ArticleSchema, BookSchema, LocationRecordSchema } from "../../../src/content/schema";
 import type { Book, CanonicalArticle, LocationRecord } from "../../../src/content/schema";
@@ -224,10 +224,10 @@ const LATEST_BY_ARTICLE = latestLocationByArticle(CORPUS_LOCATIONS);
 // ── Expected values — the SAME policy modules the app renders ─────────────────
 
 /** Every standalone row the All view shows (seeded + the bundled fixtures). */
-const ALL_STANDALONE = [...CORPUS_STANDALONE, ...fixtures];
+const ALL_STANDALONE = [...CORPUS_STANDALONE, ...libraryFixtures];
 
 const TOTALS_BY_ID = new Map<string, number>();
-for (const f of fixtures) TOTALS_BY_ID.set(f.id, totalOf(f));
+for (const f of libraryFixtures) TOTALS_BY_ID.set(f.id, totalOf(f));
 for (const a of CORPUS_ARTICLES) TOTALS_BY_ID.set(a.id, totalOf(a));
 const textLengthOf = (articleId: string): number | undefined => TOTALS_BY_ID.get(articleId);
 

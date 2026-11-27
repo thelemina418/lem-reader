@@ -1,10 +1,13 @@
 // tests/e2e/library/v1-regression.spec.ts
 // Plan 08-05 Task 1 — SC#1 regression bar. The LibraryView replaced
 // FixtureList as the default route component (Plan 08-03); this spec is the
-// explicit gate that the superset does not regress any v1.0 fixture-open
-// path. Iterates EVERY fixture id in the v1.0 corpus (dynamic from
-// src/fixtures/index.ts — T-8-20 mitigation: the spec cannot silently skip
-// a fixture by hardcoding a subset) and asserts:
+// explicit gate that the superset does not regress the bundled-article
+// open path. Iterates EVERY starter-library article the library shelves
+// (`libraryFixtures`, dynamic from src/fixtures/index.ts — T-8-20
+// mitigation: the spec cannot silently skip one by hardcoding a subset).
+// The regression corpus is addressable by id but never shelved, so it has
+// no row to click; its deep-link coverage lives in open-every-fixture
+// (issue #34). For each shelved article it asserts:
 //
 //   1. The fixture's Open-article link is present on #/ (byte-stable <a>).
 //   2. Clicking it navigates to #/article/<id> and ArticleView renders the
@@ -25,7 +28,7 @@
 // LibraryView is a SUPERSET of FixtureList — the new chrome (SourceBadge,
 // ContinueReadingStrip, TagEntry, RemoveConfirm) is additive, not structural.
 import { test, expect } from "@playwright/test";
-import { fixtures } from "../../../src/fixtures";
+import { libraryFixtures } from "../../../src/fixtures";
 import { BASE } from "../_base";
 
 const PIXEL_SVG = '<svg xmlns="http://www.w3.org/2000/svg" width="1" height="1"/>';
@@ -53,7 +56,7 @@ test.beforeEach(async ({ page }) => {
 // SC#1 regression bar: iterate EVERY v1.0 fixture and prove it still opens,
 // renders, and returns through the LibraryView surface. Dynamic fixture list
 // (T-8-20 mitigation — the spec exercises exactly what the app loads).
-for (const article of fixtures) {
+for (const article of libraryFixtures) {
   test.describe(`v1 regression: open ${article.id} through LibraryView`, () => {
     test("row present on #/, opens in ArticleView, renders body, returns to #/", async ({
       page,

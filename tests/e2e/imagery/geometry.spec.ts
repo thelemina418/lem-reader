@@ -24,7 +24,7 @@
 // its figure resolves without a Blob put — the plan's fixture-registry
 // seeding option).
 import { test, expect } from "@playwright/test";
-// bundledFixtures, NOT `fixtures`: the geometry proofs read the STORED dims
+// bundledFixtures, NOT `libraryFixtures`: the geometry proofs read the STORED dims
 // of figure-heavy — a URL-addressable regression-corpus member that stopped
 // being a fresh-library row in the b13eba5 Getting Started split (issue #81
 // rot). openArticle below resolves the same bundled tier.
