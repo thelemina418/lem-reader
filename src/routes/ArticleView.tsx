@@ -33,7 +33,7 @@ import type { Book } from "../content/schema";
 import { ArticleBody } from "../content/render/BlockRenderer";
 import type { ArticleBodyHighlight } from "../content/render/BlockRenderer";
 import { loadLocation } from "../persistence/locationStore";
-import { computeTopVisibleOffset, queryBlocks } from "../reader/restoreLocation";
+import { computeTopVisibleOffset, notesRegionTop, queryBlocks } from "../reader/restoreLocation";
 // Issue #98 (decision #96) — the ONE polite status-region primitive: this
 // route's load/error card and its three visually-hidden announcers render
 // through it (no raw aria-live trio outside the primitive). One disclosed
@@ -102,7 +102,7 @@ import type { TransportState } from "../readaloud/types";
 import { transportIsActive } from "../readaloud/types";
 // Issue #2 — the end-pin policy stays imported for the mark-read gesture;
 // the restore/mode-swap end-LANDING decision moved behind jumpToOffset.
-import { endPinOffset, atScrollBottom } from "../reader/readingPosition";
+import { endPinOffset, atScrollBottom, mainTextEndInView } from "../reader/readingPosition";
 // Issue #246 — the shared-completion seam (records + transition writer) and
 // the crossing algebra (which forward reading move completes which chapter).
 import { useChapterCompletion } from "../reader/useChapterCompletion";
@@ -1380,6 +1380,16 @@ export function ArticleView({
       onListenSpoken: (range) => spokenSetterRef.current(range),
       onListenFinished: (info) => {
         if (!article) return;
+        // Issue #58 — a session started inside a note read that note only:
+        // it is not reading the article through. The position stays at the
+        // note's end (never the main-text end-pin), and no chapter handoff.
+        if (info.noteEnd !== undefined) {
+          currentAnchorOffsetRef.current = info.noteEnd;
+          lastPreciseAnchorRef.current = info.noteEnd;
+          noteActivity(info.noteEnd);
+          saveLocationNow(info.noteEnd);
+          return;
+        }
         // Pin completion BEFORE branching: the last spoken passage may precede
         // trailing code/media. A layout commit during the handoff must see
         // the canonical end-pin, not rewind the saved position to a page head.
@@ -1728,7 +1738,14 @@ export function ArticleView({
           scrollY: window.scrollY,
           viewportHeight: window.innerHeight,
           scrollHeight: document.documentElement.scrollHeight,
-        })
+        }) ||
+        // Issue #58 — the end of the MAIN TEXT is the end: the notes region
+        // in view is the same equivalence as the absolute bottom.
+        (next < endPinOffset(article) &&
+          mainTextEndInView({
+            notesTop: notesRegionTop(articleEl),
+            viewportHeight: window.innerHeight,
+          }))
       ) {
         const bottomAssignment =
           assignmentRef.current !== null && assignmentRef.current.kind === "destination"

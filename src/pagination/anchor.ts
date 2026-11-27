@@ -25,10 +25,9 @@ import {
   articleGraphemeIndex,
   blockNormalizedText,
   footnoteRowFor,
-  footnoteRows,
   graphemeClusters,
 } from "../content/normalizeText";
-import { endPinOffset, isFinalPage } from "../reader/readingPosition";
+import { endPinOffset } from "../reader/readingPosition";
 import type { PageFragment } from "./types";
 
 /**
@@ -143,10 +142,11 @@ export function fragmentContainingOffset(
 
 /**
  * The committed-page anchor: the anchor a reader persists while ON page
- * `pageIndex` — pageStartGlobalOffset, except the LAST page of a MULTI-page
- * set pins to the end-pin (endPinOffset — Issue #2's readingPosition
- * module) so a fully-turned article reads finished (260908-oht). A one-page
- * set keeps anchor 0 (POLISH-02 open-reads-0 boundary). Returns 0 for an
+ * `pageIndex` — pageStartGlobalOffset, except the page that reaches the end
+ * of the MAIN TEXT (the last page of a notes-free MULTI-page set) pins to
+ * the end-pin (endPinOffset — Issue #2's readingPosition module) so a
+ * fully-turned article reads finished (260908-oht; issue #58 for notes). A
+ * one-page set keeps anchor 0 (POLISH-02 open-reads-0 boundary). Returns 0 for an
  * empty pages array or an out-of-range index (defensive).
  */
 export function pageAnchorOffset(
@@ -156,30 +156,25 @@ export function pageAnchorOffset(
 ): number {
   if (pages.length === 0) return 0;
   if (pageIndex < 0 || pageIndex >= pages.length) return 0;
-  const lastEntry = pages[pageIndex]!.blocks.at(-1);
   const index = articleGraphemeIndex(article);
-  const rows = footnoteRows(article);
-  // Issue #235 — "reaches work end" includes the footnotes region: a body
-  // end is the work end ONLY when no footnote text exists (all bodies empty
-  // or none at all). A footnoted work finishes when its LAST footnote row is
-  // fully covered — a body-window end must never pin the work done while
-  // footnote text remains unrepresented.
-  const reachesWorkEnd =
-    lastEntry?.footnoteIndex !== undefined
-      ? (() => {
-          const row = footnoteRowFor(article, lastEntry.footnoteIndex);
-          return row !== undefined && lastEntry.endGrapheme === row.length && row === rows.at(-1);
-        })()
-      : lastEntry?.blockIndex === article.blocks.length - 1 &&
-        lastEntry.endGrapheme === index.perBlockLengths[lastEntry.blockIndex] &&
-        rows.length === 0;
-  // A local window's final page is not the work's end. Conversely, a
-  // one-page terminal window of a multi-window work can finish the work.
+  // Issue #58 — "reaches the end" is the end of the MAIN TEXT: the page that
+  // fully covers the last body block pins the end-pin, whether or not notes
+  // follow (on this page or later ones). The notes are reference material —
+  // note pages anchor at their own passage, past the pin, and never finish
+  // the work on their own. (Issue #235's "the last note row finishes" rule
+  // is reversed by spec #66.)
+  const lastBlock = article.blocks.length - 1;
+  const reachesMainEnd = pages[pageIndex]!.blocks.some(
+    (entry) =>
+      entry.footnoteIndex === undefined &&
+      entry.blockIndex === lastBlock &&
+      entry.endGrapheme === index.perBlockLengths[lastBlock],
+  );
+  // A local window's first page that merely opens the work is not reading
+  // (POLISH-02: a one-page set keeps anchor 0). Conversely, a window that
+  // begins mid-work can finish the work on its first page.
   const beginsMidWork = pageStartGlobalOffset(article, pages[0]!) > 0;
-  if (
-    reachesWorkEnd &&
-    (isFinalPage(pageIndex, pages.length) || (beginsMidWork && pageIndex === pages.length - 1))
-  ) {
+  if (reachesMainEnd && (pageIndex > 0 || beginsMidWork)) {
     return endPinOffset(article);
   }
   return pageStartGlobalOffset(article, pages[pageIndex]!);

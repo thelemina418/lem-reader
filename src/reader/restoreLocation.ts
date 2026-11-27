@@ -57,6 +57,21 @@ export function queryBlocks(articleEl: HTMLElement): HTMLElement[] {
   return Array.from(articleEl.querySelectorAll<HTMLElement>("[data-block-index]"));
 }
 
+/**
+ * Issue #58 — the rendered notes region's top edge (viewport-relative px),
+ * or null when the article renders no notes. The hidden measurement
+ * projection never counts (it is not the reader's document).
+ */
+export function notesRegionTop(articleEl: HTMLElement): number | null {
+  for (const section of articleEl.querySelectorAll<HTMLElement>(
+    'section[aria-label="Footnotes"]',
+  )) {
+    if (section.closest(".article-body-measurement")) continue;
+    return section.getBoundingClientRect().top;
+  }
+  return null;
+}
+
 // ── Per-element grapheme-length cache (260819-tld) ───────────────────────────
 // computeTopVisibleOffset runs on EVERY scroll event (useScrollSave listener +
 // ArticleView anchor-capture listener) and used to re-segment every element's

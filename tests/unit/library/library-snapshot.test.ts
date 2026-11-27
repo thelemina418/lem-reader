@@ -332,6 +332,25 @@ describe("loadLibrarySnapshot — grapheme-total fold (Issue #3)", () => {
     expect(snapshot.totalsByArticleId.get("counted-article")).toBe(expected);
     expect(expected).toBeGreaterThan(0);
   });
+
+  // Issue #58 — notes are not reading: the ONE total fold (library rows'
+  // estimate, book totals, progress, completion) counts the main text only.
+  it("leaves the notes out of an article's total", async () => {
+    const { dexieLibrarySource } = await loadLibrarySource();
+    const { loadLibrarySnapshot } = await loadSnapshot();
+
+    await dexieLibrarySource.save(
+      sampleArticle({
+        id: "noted-article",
+        blocks: [{ kind: "paragraph", content: [{ text: "Main text.", marks: [] }] }],
+        footnotes: [{ id: "fn-1", content: [{ text: "A much longer note body.", marks: [] }] }],
+      }),
+    );
+
+    const snapshot = await loadLibrarySnapshot();
+    // "Main text." is ten graphemes; the note adds nothing.
+    expect(snapshot.totalsByArticleId.get("noted-article")).toBe(10);
+  });
 });
 
 describe("loadLibrarySnapshot — tags fold (Issue #3)", () => {

@@ -31,8 +31,8 @@
 import { useCallback, useEffect, useRef } from "react";
 import type { CanonicalArticle } from "../content/types";
 import type { LocationRecord } from "../content/schema";
-import { computeTopVisibleOffset, queryBlocks } from "./restoreLocation";
-import { atScrollBottom, endPinOffset } from "./readingPosition";
+import { computeTopVisibleOffset, notesRegionTop, queryBlocks } from "./restoreLocation";
+import { atScrollBottom, endPinOffset, mainTextEndInView } from "./readingPosition";
 import { saveLocation } from "../persistence/locationStore";
 import { classifyStorageError } from "../persistence/errors";
 // Issue #102 — the write-followup broadcast. The bus module is the
@@ -286,7 +286,29 @@ export function useScrollSave(
         );
         return;
       }
-      scheduleSaveAtOffset(computeOffset());
+      const offset = computeOffset();
+      // Issue #58 — a footnoted article finishes at the end of its MAIN
+      // TEXT: once the notes region comes into view while the top of the
+      // viewport is still in the main text, persist the end-pin (the notes
+      // are reference material — the reader never has to walk them). A top
+      // offset already inside the notes saves as itself (it lies past the
+      // pin, so it reads finished, and restores into its note).
+      const articleEl = articleElRef.current;
+      if (
+        currentArticle !== null &&
+        articleEl !== null &&
+        offset < endPinOffset(currentArticle) &&
+        mainTextEndInView({
+          notesTop: notesRegionTop(articleEl),
+          viewportHeight: window.innerHeight,
+        })
+      ) {
+        scheduleSaveAtOffset(
+          Math.min(endPinOffset(currentArticle), optionsRef.current?.readingEndOffset ?? Infinity),
+        );
+        return;
+      }
+      scheduleSaveAtOffset(offset);
     };
     // Passive scroll listener — we never preventDefault; just observe.
     window.addEventListener("scroll", onScroll, { passive: true });
