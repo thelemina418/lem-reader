@@ -14,9 +14,9 @@
 // exit code is non-zero when either pass failed. The timing pass runs even
 // after a failed parallel pass, so a red run still carries its evidence.
 import { spawnSync } from "node:child_process";
-import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { mergePassReports, passArgv } from "./lib/e2e-passes.mjs";
 
 const args = process.argv.slice(2);
@@ -41,10 +41,14 @@ if (out) {
   const read = (path) => (path && existsSync(path) ? JSON.parse(readFileSync(path, "utf8")) : null);
   try {
     const merged = mergePassReports(read(reportOf.parallel), read(reportOf.timing));
-    if (merged) writeFileSync(out, JSON.stringify(merged, null, 2));
-    else console.error("[e2e-passes] neither pass wrote a JSON report");
+    if (merged) {
+      // Playwright's JSON reporter creates the report's directory itself;
+      // the merged report must too (the hosted shadow's .test-reports/).
+      mkdirSync(dirname(out), { recursive: true });
+      writeFileSync(out, JSON.stringify(merged, null, 2));
+    } else console.error("[e2e-passes] neither pass wrote a JSON report");
   } catch (error) {
-    console.error(`[e2e-passes] report merge refused: ${error.message}`);
+    console.error(`[e2e-passes] report merge failed: ${error.message}`);
     status.merge = 1;
   } finally {
     rmSync(passDir, { recursive: true, force: true });
