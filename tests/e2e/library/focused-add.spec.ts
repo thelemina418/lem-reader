@@ -41,7 +41,7 @@
 //     is excluded from the accessibility tree (the 16-03 lesson).
 import { test, expect, type Page } from "@playwright/test";
 import { BASE, wipeDatabase } from "../annotations/_fixtures";
-import { fixtures } from "../../../src/fixtures";
+import { libraryFixtures } from "../../../src/fixtures";
 import { openAddDialog, pickSource, awaitAutoOpened } from "./add-dialog";
 
 /** A small .md pick for the switch-preservation case. Never submitted. */
@@ -323,7 +323,7 @@ test.describe("focused Add dialog (ADD-04 — 16-04 Task 1)", () => {
     // Success payload: a real fixture CanonicalArticle (the happy-path
     // route-fixture pattern — the fixture re-uses the v1.0 canonical shape
     // so the reader treats it identically to a bundled article).
-    const fixtureArticle = fixtures[0]!;
+    const fixtureArticle = libraryFixtures[0]!;
     await page.route("**/api/ingest", (route) =>
       route.fulfill({
         status: 200,

@@ -17,14 +17,14 @@
 // Harness cloned from read-aloud.spec.ts (REUSE-DO-NOT-FORK): controllable
 // fake speech + image stub + raw IndexedDB reset.
 import { test, expect, type Page } from "@playwright/test";
-import { fixtures } from "../../../src/fixtures";
+import { libraryFixtures } from "../../../src/fixtures";
 import { installFakeSpeech, type SpeechMode } from "./_speech";
 import { BASE, clearAllRows, playAndAwaitProbe } from "./_harness";
 // The published property name is asserted LIVE from the component (one
 // rename site — same discipline as FOLLOW_LABELS).
 import { READALOUD_HEIGHT_VAR } from "../../../src/reader/ReadAloudBar";
 
-const ARTICLE = fixtures[0]!;
+const ARTICLE = libraryFixtures[0]!;
 const ARTICLE_HREF = `#/article/${ARTICLE.id}`;
 
 test.use({ viewport: { width: 375, height: 667 } });

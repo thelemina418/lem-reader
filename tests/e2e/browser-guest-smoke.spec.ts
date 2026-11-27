@@ -15,10 +15,10 @@
 // image stubbing (the smoke article carries none), no engine conditionals —
 // the guest's Linux baseline must run the exact same spec byte-for-byte.
 import { test, expect } from "@playwright/test";
-import { fixtures } from "../../src/fixtures";
+import { libraryFixtures } from "../../src/fixtures";
 import { BASE } from "./_base";
 
-const sample = fixtures[0]!;
+const sample = libraryFixtures[0]!;
 
 test("fresh library renders the bundled sample", async ({ page }) => {
   await page.goto(`${BASE}/`);

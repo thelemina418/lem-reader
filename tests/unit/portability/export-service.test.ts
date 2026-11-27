@@ -39,7 +39,7 @@ import type {
   ReaderSettings,
 } from "../../../src/content/schema";
 import { graphemeClusters, normalizeText } from "../../../src/content/normalizeText";
-import { fixtures } from "../../../src/fixtures";
+import { libraryFixtures } from "../../../src/fixtures";
 import { ExportBundleSchema } from "../../../src/portability/bundle";
 import { computeManifest } from "../../../src/portability/manifest";
 import { DEFAULT_SETTINGS } from "../../../src/settings/defaults";
@@ -216,7 +216,7 @@ function fixturePassage(article: CanonicalArticle): {
  * reader-prefs row. Returns everything the assertions need. */
 async function seedExportSurface(withSettings: boolean) {
   const { db } = await loadDb();
-  const fixture = fixtures[0]!;
+  const fixture = libraryFixtures[0]!;
   const passage = fixturePassage(fixture);
 
   const articleWithSource = sampleArticle({
@@ -324,7 +324,7 @@ describe("buildBundle (09-04 Task 1)", () => {
     const entries = await buildEntries();
 
     const bundle = ExportBundleSchema.parse(JSON.parse(strFromU8(entries["bundle.json"]!)));
-    // Only fixtures[0] is referenced (highlight articleId + note via its
+    // Only libraryFixtures[0] is referenced (highlight articleId + note via its
     // owning highlight; the location references a Dexie article).
     expect(bundle.fixtureIds).toEqual([fixture.id]);
   });

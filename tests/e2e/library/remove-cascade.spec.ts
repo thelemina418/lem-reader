@@ -283,7 +283,7 @@ test.describe("SC#2 + LIB-02 — cascade-remove + confirmation", () => {
       window.location.hash = "#/";
     });
     await expect(page.getByRole("heading", { level: 1, name: "Saved articles" })).toBeVisible();
-    const expectedBaselineRows = (await import("../../../src/fixtures")).fixtures.length + 1;
+    const expectedBaselineRows = (await import("../../../src/fixtures")).libraryFixtures.length + 1;
     await expect(
       page.locator(".library-list > li"),
       "library list includes fixtures + 1 ingested",
@@ -326,7 +326,7 @@ test.describe("SC#2 + LIB-02 — cascade-remove + confirmation", () => {
     //    when remove fired). The ingested row is gone.
     await expect(dialog).not.toBeVisible();
     await expect(page.locator(".library-list > li")).toHaveCount(
-      (await import("../../../src/fixtures")).fixtures.length,
+      (await import("../../../src/fixtures")).libraryFixtures.length,
     );
     // The removed article's title no longer appears anywhere on #/.
     await expect(

@@ -38,11 +38,11 @@
 //      pipeline (safeFetch + extract) is exercised structurally by the SSRF
 //      matrix + the paste-path test; this case proves the UI plumbing.
 import { test, expect } from "@playwright/test";
-// bundledFixtures (NOT `fixtures`): the asset-envelope cell below clones the
+// bundledFixtures (NOT `libraryFixtures`): the asset-envelope cell below clones the
 // "figure-heavy" regression-corpus article, which lives in the BUNDLED list —
-// the library `fixtures` export carries only the getting-started starter row
+// `libraryFixtures` carries only the getting-started starter row
 // (#81 rot family, test-only repair).
-import { bundledFixtures, fixtures, fixtureAssetRegistry } from "../../../src/fixtures";
+import { bundledFixtures, libraryFixtures, fixtureAssetRegistry } from "../../../src/fixtures";
 import { openAddDialog, pickSource, awaitAutoOpened } from "../library/add-dialog";
 import { BASE } from "../_base";
 
@@ -139,7 +139,7 @@ test.describe("ingestion happy-path (07-07 SC#1)", () => {
     // URL-input → submit → ArticleView plumbing without coupling CI to
     // external publisher availability. The fixture article re-uses the v1.0
     // canonical shape so the assertion is "the article renders like a fixture".
-    const fixtureArticle = fixtures[0];
+    const fixtureArticle = libraryFixtures[0];
     await page.route("**/api/ingest", async (route) => {
       await route.fulfill({
         status: 200,

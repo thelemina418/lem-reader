@@ -223,9 +223,9 @@ test.describe("SC#3 + LIB-03 + LIB-04 — search + tag filter + auto-prune", () 
     // Click the active chip again — the filter clears (all rows reappear).
     await stoicChip.click();
     await expect(stoicChip).toHaveAttribute("aria-pressed", "false");
-    // Library list count grows back to fixtures.length + 3 ingested.
-    const { fixtures } = await import("../../../src/fixtures");
-    await expect(page.locator(".library-list > li")).toHaveCount(fixtures.length + 3);
+    // Library list count grows back to libraryFixtures.length + 3 ingested.
+    const { libraryFixtures } = await import("../../../src/fixtures");
+    await expect(page.locator(".library-list > li")).toHaveCount(libraryFixtures.length + 3);
   });
 
   test("auto-prune: removing the last instance of a tag clears the chip (D8-08)", async ({
@@ -313,8 +313,8 @@ test.describe("SC#3 + LIB-03 + LIB-04 — search + tag filter + auto-prune", () 
 
     // Clear the query — all rows reappear.
     await searchInput.fill("");
-    const { fixtures } = await import("../../../src/fixtures");
-    await expect(page.locator(".library-list > li")).toHaveCount(fixtures.length + 3);
+    const { libraryFixtures } = await import("../../../src/fixtures");
+    await expect(page.locator(".library-list > li")).toHaveCount(libraryFixtures.length + 3);
   });
 
   test("search by tag name + composition with active tag (D8-06 + D8-07)", async ({ page }) => {
@@ -507,8 +507,8 @@ test.describe("LIB-09 — filtered-to-zero no-matches feedback (D16-13)", () => 
     // The no-matches line is gone…
     await expect(page.locator(".library-no-matches")).toHaveCount(0);
     // …the view's rows are restored (fixtures + both ingested articles)…
-    const { fixtures } = await import("../../../src/fixtures");
-    await expect(page.locator(".library-list > li")).toHaveCount(fixtures.length + 2);
+    const { libraryFixtures } = await import("../../../src/fixtures");
+    await expect(page.locator(".library-list > li")).toHaveCount(libraryFixtures.length + 2);
     // …the search input is empty…
     await expect(page.locator("input#library-search")).toHaveValue("");
     // …and the tag chip is unselected again.

@@ -8,13 +8,13 @@ import { expect, type Page } from "@playwright/test";
 // The follow labels are asserted LIVE from the component's own map — a
 // copy change lands once and every suite follows (one rename site).
 import { FOLLOW_LABELS } from "../../../src/reader/ReadAloudBar";
-import { fixtures } from "../../../src/fixtures";
+import { libraryFixtures } from "../../../src/fixtures";
 import { BASE } from "../_base";
 import { installFakeSpeech, type SpeechMode } from "./_speech";
 export { BASE };
 
 /** The fixture article every read-aloud leg reads (one rename site). */
-export const READALOUD_ARTICLE = fixtures[0]!;
+export const READALOUD_ARTICLE = libraryFixtures[0]!;
 export const READALOUD_ARTICLE_HREF = `#/article/${READALOUD_ARTICLE.id}`;
 
 /** Wipe every user-data store through raw IndexedDB (the suites run after

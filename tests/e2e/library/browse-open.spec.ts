@@ -18,10 +18,10 @@
 //
 // Threat register:
 //   - T-8-20 (Tampering, e2e masks a real regression) → the row-count
-//     assertion uses `fixtures.length` (dynamic, from src/fixtures/index.ts),
+//     assertion uses `libraryFixtures.length` (dynamic, from src/fixtures/index.ts),
 //     not a hardcoded number. Adding/removing a fixture flips the assertion.
 import { test, expect } from "@playwright/test";
-import { fixtures } from "../../../src/fixtures";
+import { libraryFixtures } from "../../../src/fixtures";
 // Plan 16-03 — the shared dialog-opening helper (ADD-01: the intake forms
 // live behind the header Add button's modal).
 import { openAddDialog, pickSource, setOpenAfterAdding, awaitQuietClosed } from "./add-dialog";
@@ -103,10 +103,10 @@ test.describe("SC#1 + LIB-01 + LIB-05 — browse + open + source badge", () => {
     await expect(page.getByRole("heading", { level: 1, name: "Saved articles" })).toBeVisible();
 
     // The library list must carry exactly one row per bundled fixture. The
-    // count is dynamic — fixtures.length is the canonical count from
+    // count is dynamic — libraryFixtures.length is the canonical count from
     // src/fixtures/index.ts, so adding/removing a fixture flips this
     // assertion (T-8-20 mitigation).
-    const expectedCount = fixtures.length;
+    const expectedCount = libraryFixtures.length;
     await expect(
       page.locator(".library-list > li"),
       `expected ${expectedCount} library rows (one per fixture)`,
@@ -148,7 +148,7 @@ test.describe("SC#1 + LIB-01 + LIB-05 — browse + open + source badge", () => {
     // at the row's <h2 id="title-{id}"> (Pitfall 8-5 byte-stable markup).
     // Click it → ArticleView mounts at #/article/<id> and renders the
     // article title as <h1> (provenance.title).
-    const firstFixture = fixtures[0]!;
+    const firstFixture = libraryFixtures[0]!;
     const openLink = page.locator(`a[href="#/article/${firstFixture.id}"]`).first();
     await expect(openLink).toBeVisible();
     await openLink.click();
@@ -181,9 +181,9 @@ test.describe("SC#1 + LIB-01 + LIB-05 — browse + open + source badge", () => {
     // the baseline is exactly one row per bundled fixture.
     await expect(
       page.locator(".library-list > li"),
-      `baseline: expected ${fixtures.length} library rows (one per fixture)`,
-    ).toHaveCount(fixtures.length);
-    const baselineRows = fixtures.length;
+      `baseline: expected ${libraryFixtures.length} library rows (one per fixture)`,
+    ).toHaveCount(libraryFixtures.length);
+    const baselineRows = libraryFixtures.length;
 
     // Open the Add dialog on the paste source, then ingest a paste-HTML
     // article through the real Vite Node middleware.

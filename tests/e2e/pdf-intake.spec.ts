@@ -48,9 +48,9 @@
 //     refusal asserts BOTH the copy AND the no-side-effect state (URL stays
 //     #/ and no PDF-badged library row appears). The library composites the
 //     6 bundled fixtures with Dexie rows (LibrarySource.ts), so "nothing
-//     entered" is asserted as: total rows === fixtures.length AND zero rows
+//     entered" is asserted as: total rows === libraryFixtures.length AND zero rows
 //     carrying a "PDF" source badge — the markdown-upload dedupe shape
-//     (fixtures.length + 1 after a successful save) generalized to refusals.
+//     (libraryFixtures.length + 1 after a successful save) generalized to refusals.
 import { readFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -87,10 +87,10 @@ const CORRUPT_PDF = pdfFixture("synthetic-corrupt.pdf");
 const OUTLINE_PDF = pdfFixture("synthetic-outline.pdf");
 
 /** Baseline library row count after the wipe: the fresh-library starter
- * corpus (src/fixtures `fixtures` = libraryFixtures), NOT the URL-only
+ * corpus (src/fixtures `libraryFixtures`), NOT the URL-only
  * regression corpus — the b13eba5 split made the old FIXTURES.length
  * baseline stale (issue #81 rot). */
-const BASELINE_ROWS = (await import("../../src/fixtures")).fixtures.length;
+const BASELINE_ROWS = (await import("../../src/fixtures")).libraryFixtures.length;
 
 /** Library rows whose source badge reads "PDF" (badgeLabel("pdf")). */
 function pdfLibraryRows(page: Page): import("@playwright/test").Locator {

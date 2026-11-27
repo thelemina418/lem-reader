@@ -40,9 +40,6 @@ export const libraryFixtures: readonly CanonicalArticle[] = [gettingStarted].map
   ArticleSchema.parse(raw),
 );
 
-/** Public bundled articles shown in a fresh library. */
-export const fixtures = libraryFixtures;
-
 /** Every bundled article that remains directly addressable by id. */
 export const bundledFixtures: readonly CanonicalArticle[] = [
   ...libraryFixtures,
