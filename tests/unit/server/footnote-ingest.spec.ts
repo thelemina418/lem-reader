@@ -497,7 +497,7 @@ describe("half-matched footnotes (issue #60)", () => {
     const json = JSON.stringify(article.blocks);
     expect(json).not.toContain("#fn9");
     expect(json).not.toContain("#fn8");
-    expect(normalizeText(article)).toContain("A second point 2 follows9 and8 again.");
+    expect(normalizeText(article)).toContain("A second point2 follows9 and8 again.");
   });
 
   it("a note whose only reference sits in a figure caption is still listed", async () => {
@@ -568,5 +568,32 @@ describe("the note cap (issue #60)", () => {
     if (!result.ok || !("article" in result)) throw new Error("unreachable");
     expect(result.article.footnotes).toHaveLength(2);
     expect(result.article.ingestionMeta?.extractionWarnings).toEqual([]);
+  });
+});
+
+// Spec #66 review H3 (honesty) — a reference with no visible marker (an
+// empty or image-only link) is not rewritten, but its note still leaves the
+// flow; its same-page link must not stay behind pointing at nothing.
+describe("a reference with no visible marker (review H3)", () => {
+  it("is unlinked once its note is extracted", async () => {
+    const { detectLinkedFootnotes } = await import("../../../server/footnoteLinks");
+    const { JSDOM } = await import("jsdom");
+    const dom = new JSDOM(
+      `<!doctype html><body><article>
+      <p>The claim<a href="#fn1" id="fnref1"><sup>1</sup></a> holds.</p>
+      <p>A silent one<a href="#fn2" id="fnref2"><img src="https://example.com/m.png" alt=""></a> here.</p>
+      <ol>
+        <li id="fn1"><p>First note.<a href="#fnref1">↩</a></p></li>
+        <li id="fn2"><p>Second note.<a href="#fnref2">↩</a></p></li>
+      </ol>
+    </article></body>`,
+      { url: "https://example.com/essay" },
+    );
+    const found = detectLinkedFootnotes(dom.window.document);
+    expect(found.noteHtml).toHaveLength(2);
+    const doc = dom.window.document;
+    expect(doc.querySelector("#fn2")).toBeNull(); // the note left the flow
+    expect(doc.querySelector('a[href="#fn2"]')).toBeNull(); // so no link points at it
+    expect(doc.querySelector("img")).not.toBeNull(); // its content stays
   });
 });
