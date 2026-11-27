@@ -754,6 +754,9 @@ export function htmlToBlocks(
 // ── Footnote bodies (issue #55) ──────────────────────────────────────────────
 /** Return glyphs publishers leave beside (not inside) a back-link. */
 const TRAILING_RETURN_GLYPHS = /(?:\s|[\u21A9\u21AA]|\uFE0E|\uFE0F)+$/u;
+/** Return glyphs and carets left at a note's start once its back-links are
+ * gone (Wikipedia's "^ a b": the letters were the links, the caret is text). */
+const LEADING_RETURN_GLYPHS = /^(?:\s|\^|[\u21A9\u21AA\u2191]|\uFE0E|\uFE0F)+/u;
 
 /** Elements that open a new paragraph inside a note (issue #59). Quotations,
  * lists and any other block structure inside a note flatten into
@@ -800,8 +803,8 @@ function noteParagraphNodes(root: Node): Node[][] {
 /** One detected note's raw HTML → its paragraphs of inline runs, through the
  * SHARED sanitizer and inline walk (the mXSS-suite surface — no fork).
  * References inside a note are never live (note-to-note citations read as
- * text). Empty paragraphs are dropped, and publisher return glyphs are
- * stripped from the note's end. */
+ * text). Empty paragraphs are dropped, and publisher return glyphs and
+ * carets are stripped from the note's start and end. */
 function footnoteBodyParagraphs(noteHtml: string, url: string | undefined): InlineRun[][] {
   const dom = new JSDOM(`<body>${sanitizeExtractedHtml(noteHtml)}</body>`, {
     url: url ?? undefined,
@@ -809,6 +812,18 @@ function footnoteBodyParagraphs(noteHtml: string, url: string | undefined): Inli
   const paragraphs = noteParagraphNodes(dom.window.document.body)
     .map((nodes) => tidyRuns(extractInlineNodes(nodes, [])))
     .filter((runs) => runs.length > 0);
+  // The note's start: carets and return glyphs left once back-links are gone.
+  while (paragraphs.length > 0) {
+    const runs = paragraphs[0]!;
+    while (runs[0] !== undefined) {
+      runs[0].text = runs[0].text.replace(LEADING_RETURN_GLYPHS, "");
+      if (runs[0].text.length > 0) break;
+      runs.shift();
+    }
+    if (runs.length > 0) break;
+    paragraphs.shift();
+  }
+  // The note's end: return glyphs publishers leave beside a back-link.
   while (paragraphs.length > 0) {
     const runs = paragraphs[paragraphs.length - 1]!;
     const last = runs[runs.length - 1]!;

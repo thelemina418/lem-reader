@@ -91,7 +91,43 @@ function isBackLinkTo(link: Element, reference: Element, document: Document): bo
   const target = targetOf(link, document);
   if (target === null) return false;
   if (target === reference) return true;
-  return target.contains(reference) && INLINE_WRAPPERS.has(target.tagName.toLowerCase());
+  if (target.contains(reference)) return INLINE_WRAPPERS.has(target.tagName.toLowerCase());
+  // An empty anchor placed just before the reference (WordPress's Easy
+  // Footnotes: `<span id="easy-footnote-1"></span><span><a>1</a></span>`).
+  if (!isEmptyAnchor(target)) return false;
+  const next = target.nextElementSibling;
+  return (
+    next !== null &&
+    (next === reference ||
+      (next.contains(reference) && INLINE_WRAPPERS.has(next.tagName.toLowerCase())))
+  );
+}
+
+function isEmptyAnchor(el: Element): boolean {
+  return (
+    INLINE_WRAPPERS.has(el.tagName.toLowerCase()) &&
+    el.children.length === 0 &&
+    (el.textContent ?? "").trim() === ""
+  );
+}
+
+/** Block containers a note may be when it is not a list item (Substack's
+ * `<div class="footnote">`, a `<p id="note-3">`, an `<aside>`). */
+const NOTE_BLOCKS = new Set(["div", "p", "aside", "section", "footer", "dd", "blockquote"]);
+/** Never a single note: the page's own content roots. */
+const CONTENT_ROOTS = new Set(["body", "main", "article", "html"]);
+
+/** The note a reference's target sits in: its list item, else the nearest
+ * block that holds the target (the target itself when it is a block). */
+function noteContaining(target: Element): Element | null {
+  const item = target.closest("li");
+  if (item !== null) return item;
+  for (let el: Element | null = target; el !== null; el = el.parentElement) {
+    const tag = el.tagName.toLowerCase();
+    if (CONTENT_ROOTS.has(tag)) return null;
+    if (NOTE_BLOCKS.has(tag)) return el;
+  }
+  return null;
 }
 
 function follows(a: Element, b: Element): boolean {
@@ -103,9 +139,11 @@ const NON_TEXT_CONTENT = "img, figure, picture, video, audio, iframe, table, pre
 
 /** After a note leaves its list, remove the containers it leaves empty (the
  * list itself, a notes section holding only an <hr>), stopping at the body
- * and at anything that still carries text or media. */
-function removeEmptiedContainers(start: Element | null, body: Element): void {
+ * and at anything that still carries text or media. Returns the element that
+ * preceded the outermost removed container (a notes heading, often). */
+function removeEmptiedContainers(start: Element | null, body: Element): Element | null {
   let node = start;
+  let previous: Element | null = null;
   while (
     node !== null &&
     node !== body &&
@@ -113,9 +151,69 @@ function removeEmptiedContainers(start: Element | null, body: Element): void {
     node.querySelector(NON_TEXT_CONTENT) === null
   ) {
     const parent = node.parentElement;
+    previous = node.previousElementSibling;
     node.remove();
     node = parent;
   }
+  return previous;
+}
+
+/** The headings under which publishers put their notes. */
+const NOTES_HEADING = /^(?:(?:foot|end)?notes|references|notes and references|citations|sources)$/i;
+
+function isHeading(el: Element): boolean {
+  return /^h[1-6]$/i.test(el.tagName);
+}
+
+/** The heading `el` is, or the heading it only wraps (MediaWiki's
+ * `<div class="mw-heading"><h2>…</h2></div>`). */
+function headingWithin(el: Element): Element | null {
+  if (isHeading(el)) return el;
+  const only = el.children.length === 1 ? el.children[0]! : null;
+  if (only === null || (el.textContent ?? "").trim() !== (only.textContent ?? "").trim()) return null;
+  return headingWithin(only);
+}
+
+function isNotesHeading(el: Element): boolean {
+  const heading = headingWithin(el);
+  if (heading === null) return false;
+  const text = (heading.textContent ?? "").replace(/\s+/g, " ").trim().replace(/:$/, "");
+  return NOTES_HEADING.test(text);
+}
+
+/** Publisher marker wording: "1", "[12]", "(iv)", "a", "*", "†". Prose
+ * ("see the second note") is never a marker. */
+const MARKER = /^[[(]?(?:\d{1,4}|[a-z]|[ivxlc]{1,6}|[*†‡§¶#]{1,3})[\])]?$/iu;
+
+function isMarkerLike(link: Element): boolean {
+  return MARKER.test((link.textContent ?? "").replace(/\s+/g, "").trim());
+}
+
+/** ARIA roles (DPUB-ARIA) that declare a notes structure. */
+const NOTES_ROLES = new Set(["doc-endnotes", "doc-footnotes"]);
+
+/** Is `note` inside a structure the page declares as its notes — by DPUB
+ * role or by a notes heading just before it or leading it? */
+function inNotesSection(note: Element, body: Element): boolean {
+  for (let el = note.parentElement; el !== null && el !== body; el = el.parentElement) {
+    if (NOTES_ROLES.has(el.getAttribute("role") ?? "")) return true;
+    const before = el.previousElementSibling;
+    if (before !== null && isNotesHeading(before)) return true;
+    const first = el.firstElementChild;
+    if (first !== null && first !== note && !first.contains(note) && isNotesHeading(first)) return true;
+  }
+  return false;
+}
+
+/** A notes heading the extraction left with nothing under it is clutter:
+ * remove it (and any container it leaves empty). */
+function removeOrphanedNotesHeading(candidate: Element | null, body: Element): void {
+  if (candidate === null || !body.contains(candidate) || !isNotesHeading(candidate)) return;
+  const next = candidate.nextElementSibling;
+  if (next !== null && headingWithin(next) === null) return; // the section still has content
+  const parent = candidate.parentElement;
+  candidate.remove();
+  removeEmptiedContainers(parent, body);
 }
 
 /**
@@ -129,17 +227,21 @@ export function detectLinkedFootnotes(document: Document): LinkedFootnotes {
 
   // 1. Candidate edges: reference link → note that follows it and links back.
   const refsByNote = new Map<Element, Element[]>();
+  const targetsByNote = new Map<Element, Set<Element>>();
   const backLinksByNote = new Map<Element, Set<Element>>();
   for (const link of Array.from(body.querySelectorAll("a[href]"))) {
     const target = targetOf(link, document);
     if (target === null) continue;
-    const note = target.tagName.toLowerCase() === "li" ? target : target.closest("li");
+    const note = noteContaining(target);
     if (note === null || note.contains(link) || !follows(link, note)) continue;
     const backLinks = Array.from(note.querySelectorAll("a[href]")).filter((a) =>
       isBackLinkTo(a, link, document),
     );
-    if (backLinks.length === 0) continue;
+    // Fallback for notes that never link back: a marker-like link into a
+    // recognisable notes section.
+    if (backLinks.length === 0 && !(isMarkerLike(link) && inNotesSection(note, body))) continue;
     if (!refsByNote.has(note)) refsByNote.set(note, []);
+    targetsByNote.set(note, (targetsByNote.get(note) ?? new Set<Element>()).add(target));
     refsByNote.get(note)!.push(link);
     const set = backLinksByNote.get(note) ?? new Set<Element>();
     for (const a of backLinks) set.add(a);
@@ -149,6 +251,11 @@ export function detectLinkedFootnotes(document: Document): LinkedFootnotes {
   // 2. A reference inside a note is not a body reference (note-to-note
   // citations stay plain text); a note left with no body reference stays in
   // the flow untouched. Notes are numbered by note (document) order.
+  // A block that several distinct targets resolve to holds several notes we
+  // cannot separate: never merge them — leave them all in the flow.
+  for (const [note, targets] of targetsByNote) {
+    if (targets.size > 1) refsByNote.delete(note);
+  }
   const allNotes = Array.from(refsByNote.keys());
   const notes = allNotes
     .filter((note) => {
@@ -182,8 +289,9 @@ export function detectLinkedFootnotes(document: Document): LinkedFootnotes {
     });
     noteHtml.push(clone.innerHTML);
     const list = note.parentElement;
+    const previous = note.previousElementSibling;
     note.remove();
-    removeEmptiedContainers(list, body);
+    removeOrphanedNotesHeading(removeEmptiedContainers(list, body) ?? previous, body);
   });
 
   // 5. Rewrite each reference into the controlled marker link.
