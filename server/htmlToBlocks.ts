@@ -454,7 +454,11 @@ function selectSrcsetCandidate(attr: string, baseUri: string): string | null {
 
 /** Build a FigureBlock from a <figure> or bare <img>; UnsupportedBlock if src
  * is not a valid http(s) URL (T-7-17 — ArticleSchema.httpUrl re-validates). */
-function figureBlock(el: Element, figureSrcResolver?: FigureSrcResolver): Block[] {
+function figureBlock(
+  el: Element,
+  figureSrcResolver?: FigureSrcResolver,
+  refs?: FootnoteRefWalk,
+): Block[] {
   const tag = el.tagName.toLowerCase();
   const img = tag === "img" ? el : el.querySelector("img");
   const figcaption = tag === "figure" ? el.querySelector("figcaption") : null;
@@ -492,7 +496,8 @@ function figureBlock(el: Element, figureSrcResolver?: FigureSrcResolver): Block[
     if (chosen !== null) src = chosen;
   }
   if (/^https?:/i.test(src)) {
-    const caption = figcaption ? tidyRuns(extractInline(figcaption, [])) : [];
+    // Review S4 — caption markers are linked references like body markers.
+    const caption = figcaption ? tidyRuns(extractInline(figcaption, [], refs)) : [];
     return [{ kind: "figure", alt: alt || "", src, caption }];
   }
   // 20-02 Task 2 — a non-http src CLAIMED by the resolver (the EPUB
@@ -500,7 +505,8 @@ function figureBlock(el: Element, figureSrcResolver?: FigureSrcResolver): Block[
   // the raw src for container resolution downstream. Never consulted for
   // http(s) srcs, and absent by default (byte-stable url/paste path).
   if (figureSrcResolver !== undefined && figureSrcResolver(src)) {
-    const caption = figcaption ? tidyRuns(extractInline(figcaption, [])) : [];
+    // Review S4 — caption markers are linked references like body markers.
+    const caption = figcaption ? tidyRuns(extractInline(figcaption, [], refs)) : [];
     return [{ kind: "figure", alt: alt || "", src, caption }];
   }
   return [
@@ -656,7 +662,7 @@ function visit(el: Element, refs: FootnoteRefWalk, figureSrcResolver?: FigureSrc
       return allImgs.flatMap((img, k) =>
         withCaption(
           figureBlock(img, figureSrcResolver),
-          tidyRuns(extractInlineNodes(segments[k + 1] ?? [], [])),
+          tidyRuns(extractInlineNodes(segments[k + 1] ?? [], [], refs)),
         ),
       );
     }
@@ -692,7 +698,7 @@ function visit(el: Element, refs: FootnoteRefWalk, figureSrcResolver?: FigureSrc
   }
 
   if (tag === "figure" || tag === "img") {
-    return figureBlock(el, figureSrcResolver);
+    return figureBlock(el, figureSrcResolver, refs);
   }
 
   if (tag === "pre") {

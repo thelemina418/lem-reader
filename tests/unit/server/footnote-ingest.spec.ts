@@ -500,7 +500,8 @@ describe("half-matched footnotes (issue #60)", () => {
     expect(normalizeText(article)).toContain("A second point2 follows9 and8 again.");
   });
 
-  it("a note whose only reference sits in a figure caption is still listed", async () => {
+  // Review S4 (stories 2/44/45): a caption marker is a linked reference too.
+  it("a reference in a figure caption links to its note", async () => {
     const html = PANDOC_HTML.replace(
       `<p>${FILLER}</p>`,
       `<figure><img src="https://example.com/map.png" alt="A map"><figcaption>The map<a href="#fn2" id="fnref2b"><sup>2</sup></a>.</figcaption></figure><p>${FILLER}</p>`,
@@ -512,9 +513,18 @@ describe("half-matched footnotes (issue #60)", () => {
       .replace('href="#fnref2"', 'href="#fnref2b"');
     const { article } = await ingest(html);
     expect(noteTexts(article)).toContain("The second note’s text.");
-    expect(refMarks(article).map((r: { footnoteId: string }) => r.footnoteId)).not.toContain(
+    const figure = article.blocks.find((b) => b.kind === "figure");
+    if (figure?.kind !== "figure") throw new Error("expected the figure");
+    expect(figure.caption).toEqual([
+      { text: "The map", marks: [] },
+      { text: "2", marks: [{ type: "footnote-ref", footnoteId: "fn-2", occurrence: 1 }] },
+      { text: ".", marks: [] },
+    ]);
+    // Document order: the caption precedes the body's fn-1 reference.
+    expect(refMarks(article).map((r: { footnoteId: string }) => r.footnoteId)).toEqual([
       "fn-2",
-    );
+      "fn-1",
+    ]);
   });
 
   it("keeps every note of an article with several hundred", async () => {
