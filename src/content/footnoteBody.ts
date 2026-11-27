@@ -33,3 +33,13 @@ export function footnoteBodyAsBlock(fn: FootnoteBodyT): Block {
     children: footnoteParagraphs(fn).map((content) => ({ kind: "paragraph", content })),
   };
 }
+
+/** The canonical Footnote body for a note's paragraphs — the ONE ingest
+ * constructor (HTML, Markdown, and later EPUB): the first paragraph is
+ * `content`, later ones ride `laterParagraphs`, which is absent for a
+ * one-paragraph note (the pre-#59 shape, byte-identical). A note with no
+ * paragraphs has empty `content`; callers decide whether to keep it. */
+export function footnoteBodyFromParagraphs(id: string, paragraphs: InlineRun[][]): FootnoteBodyT {
+  const [first = [], ...later] = paragraphs;
+  return later.length > 0 ? { id, content: first, laterParagraphs: later } : { id, content: first };
+}

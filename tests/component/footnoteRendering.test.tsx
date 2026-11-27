@@ -321,7 +321,10 @@ const multiParagraphArticle = (): CanonicalArticle => ({
       id: "fn-1",
       content: [{ text: "The first paragraph of the note.", marks: [] }],
       laterParagraphs: [
-        [{ text: "The second paragraph, ", marks: [] }, { text: "quoted", marks: [{ type: "em" }] }],
+        [
+          { text: "The second paragraph, ", marks: [] },
+          { text: "quoted", marks: [{ type: "em" }] },
+        ],
         [{ text: "The closing paragraph.", marks: [] }],
       ],
     },
@@ -336,9 +339,7 @@ const NOTE_PARAGRAPHS = [
 
 describe("footnotes with several paragraphs (issue #59)", () => {
   it("the scrolling notes section renders each paragraph as a paragraph, then the return", () => {
-    const { container } = render(
-      <ArticleBody article={multiParagraphArticle()} highlights={[]} />,
-    );
+    const { container } = render(<ArticleBody article={multiParagraphArticle()} highlights={[]} />);
     const li = container.querySelector('section[aria-label="Footnotes"] li#fn-1')!;
     expect(Array.from(li.querySelectorAll("p"), (p) => p.textContent)).toEqual(NOTE_PARAGRAPHS);
     expect(li.querySelector("blockquote")).toBeNull();

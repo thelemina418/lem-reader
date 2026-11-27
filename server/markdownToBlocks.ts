@@ -44,6 +44,7 @@ import { gfmFootnoteFromMarkdown } from "mdast-util-gfm-footnote";
 import { parse as parseYaml } from "yaml"; // strict YAML 1.2 (safe-schema; no implicit type coercion)
 import type { Block, InlineRun } from "../src/content/schema";
 import { attachAdjacentCaptions, withCaption } from "./figureCaptions";
+import { footnoteBodyFromParagraphs, type FootnoteBodyT } from "../src/content/footnoteBody";
 
 /** ProvenancePartial — same shape as `server/htmlToBlocks.ts` L37-42. The
  * orchestrator merges this into a full Provenance + computes originalHtmlHash
@@ -427,7 +428,7 @@ function figureFromImage(node: MdastNode): Block[] {
  * orchestrator destructures both with the same code. */
 export interface MarkdownToBlocksResult {
   blocks: Block[];
-  footnotes: { id: string; content: InlineRun[] }[];
+  footnotes: FootnoteBodyT[];
   lang: string;
   provenancePartial: ProvenancePartial;
   isReaderable: boolean;
@@ -465,7 +466,7 @@ export async function markdownToBlocks(md: string): Promise<MarkdownToBlocksResu
   }
   const notes = numberFootnotes(body, definitions);
   const blocks = visitChildren(body);
-  const footnotes = notes.map((def, i) => ({ id: `fn-${i + 1}`, content: noteRuns(def) }));
+  const footnotes = notes.map((def, i) => footnoteBodyFromParagraphs(`fn-${i + 1}`, noteRuns(def)));
 
   return {
     blocks,
@@ -551,19 +552,14 @@ function numberFootnotes(body: MdastNode[], definitions: Map<string, MdastNode>)
   return order;
 }
 
-/** One note's runs. Its blocks go through the SAME block walker as the
- * body, then flatten in order — paragraphs, list items, quotation
- * paragraphs — joined by a single space (the note body is one inline-run
- * list until multi-paragraph notes land, #59; this is the one place that
- * changes then). Figures contribute their caption; code keeps its text. */
-function noteRuns(definition: MdastNode): InlineRun[] {
-  const parts = noteParagraphs(visitChildren(definition.children ?? []));
-  const runs: InlineRunT[] = [];
-  for (const part of parts) {
-    if (runs.length) runs.push({ text: " ", marks: [] });
-    runs.push(...(part as InlineRunT[]));
-  }
-  return tidyRuns(runs);
+/** A definition's note body (issue #59): its children through the normal
+ * block walker, flattened to paragraphs — a quotation or list inside a note
+ * becomes paragraphs with its text intact. Figures contribute their caption;
+ * code keeps its text. */
+function noteRuns(definition: MdastNode): InlineRun[][] {
+  return noteParagraphs(visitChildren(definition.children ?? []))
+    .map((runs) => tidyRuns(runs as InlineRunT[]))
+    .filter((runs) => runs.length > 0);
 }
 
 function noteParagraphs(blocks: Block[]): InlineRun[][] {

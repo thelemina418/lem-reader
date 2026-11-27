@@ -29,7 +29,10 @@ import { JSDOM } from "jsdom";
 import DOMPurify, { clearWindow } from "isomorphic-dompurify";
 import { Readability, isProbablyReaderable } from "@mozilla/readability";
 import type { Block, InlineRun } from "../src/content/schema";
-import type { FootnoteBodyT as CanonicalFootnote } from "../src/content/footnoteBody";
+import {
+  footnoteBodyFromParagraphs,
+  type FootnoteBodyT as CanonicalFootnote,
+} from "../src/content/footnoteBody";
 import { normalizeRunText } from "../src/content/normalizeText";
 import { publisherEntryMatchesHeading } from "../src/content/structure";
 import { attachAdjacentCaptions, withCaption } from "./figureCaptions";
@@ -817,15 +820,6 @@ function footnoteBodyParagraphs(noteHtml: string, url: string | undefined): Inli
   return paragraphs;
 }
 
-/** The canonical Footnote body for one note's paragraphs: the first paragraph
- * is `content`; later ones ride `laterParagraphs`, absent for a one-paragraph
- * note (the pre-#59 shape, byte-identical). Null when the note is empty. */
-function footnoteBody(id: string, paragraphs: InlineRun[][]): CanonicalFootnote | null {
-  const [first, ...later] = paragraphs;
-  if (first === undefined) return null;
-  return later.length > 0 ? { id, content: first, laterParagraphs: later } : { id, content: first };
-}
-
 // ── Publisher outline evidence (issue #236) ─────────────────────────────────
 
 /** Bounds for the captured evidence: a real publisher index is tens of
@@ -1121,8 +1115,8 @@ export async function extractAndNormalize(
   // BEFORE Readability sees the document.
   const linked = detectLinkedFootnotes(document);
   const footnotes = linked.noteHtml
-    .map((html, i) => footnoteBody(`fn-${i + 1}`, footnoteBodyParagraphs(html, url)))
-    .filter((fn): fn is CanonicalFootnote => fn !== null);
+    .map((html, i) => footnoteBodyFromParagraphs(`fn-${i + 1}`, footnoteBodyParagraphs(html, url)))
+    .filter((fn) => fn.content.length > 0);
 
   // 4. Readability on a clone (Readability MUTATES its input). cloneNode
   // returns Node per the DOM lib types; Readability expects a Document.
