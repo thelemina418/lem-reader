@@ -21,6 +21,14 @@ name: factory-validation
 on:
   pull_request:
 
+# One group PER PULL REQUEST. A newer push to the same PR replaces that PR's
+# still-pending run, while a run that is already validating in the guest is
+# never killed mid-boot (cancel-in-progress: false; the driver plane would
+# otherwise strand a spool claim until the stale sweep).
+concurrency:
+  group: ${{ github.workflow }}-pr-${{ github.event.pull_request.number }}
+  cancel-in-progress: false
+
 permissions:
   contents: read
 
@@ -28,9 +36,17 @@ jobs:
   factory-validation:
     runs-on: [self-hosted, lemcentre]
     timeout-minutes: 95
-    concurrency:
-      group: factory-validation
-      cancel-in-progress: false
+    # There is deliberately NO job-level concurrency group (the #20 lesson,
+    # here for the required Lemcentre check). The former global
+    # `factory-validation` group kept at most ONE pending job: each newly
+    # queued PR's run canceled the one already waiting ("Canceling since a
+    # higher priority waiting request for factory-validation exists"), so
+    # with two PRs open the older PR's required check was silently dropped
+    # (#33 twice on 2026-11-26). Exactly one runner carries the `lemcentre`
+    # label, and a busy self-hosted runner already serializes: GitHub holds
+    # the jobs routed to it (up to 24h) without canceling any. The heavy-test
+    # lease inside the wrapper stays the backstop; registering a second
+    # `lemcentre` runner needs its own serialization design first.
     steps:
       - uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
         with:
