@@ -40,6 +40,7 @@ import { BlockView } from "../content/render/BlockRenderer";
 import type { ArticleBodyHighlight } from "../content/render/BlockRenderer";
 import type { ListItemSlices } from "../content/render/BlockRenderer";
 import { resolveBlockSlice, footnoteBodyBlock } from "./splitBlock";
+import { FootnoteReturns } from "../content/render/FootnoteReturns";
 import {
   BLOCK_SEPARATOR,
   blockNormalizedText,
@@ -362,15 +363,12 @@ function FootnoteEntryView({
   if (highlightSlices) {
     claimSlicesFirstOccurrence(highlightSlices, seenHighlightIds);
   }
-  const n = fn.id.replace(/^fn-/, "");
   return (
     <li id={fn.id} tabIndex={-1} data-footnote-index={footnoteIndex}>
       <span data-footnote-content>
         <InlineList runs={runs} highlightSlices={highlightSlices} />
       </span>{" "}
-      <a href={`#fn-ref-${n}`} aria-label={`Return to reference ${n}`}>
-        {"\u21A9"}
-      </a>
+      <FootnoteReturns article={article} footnoteId={fn.id} />
     </li>
   );
 }

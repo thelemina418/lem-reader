@@ -17,6 +17,7 @@
 import { createContext, useContext } from "react";
 import type { InlineRun } from "../types";
 import { footnoteReferenceAnchorId } from "../footnoteReferences";
+import { footnoteMarkerLabel } from "./FootnoteReturns";
 import type { HighlightSlice } from "../../annotations/highlightRanges";
 // Issue #118 — the shared mark-trait helpers (the ONE className + aria-label
 // copy contract, shared with the code twin in BlockRenderer).
@@ -59,6 +60,7 @@ function Inline({ run }: { run: InlineRun }) {
             <a
               id={footnoteReferenceAnchorId(mark.footnoteId, mark.occurrence)}
               href={`#${mark.footnoteId}`}
+              aria-label={footnoteMarkerLabel(run.text)}
             >
               {node}
             </a>

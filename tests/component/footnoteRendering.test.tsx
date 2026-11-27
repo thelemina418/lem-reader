@@ -294,3 +294,79 @@ describe("inline footnote references (issue #55)", () => {
     expect(container.querySelector('sup > a#fn-ref-1-2[href="#fn-1"]')).not.toBeNull();
   });
 });
+
+// ── One return per reference + screen-reader labels (spec #66 / issue #57) ───
+
+describe("footnote returns and labels (issue #57)", () => {
+  const returnsOf = (root: ParentNode, noteId: string) =>
+    [...root.querySelectorAll<HTMLAnchorElement>(`#${noteId} a[href^="#fn-ref-"]`)].map((a) => ({
+      href: a.getAttribute("href"),
+      text: a.textContent,
+      label: a.getAttribute("aria-label"),
+    }));
+
+  it("a note cited twice shows the plain return plus one labelled return per reference", () => {
+    const { container } = render(<ArticleBody article={inlineArticle()} highlights={[]} />);
+    expect(returnsOf(container, "fn-1")).toEqual([
+      { href: "#fn-ref-1", text: "↩", label: "Return from note 1" },
+      { href: "#fn-ref-1", text: "a", label: "Return to reference 1a" },
+      { href: "#fn-ref-1-2", text: "b", label: "Return to reference 1b" },
+    ]);
+  });
+
+  it("a note cited once keeps its single return", () => {
+    const { container } = render(<ArticleBody article={footnotedArticle()} highlights={[]} />);
+    expect(returnsOf(container, "fn-1")).toEqual([
+      { href: "#fn-ref-1", text: "↩", label: "Return to reference 1" },
+    ]);
+  });
+
+  it("the paged note entry renders the same returns", () => {
+    const article = inlineArticle();
+    const row = footnoteRows(article)[0]!;
+    const page: PageFragment = {
+      schemaVersion: 1,
+      pageIndex: 0,
+      blocks: [
+        {
+          blockIndex: article.blocks.length,
+          footnoteIndex: row.index,
+          startGrapheme: 0,
+          endGrapheme: row.length,
+        },
+      ],
+    };
+    const { container } = render(
+      <PageFragmentView fragment={page} pageIndex={0} article={article} lang="en" />,
+    );
+    expect(returnsOf(container, "fn-1").map((r) => r.label)).toEqual([
+      "Return from note 1",
+      "Return to reference 1a",
+      "Return to reference 1b",
+    ]);
+  });
+
+  it("the hidden measurement projection mirrors the return chrome without links", () => {
+    const { container } = render(
+      <ArticleBody article={inlineArticle()} highlights={[]} measurementProjection />,
+    );
+    const li = container.querySelector('section[aria-label="Footnotes"] li')!;
+    expect(li.querySelector("a")).toBeNull();
+    expect(li.textContent).toBe("The note. ↩ a b");
+  });
+
+  it("announces each marker as a footnote link with its number", () => {
+    const { container } = render(<ArticleBody article={inlineArticle()} highlights={[]} />);
+    expect(container.querySelector("#fn-ref-1")?.getAttribute("aria-label")).toBe("Footnote 1");
+    expect(container.querySelector("#fn-ref-1-2")?.getAttribute("aria-label")).toBe("Footnote 1");
+    const legacy = render(<ArticleBody article={footnotedArticle()} highlights={[]} />);
+    expect(legacy.container.querySelector("#fn-ref-1")?.getAttribute("aria-label")).toBe(
+      "Footnote [1]",
+    );
+  });
+
+  it("the scrolling note can take focus when a reference is followed", () => {
+    const { container } = render(<ArticleBody article={inlineArticle()} highlights={[]} />);
+    expect(container.querySelector("li#fn-1")?.getAttribute("tabindex")).toBe("-1");
+  });
+});

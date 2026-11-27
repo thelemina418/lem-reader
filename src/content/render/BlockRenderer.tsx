@@ -78,6 +78,7 @@ import { ImageIcon } from "../../ui/icons";
 // split-semantic kind through the ONE shared primitive (the same slicing
 // page fragments use — never a fork).
 import { footnoteBodyBlock, resolveBlockSlice } from "../../pagination/splitBlock";
+import { FootnoteReturns, footnoteMarkerLabel } from "./FootnoteReturns";
 
 /**
  * The subset of a ResolvedHighlight the renderer needs. Defined locally so
@@ -393,7 +394,11 @@ export function BlockView({
       }
       return (
         <sup {...elementProps}>
-          <a id={`fn-ref-${n}`} href={`#fn-${n}`}>
+          <a
+            id={`fn-ref-${n}`}
+            href={`#fn-${n}`}
+            aria-label={footnoteMarkerLabel(block.marker)}
+          >
             {block.marker}
           </a>
         </sup>
@@ -824,17 +829,20 @@ export const ArticleBody = memo(
                 // react/no-danger rule forbids raw-HTML injection here.
                 // Issue #235: the measurement projection renders WITHOUT
                 // the li id — the visible page is the only place fn-N exists.
-                const n = fn.id.replace(/^fn-/, "");
+                // Issue #57: tabIndex -1 lets a followed reference land
+                // focus ON the note; the returns are the shared chrome.
                 return (
-                  <li key={fn.id} id={measurementProjection ? undefined : fn.id}>
+                  <li
+                    key={fn.id}
+                    id={measurementProjection ? undefined : fn.id}
+                    tabIndex={measurementProjection ? undefined : -1}
+                  >
                     <InlineList runs={fn.content} />{" "}
-                    {measurementProjection ? (
-                      <span aria-hidden="true">{"\u21A9"}</span>
-                    ) : (
-                      <a href={`#fn-ref-${n}`} aria-label={`Return to reference ${n}`}>
-                        {"\u21A9"}
-                      </a>
-                    )}
+                    <FootnoteReturns
+                      article={article}
+                      footnoteId={fn.id}
+                      measurementProjection={measurementProjection}
+                    />
                   </li>
                 );
               })}
