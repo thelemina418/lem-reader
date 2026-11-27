@@ -53,12 +53,8 @@ type ProvenancePartial = {
 // Mirrors scripts/normalize-source.ts L22-27 + src/content/schema.ts Mark
 // union. Emitted objects are structurally validated by ArticleSchema.parse at
 // the orchestrator boundary (07-05).
-type Mark =
-  | { type: "link"; href: string; title?: string }
-  | { type: "code" }
-  | { type: "strong" }
-  | { type: "em" }
-  | { type: "footnote-ref"; footnoteId: string; occurrence: number };
+// Derived from the schema's Mark union (the single source of truth).
+type Mark = InlineRun["marks"][number];
 
 /** Spec #66 / issue #55 — the inline walk's view of the detected notes:
  * which exist (a controlled `#fn-N` href is a reference only when N names a
@@ -70,11 +66,9 @@ interface FootnoteRefWalk {
   occurrences: Map<string, number>;
 }
 
-/** `notes`: the count of notes `fn-1…fn-N`, or the set of note numbers kept. */
-function newFootnoteRefWalk(notes: number | ReadonlySet<number>): FootnoteRefWalk {
-  const isNote =
-    typeof notes === "number" ? (n: number) => n <= notes : (n: number) => notes.has(n);
-  return { isNote, occurrences: new Map() };
+/** `noteNumbers`: the N of every note `fn-N` the article keeps. */
+function newFootnoteRefWalk(noteNumbers: ReadonlySet<number>): FootnoteRefWalk {
+  return { isNote: (n) => noteNumbers.has(n), occurrences: new Map() };
 }
 
 type InlineRunT = { text: string; marks: Mark[] };
@@ -751,10 +745,10 @@ export function htmlToBlocks(
   sanitizedDom: Document,
   sourceUrl: string | undefined,
   figureSrcResolver?: FigureSrcResolver,
-  notes: number | ReadonlySet<number> = 0,
+  noteNumbers: ReadonlySet<number> = new Set(),
 ): HtmlToBlocksResult {
   const root = findContentRoot(sanitizedDom);
-  const blocks = visitChildren(root, newFootnoteRefWalk(notes), figureSrcResolver);
+  const blocks = visitChildren(root, newFootnoteRefWalk(noteNumbers), figureSrcResolver);
 
   return {
     blocks,

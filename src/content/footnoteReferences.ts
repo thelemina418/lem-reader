@@ -190,3 +190,27 @@ export function firstFootnoteReference(
 ): FootnoteReferenceSpan | undefined {
   return footnoteReferenceSpans(article).find((s) => s.footnoteId === footnoteId);
 }
+
+// ── Reference/return vocabulary (shared by the renderer and the excursion) ──
+
+/** a, b, …, z, aa, ab, … — the K-th (1-based) return's letter. */
+export function footnoteReturnLetter(occurrence: number): string {
+  let k = occurrence;
+  let out = "";
+  while (k > 0) {
+    k -= 1;
+    out = String.fromCharCode(97 + (k % 26)) + out;
+    k = Math.floor(k / 26);
+  }
+  return out;
+}
+
+/** Issue #57 / story 9 — a reference marker is announced as a footnote link
+ * with its number. The publisher's marker text stays in the name
+ * (label-in-name), so "1" reads "Footnote 1" and "[2]" reads "Footnote [2]". */
+export function footnoteMarkerLabel(marker: string): string {
+  return `Footnote ${marker.trim()}`;
+}
+
+/** Marks the plain ↩ return; the excursion redirects it to its origin. */
+export const PLAIN_RETURN_ATTR = "data-footnote-return";

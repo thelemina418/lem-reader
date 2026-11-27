@@ -13,8 +13,8 @@ import type { CanonicalArticle } from "../content/types";
 import {
   footnoteReferenceSpans,
   parseFootnoteReferenceAnchorId,
+  PLAIN_RETURN_ATTR,
 } from "../content/footnoteReferences";
-import { PLAIN_RETURN_ATTR } from "../content/render/FootnoteReturns";
 
 export interface FootnoteExcursion {
   readonly footnoteId: string;

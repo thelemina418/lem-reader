@@ -63,12 +63,8 @@ type ProvenancePartial = {
 // orchestrator boundary (07-05). The discriminatedUnion in schema.ts is the
 // single source of truth; this mirror exists only because the mdast walker
 // accumulates plain objects before tidyRuns narrows them to InlineRun.
-type Mark =
-  | { type: "link"; href: string; title?: string }
-  | { type: "code" }
-  | { type: "strong" }
-  | { type: "em" }
-  | { type: "footnote-ref"; footnoteId: string; occurrence: number };
+// Derived from the schema's Mark union (the single source of truth).
+type Mark = InlineRun["marks"][number];
 
 type InlineRunT = { text: string; marks: Mark[] };
 

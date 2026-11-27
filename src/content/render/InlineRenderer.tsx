@@ -16,8 +16,7 @@
 // reading order + D-05 offset integrity depend on reusing this same output).
 import { createContext, useContext } from "react";
 import type { Block, InlineRun } from "../types";
-import { footnoteReferenceAnchorId } from "../footnoteReferences";
-import { footnoteMarkerLabel } from "./FootnoteReturns";
+import { footnoteMarkerLabel, footnoteReferenceAnchorId } from "../footnoteReferences";
 import type { HighlightSlice } from "../../annotations/highlightRanges";
 // Issue #118 — the shared mark-trait helpers (the ONE className + aria-label
 // copy contract, shared with the code twin in BlockRenderer).

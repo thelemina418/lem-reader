@@ -29,6 +29,7 @@
 //   - Chapter-targeted completions and collection entries whose chapter no
 //     longer corresponds are disclosed and need explicit acceptance.
 //   - Image assets are replaced together with the article.
+import type { Collection, Table } from "dexie";
 import {
   ArticleSchema,
   BookSchema,
@@ -133,22 +134,19 @@ async function loadSaved(articleId: string): Promise<CanonicalArticle> {
   return parsed.data;
 }
 
+/** Every revision's rows of one article, by the [articleId+revision] key. */
+function everyRevision<T, K>(table: Table<T, K>, articleId: string): Collection<T, K> {
+  return table
+    .where("[articleId+revision]")
+    .between([articleId, 0], [articleId, Number.MAX_SAFE_INTEGER]);
+}
+
 /** Everything apply reads, serialized in a stable order. */
 async function snapshotOf(articleId: string): Promise<string> {
-  const range: [[string, number], [string, number]] = [
-    [articleId, 0],
-    [articleId, Number.MAX_SAFE_INTEGER],
-  ];
   const [row, highlights, locations, completions, collections] = await Promise.all([
     db.articles.get(articleId),
-    db.highlights
-      .where("[articleId+revision]")
-      .between(...range)
-      .toArray(),
-    db.location
-      .where("[articleId+revision]")
-      .between(...range)
-      .toArray(),
+    everyRevision(db.highlights, articleId).toArray(),
+    everyRevision(db.location, articleId).toArray(),
     db.completions.toArray(),
     db.collections.toArray(),
   ]);
@@ -237,10 +235,7 @@ export function passageChanges(before: string[], after: string[]): PassageChange
 
 /** The latest saved position across revisions (the library's own fold). */
 async function latestLocation(articleId: string): Promise<LocationRecord | undefined> {
-  const rows = await db.location
-    .where("[articleId+revision]")
-    .between([articleId, 0], [articleId, Number.MAX_SAFE_INTEGER])
-    .toArray();
+  const rows = await everyRevision(db.location, articleId).toArray();
   return rows
     .flatMap((row) => {
       const parsed = LocationRecordSchema.safeParse(row);
@@ -307,10 +302,7 @@ async function planRevision(
 ): Promise<ReprocessPlan> {
   const articleId = saved.id;
   const highlights: HighlightConsequence[] = [];
-  for (const row of await db.highlights
-    .where("[articleId+revision]")
-    .between([articleId, 0], [articleId, Number.MAX_SAFE_INTEGER])
-    .toArray()) {
+  for (const row of await everyRevision(db.highlights, articleId).toArray()) {
     const parsed = HighlightRecordSchema.safeParse(row);
     if (!parsed.success) continue;
     const resolved = resolveQuoteSelector(proposed, parsed.data.quote, parsed.data.position);
@@ -467,10 +459,7 @@ async function writeRevision(
   const { articleId, proposed } = plan;
   if (plan.position.kind === "kept") {
     const latest = await latestLocation(articleId);
-    await db.location
-      .where("[articleId+revision]")
-      .between([articleId, 0], [articleId, Number.MAX_SAFE_INTEGER])
-      .delete();
+    await everyRevision(db.location, articleId).delete();
     // The savedAt stays the reader's own: reprocessing is not reading.
     await db.location.put({
       schemaVersion: 1,
@@ -587,21 +576,11 @@ async function bookSnapshotOf(bookId: string): Promise<string> {
   const chapterIds = row ? await bookChapterIds(BookSchema.parse(row)) : [];
   const chapters = [];
   for (const id of chapterIds) {
-    const range: [[string, number], [string, number]] = [
-      [id, 0],
-      [id, Number.MAX_SAFE_INTEGER],
-    ];
     chapters.push({
       id,
       row: await db.articles.get(id),
-      highlights: await db.highlights
-        .where("[articleId+revision]")
-        .between(...range)
-        .toArray(),
-      locations: await db.location
-        .where("[articleId+revision]")
-        .between(...range)
-        .toArray(),
+      highlights: await everyRevision(db.highlights, id).toArray(),
+      locations: await everyRevision(db.location, id).toArray(),
       notes: await db.articleNotes.where("articleId").equals(id).toArray(),
     });
   }
@@ -687,10 +666,7 @@ export async function previewBookReprocess(
   const collections = await db.collections.toArray();
   for (const chapter of savedChapters.filter((c) => !matched.has(c.id))) {
     const title = chapter.provenance.title;
-    const highlightCount = await db.highlights
-      .where("[articleId+revision]")
-      .between([chapter.id, 0], [chapter.id, Number.MAX_SAFE_INTEGER])
-      .count();
+    const highlightCount = await everyRevision(db.highlights, chapter.id).count();
     removed.push({ articleId: chapter.id, title, highlightCount });
     consequences.push({
       kind: "chapter-removed",
@@ -787,28 +763,15 @@ export async function applyBookReprocess(
         createdAt,
       );
       for (const { articleId } of preview.removed) {
-        const range: [[string, number], [string, number]] = [
-          [articleId, 0],
-          [articleId, Number.MAX_SAFE_INTEGER],
-        ];
-        const highlightIds = (
-          await db.highlights
-            .where("[articleId+revision]")
-            .between(...range)
-            .primaryKeys()
-        ).map((k) => (Array.isArray(k) ? String(k[0]) : String(k)));
+        const highlightIds = (await everyRevision(db.highlights, articleId).primaryKeys()).map(
+          (k) => (Array.isArray(k) ? String(k[0]) : String(k)),
+        );
         if (highlightIds.length > 0) {
           await db.notes.where("highlightId").anyOf(highlightIds).delete();
           await db.noteDrafts.bulkDelete(highlightIds);
         }
-        await db.highlights
-          .where("[articleId+revision]")
-          .between(...range)
-          .delete();
-        await db.location
-          .where("[articleId+revision]")
-          .between(...range)
-          .delete();
+        await everyRevision(db.highlights, articleId).delete();
+        await everyRevision(db.location, articleId).delete();
         await db.articleNotes.where("articleId").equals(articleId).delete();
         await db.articleNoteDrafts.where("articleId").equals(articleId).delete();
         await db.assets.where("articleId").equals(articleId).delete();

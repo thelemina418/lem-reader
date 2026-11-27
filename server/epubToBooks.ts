@@ -764,7 +764,12 @@ function walkChapterDocument(
     footnotes.length > 0 || copied !== undefined ? rawDom.serialize() : xhtml,
   );
   const dom = new JSDOM(sanitized);
-  const walked = htmlToBlocks(dom.window.document, undefined, figureSrcResolver, footnotes.length);
+  const walked = htmlToBlocks(
+    dom.window.document,
+    undefined,
+    figureSrcResolver,
+    new Set(footnotes.map((_, i) => i + 1)),
+  );
   return {
     blocks: walked.blocks,
     footnotes,
