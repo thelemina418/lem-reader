@@ -750,6 +750,9 @@ export function htmlToBlocks(
 // ── Footnote bodies (issue #55) ──────────────────────────────────────────────
 /** Return glyphs publishers leave beside (not inside) a back-link. */
 const TRAILING_RETURN_GLYPHS = /(?:\s|[\u21A9\u21AA]|\uFE0E|\uFE0F)+$/u;
+/** Return glyphs and carets left at a note's start once its back-links are
+ * gone (Wikipedia's "^ a b": the letters were the links, the caret is text). */
+const LEADING_RETURN_GLYPHS = /^(?:\s|\^|[\u21A9\u21AA\u2191]|\uFE0E|\uFE0F)+/u;
 
 /** One detected note's raw HTML → its inline runs, through the SHARED
  * sanitizer and inline walk (the mXSS-suite surface — no fork). References
@@ -759,6 +762,11 @@ function footnoteBodyRuns(noteHtml: string, url: string | undefined): InlineRun[
     url: url ?? undefined,
   });
   const runs = tidyRuns(extractInline(dom.window.document.body, []));
+  while (runs[0] !== undefined) {
+    runs[0].text = runs[0].text.replace(LEADING_RETURN_GLYPHS, "");
+    if (runs[0].text.length > 0) break;
+    runs.shift();
+  }
   const last = runs[runs.length - 1];
   if (last !== undefined) {
     last.text = last.text.replace(TRAILING_RETURN_GLYPHS, "");
