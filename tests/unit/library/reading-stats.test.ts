@@ -16,7 +16,9 @@ import type { ReadingSessionRecord } from "../../../src/content/schema";
 import {
   deriveLibraryReadingStats,
   deriveReadingStats,
+  estimatedReadingTimeLabel,
   formatDuration,
+  READING_PACE_GRAPHEMES_PER_MINUTE,
   timeReadLabel,
   timeReadLabels,
 } from "../../../src/ingestion/library/readingStats";
@@ -164,5 +166,38 @@ describe("timeReadLabels — the per-article label map (issue #38)", () => {
       readingSessions: [session("v1", "article-a", 59)],
     });
     expect(timeReadLabels(stats).size).toBe(0);
+  });
+});
+
+// Issue #40 — the Estimated reading time (CONTEXT.md): a whole-article
+// estimate at a fixed pace of ~238 words per minute, converted from the
+// snapshot's grapheme totals. Expected values are worked by hand from the
+// documented pace (238 wpm × 6 graphemes per word = 1428 graphemes/min).
+describe("estimatedReadingTimeLabel — the whole-article estimate (issue #40)", () => {
+  it("documents the fixed pace as 238 words of 6 graphemes per minute", () => {
+    expect(READING_PACE_GRAPHEMES_PER_MINUTE).toBe(1428);
+  });
+
+  it("says 'about {duration} read' through formatDuration's rounding", () => {
+    expect(estimatedReadingTimeLabel(1428 * 12)).toBe("about 12 min read");
+    expect(estimatedReadingTimeLabel(1428 * 65)).toBe("about 1 h 5 min read");
+    expect(estimatedReadingTimeLabel(1428 * 120)).toBe("about 2 h read");
+    // 12.4 minutes rounds down, 12.6 rounds up (formatDuration's Math.round).
+    expect(estimatedReadingTimeLabel(Math.round(1428 * 12.4))).toBe("about 12 min read");
+    expect(estimatedReadingTimeLabel(Math.round(1428 * 12.6))).toBe("about 13 min read");
+  });
+
+  it("says 'under a minute read' for short pieces (never 'about under a minute')", () => {
+    expect(estimatedReadingTimeLabel(1)).toBe("under a minute read");
+    expect(estimatedReadingTimeLabel(1427)).toBe("under a minute read");
+    expect(estimatedReadingTimeLabel(1428)).toBe("about 1 min read");
+  });
+
+  it("says nothing when there is no reading text at all", () => {
+    expect(estimatedReadingTimeLabel(0)).toBeUndefined();
+  });
+
+  it("never reads like the accrued 'read here' line", () => {
+    expect(estimatedReadingTimeLabel(1428 * 5)).not.toMatch(/read here/);
   });
 });

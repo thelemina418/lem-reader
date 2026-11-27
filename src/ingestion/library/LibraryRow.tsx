@@ -78,6 +78,13 @@ interface LibraryRowProps {
    */
   timeReadLabel?: string;
   /**
+   * Issue #40 — the Estimated reading time line ("about {duration} read",
+   * readingStats.estimatedReadingTimeLabel). LibraryView passes it on
+   * standalone article rows only; chapter sub-rows never receive it (the
+   * book row carries one total). Plain text, no keyboard stops.
+   */
+  estimatedReadingTime?: string;
+  /**
    * Issue #76 (decision #72) — this article's stored highlight count (read
    * from the ONE snapshot fold `highlightCountByArticleId`). When ≥ 1 the
    * row's action cluster gains the per-article review entry: an anchor to
@@ -109,6 +116,7 @@ export function LibraryRow({
   onReadingStateChange,
   headingLevel = 2,
   timeReadLabel,
+  estimatedReadingTime,
   highlightCount,
 }: LibraryRowProps) {
   const id = article.id;
@@ -143,13 +151,20 @@ export function LibraryRow({
               read, all quiet p.meta items in the shared flex line (the
               .library-card-meta container; margins zeroed there). */}
           <div className="library-card-meta">
-            {effectiveAuthor(article) && <p className="meta">{effectiveAuthor(article)}</p>}
+            {effectiveAuthor(article) && (
+              <p className="meta library-row-author">{effectiveAuthor(article)}</p>
+            )}
             {/* D8-02 source indicator + LIB-05 source link */}
             <SourceBadge article={article} />
             {/* Issue #41 (flow N3) — the video duration as text (absent for
                 every non-transcript source) via the ONE duration derivation. */}
             {videoDuration(article) && (
               <p className="meta library-row-duration">{videoDuration(article)}</p>
+            )}
+            {/* Issue #40 — the whole-article estimate (describes the
+                article, never the reader; absent on chapter sub-rows). */}
+            {estimatedReadingTime && (
+              <p className="meta library-row-estimate">{estimatedReadingTime}</p>
             )}
             {/* Issue #38 — the quiet "{duration} read here" line joins the
                 metaline (was its own row). Absent under one minute of

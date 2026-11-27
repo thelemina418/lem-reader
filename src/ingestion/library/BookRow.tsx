@@ -52,6 +52,7 @@ import { LibraryRow } from "./LibraryRow";
 import { RowProgress, RowTags } from "./RowAnatomy";
 import type { LibrarySnapshot } from "./librarySnapshot";
 import { TrashIcon } from "../../ui/icons";
+import { estimatedReadingTimeLabel } from "./readingStats";
 // Issue #163 — the D12-11 skip sentence's ONE copy home (the quiet-save
 // confirmation appends the SAME pair this row renders durably).
 import { skippedChaptersCopy } from "../ingestCopy";
@@ -91,6 +92,20 @@ export function BookRow({ book, chapters, snapshot, onRemove }: BookRowProps) {
   // bookProgress module — the declared TOC first, live extras appended),
   // consumed verbatim by the #242 collection entry resolution too.
   const orderedChapters = useMemo(() => orderedLiveChapters(book, chapters), [book, chapters]);
+
+  // Issue #40 — ONE estimated reading time for the whole book: the live
+  // chapters' grapheme totals (the snapshot's ONE fold) summed, then the
+  // shared fixed-pace conversion. Chapter sub-rows carry none of their own.
+  const estimatedReadingTime = useMemo(
+    () =>
+      estimatedReadingTimeLabel(
+        orderedChapters.reduce(
+          (sum, chapter) => sum + (snapshot.totalsByArticleId.get(chapter.id) ?? 0),
+          0,
+        ),
+      ),
+    [orderedChapters, snapshot.totalsByArticleId],
+  );
 
   // D14-20 — the finished decision routes through the ONE policy module
   // (readingState.ts); the progress memo above stays untouched because
@@ -140,6 +155,9 @@ export function BookRow({ book, chapters, snapshot, onRemove }: BookRowProps) {
               Book · {chapterCount} {chapterCount === 1 ? "chapter" : "chapters"}
             </p>
             {book.authors.length > 0 && <p className="meta">{book.authors.join(", ")}</p>}
+            {estimatedReadingTime && (
+              <p className="meta library-row-estimate">{estimatedReadingTime}</p>
+            )}
             {ordinal !== null && (
               <p className="meta">
                 Chapter {ordinal} of {chapterCount}

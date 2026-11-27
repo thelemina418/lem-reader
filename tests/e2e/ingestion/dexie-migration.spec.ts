@@ -656,9 +656,7 @@ test.describe("v5 rows hydrate overrides without a write-back (17-05 META-04 + 1
       hasText: "V5 Seeded Article",
     });
     await expect(seededRow.locator("#title-v5-article-seed")).toHaveText("V5 Seeded Article");
-    await expect(seededRow.locator("p.meta:not(.source-badge):not(.finished-mark)")).toHaveText(
-      "V5 Canonical Author",
-    );
+    await expect(seededRow.locator("p.meta.library-row-author")).toHaveText("V5 Canonical Author");
 
     // 4. NO WRITE-BACK (META-04): the app opened, read, Zod-parsed, and
     //    rendered the row — and the raw stored row STILL carries none of
@@ -739,9 +737,7 @@ test.describe("v5 rows hydrate overrides without a write-back (17-05 META-04 + 1
       hasText: "Reader Renamed V5",
     });
     await expect(forwardRow.locator("#title-v5-article-seed")).toHaveText("Reader Renamed V5");
-    await expect(forwardRow.locator("p.meta:not(.source-badge):not(.finished-mark)")).toHaveText(
-      "Reader-Owned Author",
-    );
+    await expect(forwardRow.locator("p.meta.library-row-author")).toHaveText("Reader-Owned Author");
 
     // Row truth: all four keys persisted through the open/read cycle and
     // the canonical bytes stay canonical underneath (META-01's layering).

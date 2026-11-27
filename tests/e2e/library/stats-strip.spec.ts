@@ -373,3 +373,59 @@ test.describe("issue #38 — the ambient reading-stats strip", () => {
     expect(await countReadingSessions(page)).toBe(0);
   });
 });
+
+// Issue #40 — the Estimated reading time beside the accrued "read here"
+// line. A ~3-minute article at the fixed 1428-graphemes-per-minute pace
+// (238 wpm × 6): 30 paragraphs of ~140 graphemes ≈ 4,300 graphemes.
+const ESTIMATE_ARTICLE = makeStandalone(
+  "stats-estimate",
+  "A Long Walk Around the Reservoir",
+  Array.from(
+    { length: 30 },
+    (_, i) =>
+      `Paragraph ${i + 1} follows the reservoir path past the pump house, the reed beds and the bench where the same heron waits every evening.`,
+  ),
+);
+
+test.describe("issue #40 — the estimated reading time on library rows", () => {
+  test("stays fixed as the reader progresses, worded apart from 'read here', calm at 320px", async ({
+    page,
+  }) => {
+    // Guard the fixture: the total must sit inside the 3-minute rounding band.
+    const total = graphemeClusters(normalizeText(ESTIMATE_ARTICLE), ESTIMATE_ARTICLE.lang).length;
+    expect(total).toBeGreaterThan(1428 * 2.5);
+    expect(total).toBeLessThan(1428 * 3.5);
+
+    await seedArticleRows(page, [ESTIMATE_ARTICLE]);
+    await openLibrary(page);
+    const row = page
+      .locator(".library-list > li")
+      .filter({ hasText: ESTIMATE_ARTICLE.provenance.title });
+    await expect(row.locator(".library-row-estimate")).toHaveText("about 3 min read");
+    await expect(row.locator(".library-row-time-read")).toHaveCount(0);
+
+    // Half-way through, five minutes accrued: the estimate does not move.
+    await seedReadingSession(page, "visit-est", ESTIMATE_ARTICLE.id, 300);
+    await seedLocation(page, ESTIMATE_ARTICLE.id, Math.floor(total / 2));
+    await openLibrary(page);
+    await expect(row.locator(".library-row-estimate")).toHaveText("about 3 min read");
+    await expect(row.locator(".library-row-time-read")).toHaveText("5 min read here");
+
+    // 320px: both lines stay inside the row, and nothing scrolls sideways.
+    await page.setViewportSize({ width: 320, height: 720 });
+    const rowBox = (await row.boundingBox())!;
+    for (const line of [
+      row.locator(".library-row-estimate"),
+      row.locator(".library-row-time-read"),
+    ]) {
+      await expect(line).toBeVisible();
+      const box = (await line.boundingBox())!;
+      expect(box.x).toBeGreaterThanOrEqual(rowBox.x);
+      expect(box.x + box.width).toBeLessThanOrEqual(rowBox.x + rowBox.width + 0.5);
+    }
+    const overflow = await page.evaluate(
+      () => document.documentElement.scrollWidth - document.documentElement.clientWidth,
+    );
+    expect(overflow).toBeLessThanOrEqual(0);
+  });
+});
