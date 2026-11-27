@@ -76,9 +76,9 @@ describe("ArticleBody — windowed footnote measurement projection", () => {
     // page's identifiers or add targets to them.
     expect(items[0]!.id).toBe("");
     expect(items[0]!.querySelector("a")).toBeNull();
-    // The rendered text is the row's canonical text — exactly what the
-    // measurer normalizes and the engine splits against.
-    expect(items[0]!.textContent).toBe(inlineText(article.footnotes[0]!.content));
+    // The rendered text is the row's canonical text followed by the inert
+    // return chrome the visible page shows (review S6).
+    expect(items[0]!.textContent).toBe(`${inlineText(article.footnotes[0]!.content)} ↩`);
   });
 
   it("keeps the scrolling footnotes section untouched (ids + back-links)", () => {
@@ -534,5 +534,106 @@ describe("a note with no reference (issue #60)", () => {
     const note = container.querySelector("li#fn-2");
     expect(note?.textContent).toContain("Nobody cites this note.");
     expect(note?.querySelector("a")).toBeNull();
+  });
+});
+
+// ── Review fixes (spec #66 review H1/H2) ─────────────────────────────────────
+
+describe("reference anchor ids stay unique and live (review H1/H2)", () => {
+  const twiceLegacy = (): CanonicalArticle => ({
+    ...footnotedArticle(),
+    blocks: [
+      { kind: "paragraph", content: [{ text: "A claim worth citing.", marks: [] }] },
+      { kind: "footnote-reference", footnoteId: "fn-1", marker: "[1]" },
+      { kind: "paragraph", content: [{ text: "Cited again here.", marks: [] }] },
+      { kind: "footnote-reference", footnoteId: "fn-1", marker: "[1]" },
+    ],
+  });
+
+  it("a legacy note cited twice gives each reference its own id, and every return a live target", () => {
+    const { container } = render(<ArticleBody article={twiceLegacy()} highlights={[]} />);
+    const ids = [...container.querySelectorAll('[id^="fn-ref-"]')].map((el) => el.id);
+    expect(ids).toEqual(["fn-ref-1", "fn-ref-1-2"]);
+    const note = container.querySelector("#fn-1")!;
+    for (const a of note.querySelectorAll<HTMLAnchorElement>('a[href^="#fn-ref-"]')) {
+      expect(
+        container.querySelector(a.getAttribute("href")!),
+        a.getAttribute("href")!,
+      ).not.toBeNull();
+    }
+  });
+
+  it("a paged legacy reference uses the same occurrence id", () => {
+    const article = twiceLegacy();
+    const lengths = articleGraphemeIndex(article).perBlockLengths;
+    const page: PageFragment = {
+      schemaVersion: 1,
+      pageIndex: 0,
+      blocks: [2, 3].map((blockIndex) => ({
+        blockIndex,
+        startGrapheme: 0,
+        endGrapheme: lengths[blockIndex]!,
+      })),
+    };
+    const { container } = render(
+      <PageFragmentView fragment={page} pageIndex={0} article={article} lang="en" />,
+    );
+    expect(container.querySelector("#fn-ref-1-2")).not.toBeNull();
+    expect(container.querySelector("#fn-ref-1")).toBeNull();
+  });
+
+  it("a highlight that splits a marker keeps the reference id on one element", () => {
+    const article: CanonicalArticle = {
+      ...footnotedArticle(),
+      blocks: [
+        {
+          kind: "paragraph",
+          content: [
+            { text: "The claim", marks: [] },
+            { text: "12", marks: [{ type: "footnote-ref", footnoteId: "fn-12", occurrence: 1 }] },
+            { text: " holds.", marks: [] },
+          ],
+        },
+      ],
+      footnotes: [{ id: "fn-12", content: [{ text: "Note twelve.", marks: [] }] }],
+    };
+    const { container } = render(
+      <ArticleBody
+        article={article}
+        highlights={[
+          { id: "h1", position: { start: 10, end: 14 }, hasNote: false, status: "confident" },
+        ]}
+      />,
+    );
+    expect(container.querySelector("mark.highlight")).not.toBeNull();
+    expect(container.querySelectorAll('[id="fn-ref-12"]')).toHaveLength(1);
+    // Both halves still link to the note.
+    expect(container.querySelectorAll('p a[href="#fn-12"]')).toHaveLength(2);
+  });
+});
+
+// Spec #66 review S6 (story 43) — the windowed measurement rows mirror the
+// visible paged note, return chrome included, so a near-full last line that
+// wraps "↩ a b" is measured; the hidden rows still expose no ids or links.
+describe("windowed note measurement rows carry the return chrome (review S6)", () => {
+  it("renders the returns as plain text after the note, id- and link-free", () => {
+    const article = inlineArticle();
+    const { container } = render(
+      <ArticleBody
+        article={article}
+        highlights={[]}
+        measurementProjection
+        blockWindow={{
+          startBlock: article.blocks.length,
+          endBlock: article.blocks.length,
+          startFootnote: 0,
+          endFootnote: 1,
+        }}
+      />,
+    );
+    const li = container.querySelector("li[data-footnote-index]")!;
+    expect(li.textContent).toBe("The note. ↩ a b");
+    expect(li.querySelector("a")).toBeNull();
+    expect(container.querySelector('[id^="fn-"]')).toBeNull();
   });
 });

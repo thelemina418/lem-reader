@@ -15,7 +15,7 @@
 // highlight stays active — D5-07). NO parallel renderer is forked (DOC-02
 // reading order + D-05 offset integrity depend on reusing this same output).
 import { createContext, useContext } from "react";
-import type { InlineRun } from "../types";
+import type { Block, InlineRun } from "../types";
 import { footnoteReferenceAnchorId } from "../footnoteReferences";
 import { footnoteMarkerLabel } from "./FootnoteReturns";
 import type { HighlightSlice } from "../../annotations/highlightRanges";
@@ -42,7 +42,20 @@ import { tintMarkStyle } from "../../settings/highlightTint";
  */
 export const MeasurementProjectionContext = createContext(false);
 
-function Inline({ run }: { run: InlineRun }) {
+/**
+ * Spec #66 review H1 — the article's legacy block-level reference anchor ids
+ * (legacyReferenceAnchorIds), provided by ArticleBody and the paged
+ * fragment view so a legacy note cited twice renders `fn-ref-N-2` for its
+ * second reference, never a duplicate `fn-ref-N`.
+ */
+export const LegacyReferenceAnchorsContext = createContext<ReadonlyMap<Block, string> | null>(null);
+
+/**
+ * Review H2 — a highlight boundary inside a marker splits its run into
+ * pieces; only the first piece of an occurrence carries the anchor id
+ * (the Phase 19 first-slice-only id precedent), every piece keeps the link.
+ */
+function Inline({ run, stampAnchorId = true }: { run: InlineRun; stampAnchorId?: boolean }) {
   const measurementProjection = useContext(MeasurementProjectionContext);
   let node: React.ReactNode = run.text;
   for (const mark of run.marks) {
@@ -58,7 +71,11 @@ function Inline({ run }: { run: InlineRun }) {
         ) : (
           <sup>
             <a
-              id={footnoteReferenceAnchorId(mark.footnoteId, mark.occurrence)}
+              id={
+                stampAnchorId
+                  ? footnoteReferenceAnchorId(mark.footnoteId, mark.occurrence)
+                  : undefined
+              }
               href={`#${mark.footnoteId}`}
               aria-label={footnoteMarkerLabel(run.text)}
             >
@@ -126,6 +143,19 @@ export function InlineList({
     );
   }
 
+  // Review H2 — first piece of each reference occurrence stamps its id.
+  const stamped = new Set<string>();
+  const run = (r: InlineRun, key: number) => {
+    let stamp = true;
+    for (const mark of r.marks) {
+      if (mark.type !== "footnote-ref") continue;
+      const id = footnoteReferenceAnchorId(mark.footnoteId, mark.occurrence);
+      stamp = !stamped.has(id);
+      stamped.add(id);
+    }
+    return <Inline key={key} run={r} stampAnchorId={stamp} />;
+  };
+
   // Highlight-aware path: render each slice. Highlighted slices (highlightId
   // !== null) wrap in <mark class="highlight"> with ARIA. The Inline mark-
   // wrapping loop is reused UNCHANGED inside each slice (D5-07 — a link inside
@@ -136,22 +166,10 @@ export function InlineList({
       {highlightSlices.map((slice, i) => {
         if (slice.highlightId === null) {
           // Un-highlighted gap slice — render its runs directly.
-          return (
-            <span key={i}>
-              {slice.runs.map((r, j) => (
-                <Inline key={j} run={r} />
-              ))}
-            </span>
-          );
+          return <span key={i}>{slice.runs.map((r, j) => run(r, j))}</span>;
         }
         if (isSpokenMarkerId(slice.highlightId)) {
-          return (
-            <SpokenMark key={i}>
-              {slice.runs.map((r, j) => (
-                <Inline key={j} run={r} />
-              ))}
-            </SpokenMark>
-          );
+          return <SpokenMark key={i}>{slice.runs.map((r, j) => run(r, j))}</SpokenMark>;
         }
         // Highlighted slice — wrap in <mark class="highlight">. The modifiers
         // reflect the D5-02 tri-state (Plan 05-04): confident → bare fill;
@@ -190,9 +208,7 @@ export function InlineList({
             aria-label={highlightAriaLabel(slice)}
             style={markStyle}
           >
-            {slice.runs.map((r, j) => (
-              <Inline key={j} run={r} />
-            ))}
+            {slice.runs.map((r, j) => run(r, j))}
           </mark>
         );
       })}
