@@ -143,6 +143,21 @@ describe("committedPageProgressRatio — committed-page pin boundary table", () 
     expect(committedPageProgressRatio(article, pages, 2)).toBe(1);
   });
 
+  // Issue #58 — the notes are not reading: the page that reaches the end of
+  // the main text reads exactly 1 even though notes follow it.
+  it("a footnoted work's last main-text page → exactly 1, notes notwithstanding", () => {
+    const texts = ["First paragraph of several here.", "Second paragraph of several here."];
+    const article = ArticleSchema.parse({
+      ...baseArticle,
+      blocks: texts.map(paragraph),
+      footnotes: [{ id: "fn-1", content: [{ text: "A long note that is not reading at all." }] }],
+    });
+    const pages = texts.map((text, i) =>
+      fragment(i, [{ blockIndex: i, startGrapheme: 0, endGrapheme: text.length }]),
+    );
+    expect(committedPageProgressRatio(article, pages, 1)).toBe(1);
+  });
+
   it("page 1 of 3 → 0", () => {
     const texts = [
       "First paragraph of several here.",
