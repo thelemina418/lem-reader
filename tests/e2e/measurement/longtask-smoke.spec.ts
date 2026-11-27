@@ -49,9 +49,9 @@ const LONGTASK_BUDGET_MS = 150;
 /** Giant-flow budget: observed dev max ~141ms post-fix; regression class is 6-12s. */
 const GIANT_LONGTASK_BUDGET_MS = 250;
 
-// Wall-clock budgets: `npm run test:e2e:pr` runs @timing tests in a one-worker
-// pass after the parallel pass, so other workers cannot eat the budget
-// (scripts/e2e-pr.mjs; lem-reader #2 attempt 4 failed here at 261-484ms).
+// Wall-clock budgets: `npm run test:e2e` / `test:e2e:pr` run @timing tests in
+// a one-worker pass after the parallel pass, so other workers cannot eat the
+// budget (scripts/e2e-passes.mjs; lem-reader #2 attempt 4 failed at 261-484ms).
 const TIMING = { tag: "@timing" };
 
 test.describe("longtask smoke — time-sliced measurement pass (260820-beo)", TIMING, () => {

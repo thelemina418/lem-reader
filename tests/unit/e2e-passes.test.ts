@@ -1,7 +1,7 @@
-// tests/unit/e2e-pr-passes.test.ts — the two-pass PR suite split and the
-// report merge behind scripts/e2e-pr.mjs (lem-reader #2, attempt 4).
+// tests/unit/e2e-passes.test.ts — the two-pass browser suite split and the
+// report merge behind scripts/e2e-passes.mjs (lem-reader #2, attempt 4).
 import { describe, expect, it } from "vitest";
-import { mergePassReports, passArgv, TIMING_TAG } from "../../scripts/lib/e2e-pr-passes.mjs";
+import { mergePassReports, passArgv, TIMING_TAG } from "../../scripts/lib/e2e-passes.mjs";
 
 const report = (
   file: string,
@@ -22,7 +22,11 @@ const report = (
 
 describe("passArgv", () => {
   it("splits on the @timing tag and gives the timing pass one worker", () => {
-    const { parallel, timing } = passArgv(["--shard=2/3", "--reporter=line,json"]);
+    const { parallel, timing } = passArgv([
+      "--config=playwright.pr.config.ts",
+      "--shard=2/3",
+      "--reporter=line,json",
+    ]);
     expect(parallel).toContain(`--grep-invert=${TIMING_TAG}`);
     expect(parallel).not.toContain("--workers=1");
     expect(timing).toContain(`--grep=${TIMING_TAG}`);
@@ -30,9 +34,17 @@ describe("passArgv", () => {
     expect(timing).toContain("--pass-with-no-tests");
     // The caller's arguments reach both passes, so a shard slices both.
     for (const argv of [parallel, timing]) {
-      expect(argv).toContain("--config=playwright.pr.config.ts");
-      expect(argv.slice(-2)).toEqual(["--shard=2/3", "--reporter=line,json"]);
+      expect(argv.slice(1, 4)).toEqual([
+        "--config=playwright.pr.config.ts",
+        "--shard=2/3",
+        "--reporter=line,json",
+      ]);
     }
+  });
+
+  it("puts the timing pass's flags after the caller's, so --workers=1 wins", () => {
+    const { timing } = passArgv(["--workers=3"]);
+    expect(timing.lastIndexOf("--workers=1")).toBeGreaterThan(timing.indexOf("--workers=3"));
   });
 
   it("keeps the parallel pass's test-results out of the timing pass's output dir", () => {

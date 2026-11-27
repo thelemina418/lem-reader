@@ -1,4 +1,4 @@
-// Types for scripts/lib/e2e-pr-passes.mjs.
+// Types for scripts/lib/e2e-passes.mjs.
 
 /** A Playwright JSON report, as far as the pass merge reads it. */
 export interface PassReport {

@@ -1,28 +1,31 @@
-// scripts/lib/e2e-pr-passes.mjs — the pure half of scripts/e2e-pr.mjs.
+// scripts/lib/e2e-passes.mjs — the pure half of scripts/e2e-passes.mjs.
 //
-// The PR browser suite runs in two passes (lem-reader #2, attempt 4):
+// The browser suites (`test:e2e`, `test:e2e:pr`) run in two passes
+// (lem-reader #2, attempt 4):
 //   1. "parallel" — every test except the @timing ones, at the planned
 //      worker count;
 //   2. "timing" — only the @timing tests (wall-clock budget checks), one
 //      worker, so nothing else shares the CPU while they measure.
-// Callers (ci.yml e2e-reference, the lemcentre guest harness, the hosted
-// shadow) consume ONE Playwright JSON report, so the two pass reports are
-// merged into one with the same shape.
+// Callers (ci.yml e2e-reference, the lemcentre guest PR and nightly
+// harness, the hosted shadow) consume ONE Playwright JSON report per run,
+// so the two pass reports are merged into one with the same shape.
 
 /** Tag carried by wall-clock budget checks (see the passes above). */
 export const TIMING_TAG = "@timing";
 
 /**
- * Playwright argv for each pass. `args` are the caller's pass-through
- * arguments (reporters, --shard, --project, ...), identical in both passes
+ * Playwright argv for each pass. `args` are the pass-through arguments
+ * (--config, reporters, --shard, --project, ...), identical in both passes
  * so a shard selects the same slice of each.
  */
 export function passArgv(args, outputDir = "test-results") {
-  const base = ["test", "--config=playwright.pr.config.ts"];
   return {
-    parallel: [...base, `--grep-invert=${TIMING_TAG}`, ...args],
+    parallel: ["test", ...args, `--grep-invert=${TIMING_TAG}`],
+    // The pass's own flags come LAST so they win over a caller's (a
+    // `--workers=3` pass-through must not reach the timing pass).
     timing: [
-      ...base,
+      "test",
+      ...args,
       `--grep=${TIMING_TAG}`,
       "--workers=1",
       // Playwright empties its output dir at start; a subdirectory keeps the
@@ -30,7 +33,6 @@ export function passArgv(args, outputDir = "test-results") {
       `--output=${outputDir}/timing`,
       // A shard (or a --project selection) may hold no @timing test.
       "--pass-with-no-tests",
-      ...args,
     ],
   };
 }

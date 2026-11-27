@@ -1,6 +1,7 @@
 #!/usr/bin/env node
-// scripts/e2e-pr.mjs — `npm run test:e2e:pr`: the PR browser suite in two
-// passes, merged into one JSON report (see scripts/lib/e2e-pr-passes.mjs).
+// scripts/e2e-passes.mjs — `npm run test:e2e` and `test:e2e:pr`: a browser
+// suite in two passes, merged into one JSON report (see
+// scripts/lib/e2e-passes.mjs). The package script names the --config.
 //
 // Why: the giant-article longtask check (250ms budget) passed alone at
 // 180-215ms and failed at 261-484ms when heavy specs ran beside it in other
@@ -16,12 +17,12 @@ import { spawnSync } from "node:child_process";
 import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { mergePassReports, passArgv } from "./lib/e2e-pr-passes.mjs";
+import { mergePassReports, passArgv } from "./lib/e2e-passes.mjs";
 
 const args = process.argv.slice(2);
 const out = process.env.PLAYWRIGHT_JSON_OUTPUT_FILE;
 const passes = passArgv(args);
-const passDir = out ? mkdtempSync(join(tmpdir(), "e2e-pr-")) : null;
+const passDir = out ? mkdtempSync(join(tmpdir(), "e2e-passes-")) : null;
 const status = {};
 const reportOf = {};
 
@@ -31,7 +32,7 @@ for (const name of ["parallel", "timing"]) {
     reportOf[name] = join(passDir, `${name}.json`);
     env.PLAYWRIGHT_JSON_OUTPUT_FILE = reportOf[name];
   }
-  console.log(`[e2e-pr] ${name} pass: playwright ${passes[name].join(" ")}`);
+  console.log(`[e2e-passes] ${name} pass: playwright ${passes[name].join(" ")}`);
   const result = spawnSync("npx", ["playwright", ...passes[name]], { stdio: "inherit", env });
   status[name] = result.status ?? 1;
 }
@@ -41,14 +42,16 @@ if (out) {
   try {
     const merged = mergePassReports(read(reportOf.parallel), read(reportOf.timing));
     if (merged) writeFileSync(out, JSON.stringify(merged, null, 2));
-    else console.error("[e2e-pr] neither pass wrote a JSON report");
+    else console.error("[e2e-passes] neither pass wrote a JSON report");
   } catch (error) {
-    console.error(`[e2e-pr] report merge refused: ${error.message}`);
+    console.error(`[e2e-passes] report merge refused: ${error.message}`);
     status.merge = 1;
   } finally {
     rmSync(passDir, { recursive: true, force: true });
   }
 }
 
-console.log(`[e2e-pr] parallel pass exit ${status.parallel}, timing pass exit ${status.timing}`);
+console.log(
+  `[e2e-passes] parallel pass exit ${status.parallel}, timing pass exit ${status.timing}`,
+);
 process.exit(status.parallel || status.timing || status.merge || 0);
