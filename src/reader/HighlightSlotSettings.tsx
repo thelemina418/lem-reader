@@ -465,6 +465,12 @@ export function HighlightSlotSettings(): React.ReactElement {
                 aria-label={`Slot ${i + 1}: ${slot.name}${isDefault ? ", default for new highlights" : ""}`}
                 onClick={() => setOpenIndex((cur) => (cur === i ? null : i))}
               >
+                {/* Issue #39 — the disclosure caret: part of the row
+                    anatomy (every slot row gets one), decorative only —
+                    aria-expanded on this button stays the announcement.
+                    CSS paints it with the SAME native disclosure marker
+                    the panel's <details> summaries use. */}
+                <span className="highlight-slot-row-caret" aria-hidden="true" />
                 {/* The slot's ACTIVE color (a dormant hex never paints —
                     SlotSwatch reads the ONE activeCustomColor gate). */}
                 <SlotSwatch slot={slot} bases={bases} />

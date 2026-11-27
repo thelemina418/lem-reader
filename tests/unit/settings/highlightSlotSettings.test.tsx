@@ -206,6 +206,27 @@ describe("HighlightSlotSettings — the settings accordion (issue #222)", () => 
     expect(screen.queryByLabelText("Slot 2 name")).toBeNull();
   });
 
+  it("every row leads with ONE decorative disclosure caret; the toggle's name + expanded state stay the announcement (issue #39)", () => {
+    mountEditor();
+    const toggles = screen
+      .getAllByRole("button")
+      .filter((b) => b.getAttribute("aria-expanded") !== null);
+    expect(toggles).toHaveLength(5);
+    for (const [i, toggle] of toggles.entries()) {
+      const carets = toggle.querySelectorAll(".highlight-slot-row-caret");
+      expect(carets, `slot ${i + 1} caret`).toHaveLength(1);
+      // Leads the row anatomy, like a native <details> marker.
+      expect(toggle.firstElementChild).toBe(carets[0]);
+      expect(carets[0]?.getAttribute("aria-hidden")).toBe("true");
+      // Decorative: no text of its own leaks into the accessible name.
+      expect(carets[0]?.textContent).toBe("");
+      expect(toggle.getAttribute("aria-label")).toMatch(new RegExp(`^Slot ${i + 1}: `));
+    }
+    expandSlot(1);
+    expect(toggles[1]?.getAttribute("aria-expanded")).toBe("true");
+    expect(toggles[1]?.querySelectorAll(".highlight-slot-row-caret")).toHaveLength(1);
+  });
+
   it("collapsing again (the same row) hides the editor", () => {
     mountEditor();
     expandSlot(0);
