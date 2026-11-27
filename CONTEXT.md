@@ -118,7 +118,7 @@ _Avoid_: jump (as a noun), navigation (too general)
 
 **Correction**:
 One change the reader makes to how an article was processed — giving a block a different type, moving words across a block boundary, splitting, merging, or hiding a block. Corrections sit on top of the article as it was ingested, which is never overwritten: each can be undone on its own, and the original can always be restored.
-_Avoid_: edit (that is changing a note or highlight), repair (that is the app reprocessing a PDF), fix
+_Avoid_: edit (that is changing a note or highlight), repair (that is the app reprocessing a PDF), fix. Distinct from marking an article finished or unfinished by hand, which older code also calls a correction.
 
 **Correction view**:
 The way of viewing an article while making corrections, entered and left like the reading-mode toggle without losing the reader's place. Always a scrolling column with block boundaries visible.
