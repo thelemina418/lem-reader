@@ -805,7 +805,7 @@ function noteParagraphNodes(root: Node): Node[][] {
  * References inside a note are never live (note-to-note citations read as
  * text). Empty paragraphs are dropped, and publisher return glyphs and
  * carets are stripped from the note's start and end. */
-function footnoteBodyParagraphs(noteHtml: string, url: string | undefined): InlineRun[][] {
+export function footnoteBodyParagraphs(noteHtml: string, url: string | undefined): InlineRun[][] {
   const dom = new JSDOM(`<body>${sanitizeExtractedHtml(noteHtml)}</body>`, {
     url: url ?? undefined,
   });

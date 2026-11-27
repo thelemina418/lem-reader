@@ -89,7 +89,12 @@ const INLINE_WRAPPERS = new Set(["sup", "span", "a", "small", "cite"]);
 
 function isBackLinkTo(link: Element, reference: Element, document: Document): boolean {
   const target = targetOf(link, document);
-  if (target === null) return false;
+  return target !== null && isReferencePoint(target, reference);
+}
+
+/** Is `target` the reference itself, an inline wrapper of it, or the empty
+ * anchor placed just before it — the places a back-link may point? */
+export function isReferencePoint(target: Element, reference: Element): boolean {
   if (target === reference) return true;
   if (target.contains(reference)) return INLINE_WRAPPERS.has(target.tagName.toLowerCase());
   // An empty anchor placed just before the reference (WordPress's Easy
@@ -119,7 +124,7 @@ const CONTENT_ROOTS = new Set(["body", "main", "article", "html"]);
 
 /** The note a reference's target sits in: its list item, else the nearest
  * block that holds the target (the target itself when it is a block). */
-function noteContaining(target: Element): Element | null {
+export function noteContaining(target: Element): Element | null {
   const item = target.closest("li");
   if (item !== null) return item;
   for (let el: Element | null = target; el !== null; el = el.parentElement) {
@@ -185,7 +190,7 @@ function isNotesHeading(el: Element): boolean {
  * ("see the second note") is never a marker. */
 const MARKER = /^[[(]?(?:\d{1,4}|[a-z]|[ivxlc]{1,6}|[*†‡§¶#]{1,3})[\])]?$/iu;
 
-function isMarkerLike(link: Element): boolean {
+export function isMarkerLike(link: Element): boolean {
   return MARKER.test((link.textContent ?? "").replace(/\s+/g, "").trim());
 }
 
@@ -194,13 +199,34 @@ const NOTES_ROLES = new Set(["doc-endnotes", "doc-footnotes"]);
 
 /** Is `note` inside a structure the page declares as its notes — by DPUB
  * role or by a notes heading just before it or leading it? */
-function inNotesSection(note: Element, body: Element): boolean {
+export function inNotesSection(note: Element, body: Element): boolean {
   for (let el = note.parentElement; el !== null && el !== body; el = el.parentElement) {
     if (NOTES_ROLES.has(el.getAttribute("role") ?? "")) return true;
     const before = el.previousElementSibling;
     if (before !== null && isNotesHeading(before)) return true;
     const first = el.firstElementChild;
     if (first !== null && first !== note && !first.contains(note) && isNotesHeading(first)) return true;
+  }
+  return false;
+}
+
+/** EPUB structural semantics (EPUB 3 SSV, issue #61): a `noteref` link, a
+ * `footnote`/`endnote`/`rearnote`/`note` element, or a note inside a
+ * `footnotes`/`endnotes`/`rearnotes` container. */
+const EPUB_NOTEREF = new Set(["noteref"]);
+const EPUB_NOTE = new Set(["footnote", "endnote", "rearnote", "note"]);
+const EPUB_NOTES = new Set(["footnotes", "endnotes", "rearnotes"]);
+
+function epubTypes(el: Element): string[] {
+  return (el.getAttribute("epub:type") ?? "").toLowerCase().split(/\s+/);
+}
+
+/** Does EPUB markup declare `link` → `note` a footnote reference? */
+export function declaresEpubNote(link: Element, note: Element, body: Element): boolean {
+  if (epubTypes(link).some((t) => EPUB_NOTEREF.has(t))) return true;
+  for (let el: Element | null = note; el !== null && el !== body; el = el.parentElement) {
+    const types = epubTypes(el);
+    if (types.some((t) => EPUB_NOTE.has(t) || (el !== note && EPUB_NOTES.has(t)))) return true;
   }
   return false;
 }
@@ -221,7 +247,10 @@ function removeOrphanedNotesHeading(candidate: Element | null, body: Element): v
  * rewrite `document` in place (see the module comment). Returns the detected
  * notes' raw HTML in note order.
  */
-export function detectLinkedFootnotes(document: Document): LinkedFootnotes {
+export function detectLinkedFootnotes(
+  document: Document,
+  options: { epubSemantics?: boolean } = {},
+): LinkedFootnotes {
   const body = document.body;
   if (!body) return { noteHtml: [] };
 
@@ -239,7 +268,14 @@ export function detectLinkedFootnotes(document: Document): LinkedFootnotes {
     );
     // Fallback for notes that never link back: a marker-like link into a
     // recognisable notes section.
-    if (backLinks.length === 0 && !(isMarkerLike(link) && inNotesSection(note, body))) continue;
+    // EPUB books (issue #61) also declare their notes with epub:type.
+    if (
+      backLinks.length === 0 &&
+      !(isMarkerLike(link) && inNotesSection(note, body)) &&
+      !(options.epubSemantics === true && declaresEpubNote(link, note, body))
+    ) {
+      continue;
+    }
     if (!refsByNote.has(note)) refsByNote.set(note, []);
     targetsByNote.set(note, (targetsByNote.get(note) ?? new Set<Element>()).add(target));
     refsByNote.get(note)!.push(link);
