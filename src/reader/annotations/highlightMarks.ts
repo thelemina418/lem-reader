@@ -57,8 +57,7 @@ export function focusHighlightMark(highlightId: string): HTMLElement | null {
 export function captureDeleteFocusTarget(highlightId: string): HTMLElement | null {
   // Issue #65: a note highlight's container is its note (li#fn-N, tabIndex -1).
   return (
-    visibleMarkForId(highlightId)?.closest<HTMLElement>("[data-block-index], li[id^='fn-']") ??
-    null
+    visibleMarkForId(highlightId)?.closest<HTMLElement>("[data-block-index], li[id^='fn-']") ?? null
   );
 }
 

@@ -398,8 +398,7 @@ function resolveSelectionEndpoint(
       return {
         ok: true,
         blockIndex,
-        globalOffset:
-          computeBlockGlobalStart(article, blockIndex) + inCaption + captionLocalStart,
+        globalOffset: computeBlockGlobalStart(article, blockIndex) + inCaption + captionLocalStart,
       };
     }
     const placeholderEl = blockEl.querySelector(".figure-placeholder");
