@@ -7646,3 +7646,26 @@ dialog.add-reading {
   border: 0;
   background: transparent;
 }
+
+/* ── Issue #64 — the whole-book Reprocessing dialog (the dialog.edit-metadata
+   anatomy clone, own hooks so dialog.<class> locators stay strict). The
+   inner also carries .pdf-repair-panel for the shared preview vocabulary
+   (file picker, consequence checklist). */
+dialog.reprocess-book {
+  margin: auto; /* UA dialog:modal centering (D13-14) */
+  padding: 0;
+  width: calc(100vw - var(--space-xl)); /* safe at 320px */
+  max-width: 560px;
+  overflow: auto;
+}
+.reprocess-book-inner {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-sm);
+  margin-block: 0;
+  padding: var(--space-lg);
+}
+.reprocess-book-inner h2,
+.reprocess-book-inner p {
+  margin-block: 0;
+}

@@ -52,7 +52,7 @@ import { completionTargetKey } from "../../content/completion";
 import { LibraryRow } from "./LibraryRow";
 import { RowProgress, RowTags } from "./RowAnatomy";
 import type { LibrarySnapshot } from "./librarySnapshot";
-import { TrashIcon } from "../../ui/icons";
+import { ReprocessIcon, TrashIcon } from "../../ui/icons";
 import { estimatedReadingTimeLabel } from "./readingStats";
 // Issue #163 — the D12-11 skip sentence's ONE copy home (the quiet-save
 // confirmation appends the SAME pair this row renders durably).
@@ -68,9 +68,12 @@ interface BookRowProps {
   snapshot: LibrarySnapshot;
   /** Remove-book trigger — LibraryView routes it to BookRemoveConfirm. */
   onRemove: () => void;
+  /** Reprocess-book trigger (#64) — LibraryView routes it to
+   * ReprocessBookDialog. */
+  onReprocess?: () => void;
 }
 
-export function BookRow({ book, chapters, snapshot, onRemove }: BookRowProps) {
+export function BookRow({ book, chapters, snapshot, onRemove, onReprocess }: BookRowProps) {
   const [open, setOpen] = useState(false);
 
   // D12-03 book progress + D12-07 resume target — pure derivations, zero
@@ -226,6 +229,16 @@ export function BookRow({ book, chapters, snapshot, onRemove }: BookRowProps) {
         {/* Issue #67 — the icon action cluster (trash only). The BookRemoveConfirm
             gating stays: this trigger fires the same onRemove callback. */}
         <div className="library-row-actions">
+          {onReprocess && (
+            <button
+              type="button"
+              className="btn btn-icon library-row-reprocess"
+              aria-label={`Reprocess ${book.title}`}
+              onClick={onReprocess}
+            >
+              <ReprocessIcon />
+            </button>
+          )}
           <button
             type="button"
             className="btn btn-icon library-row-remove"

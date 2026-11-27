@@ -93,7 +93,7 @@ import {
   deletedBookWork,
   findCollectionsReferencingWork,
 } from "../../persistence/collectionReferenceCleanup";
-import type { Collection } from "../../content/schema";
+import type { Book, Collection } from "../../content/schema";
 // Issue #75 (decision #71) — the count-returning tag fold feeding the ONE
 // shared TagPicker's suggestions on this page (and the row-tags popover).
 import { deriveTagStats } from "./tagStats";
@@ -127,6 +127,7 @@ import { BookRemoveConfirm } from "./BookRemoveConfirm";
 // abstraction) hosting the single override write (the Dexie articles-table
 // put).
 import { EditMetadataDialog } from "./EditMetadataDialog";
+import { ReprocessBookDialog } from "./ReprocessBookDialog";
 // Issue #98 (decision #96) — the ONE polite status-region primitive; this
 // page's load region renders through it (the state-kind table's error kind).
 import { StatusRegion } from "../../ui/StatusRegion";
@@ -320,6 +321,8 @@ export function LibraryView({
   // Plan 12-05 — book-level Remove trigger state. BookRemoveConfirm consumes
   // it (the BookRow onRemove callback below is its sole setter caller).
   const [bookRemoveTarget, setBookRemoveTarget] = useState<BookRemoveTarget | null>(null);
+  // Issue #64 — the book whose whole-book Reprocessing dialog is open.
+  const [reprocessBook, setReprocessBook] = useState<Book | null>(null);
 
   // Issue #245 — resolve the affected-collections disclosure BEFORE either
   // destructive dialog opens (ADR 0011: deleting the work explicitly
@@ -963,6 +966,7 @@ export function LibraryView({
                     // opens (openBookRemoveConfirm, the live-truth chapter
                     // set); the write still fires only inside the dialog's
                     // destructive onClick (Pitfall 8).
+                    onReprocess={() => setReprocessBook(entry.book)}
                     onRemove={() => {
                       void openBookRemoveConfirm({
                         id: entry.book.id,
@@ -1102,6 +1106,17 @@ export function LibraryView({
           invalidateLibrarySnapshot();
         }}
         onCancel={() => setEditTarget(null)}
+      />
+      {/* Issue #64 — whole-book Reprocessing (spec #66 story 59). Apply is
+          the dialog's only write; onSaved closes it and re-derives the list. */}
+      <ReprocessBookDialog
+        open={reprocessBook !== null}
+        book={reprocessBook}
+        onSaved={() => {
+          setReprocessBook(null);
+          invalidateLibrarySnapshot();
+        }}
+        onCancel={() => setReprocessBook(null)}
       />
       {/* Plan 12-05 — book-level cascade-remove confirmation. The Proceed
           onClick inside BookRemoveConfirm is the SOLE executable
