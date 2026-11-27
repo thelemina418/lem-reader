@@ -15,9 +15,8 @@ Object.assign(globalThis, { indexedDB: fakeIndexedDB, IDBKeyRange });
 
 const { db } = await import("../../../src/persistence/db");
 const { saveLocation } = await import("../../../src/persistence/locationStore");
-const { getCompletion, recordCompletion } = await import(
-  "../../../src/persistence/completionsStore"
-);
+const { getCompletion, recordCompletion } =
+  await import("../../../src/persistence/completionsStore");
 const { articleReadingState } = await import("../../../src/ingestion/library/readingState");
 
 const MAIN_END = 100;

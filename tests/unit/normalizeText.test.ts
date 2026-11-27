@@ -197,17 +197,29 @@ describe("footnote marker runs join their sentence without a separator", () => {
     });
 
   it('pins "Claim1 more." for a marker glued to its word', () => {
-    const article = withRuns([{ text: "Claim", marks: [] }, marker("1"), { text: " more.", marks: [] }]);
+    const article = withRuns([
+      { text: "Claim", marks: [] },
+      marker("1"),
+      { text: " more.", marks: [] },
+    ]);
     expect(normalizeText(article).split(BLOCK_SEPARATOR)[0]).toBe("Claim1 more.");
   });
 
   it("keeps trailing punctuation glued too", () => {
-    const article = withRuns([{ text: "It holds", marks: [] }, marker("2"), { text: ".", marks: [] }]);
+    const article = withRuns([
+      { text: "It holds", marks: [] },
+      marker("2"),
+      { text: ".", marks: [] },
+    ]);
     expect(normalizeText(article).split(BLOCK_SEPARATOR)[0]).toBe("It holds2.");
   });
 
   it("keeps source whitespace around a marker as one space", () => {
-    const article = withRuns([{ text: "Claim ", marks: [] }, marker("[1]"), { text: "more.", marks: [] }]);
+    const article = withRuns([
+      { text: "Claim ", marks: [] },
+      marker("[1]"),
+      { text: "more.", marks: [] },
+    ]);
     expect(normalizeText(article).split(BLOCK_SEPARATOR)[0]).toBe("Claim [1]more.");
     const spaced = withRuns([
       { text: "Claim", marks: [] },

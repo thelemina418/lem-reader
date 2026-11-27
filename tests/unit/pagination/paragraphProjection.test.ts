@@ -107,7 +107,9 @@ describe("marker runs in the D-05 stream (spec #66 S3)", () => {
     for (let start = 0; start <= total; start++) {
       const { before, after } = splitParagraphRuns(runs, start, "en");
       expect(rawText(before) + rawText(after), `cut ${start}`).toBe(rawText(runs));
-      expect(blockNormalizedText(paragraph(before)), `before ${start}`).toBe(norm.slice(0, start).trimEnd());
+      expect(blockNormalizedText(paragraph(before)), `before ${start}`).toBe(
+        norm.slice(0, start).trimEnd(),
+      );
       const prefix = rawPrefixUtf16ForNormOffset(runs, start, "en");
       expect(prefix, `prefix ${start}`).toBe(rawText(before).length);
     }

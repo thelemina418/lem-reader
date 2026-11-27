@@ -313,7 +313,9 @@ describe("reprocessing a URL article", () => {
     const db = await import("../../../src/persistence/db").then((m) => m.db);
     const footnoted = ArticleSchema.parse({
       ...saved,
-      footnotes: [{ id: "fn-1", content: [{ text: "A note that is reference material.", marks: [] }] }],
+      footnotes: [
+        { id: "fn-1", content: [{ text: "A note that is reference material.", marks: [] }] },
+      ],
     });
     await db.articles.put(footnoted);
     const { previewReprocess } = await import("../../../src/persistence/reprocessStore");
@@ -332,6 +334,8 @@ describe("reprocessing a URL article", () => {
       }),
     );
     expect(preview.position).toEqual({ kind: "kept", offset: mainTextLength(preview.proposed) });
-    expect(mainTextLength(preview.proposed)).toBeLessThan([...normalizeText(preview.proposed)].length);
+    expect(mainTextLength(preview.proposed)).toBeLessThan(
+      [...normalizeText(preview.proposed)].length,
+    );
   });
 });
