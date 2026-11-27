@@ -24,7 +24,7 @@
     "test:unit": "node scripts/preflight.mjs && vitest",
     "test:e2e": "node scripts/preflight.mjs && playwright test",
     "test:e2e:coverage": "node scripts/check-e2e-coverage.mjs",
-    "test:e2e:pr": "node scripts/preflight.mjs && playwright test --config=playwright.pr.config.ts",
+    "test:e2e:pr": "node scripts/preflight.mjs && node scripts/e2e-pr.mjs",
     "test:e2e:container": "node scripts/container-test.mjs",
     "doctor": "node scripts/doctor.mjs",
     "lease:status": "node scripts/heavy-lease.mjs status # heavy-test lease ownership + machine identity/load (issue #255)",
