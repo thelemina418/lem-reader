@@ -54,6 +54,7 @@ import { slugifyUrl } from "./slugify";
 import { runAssetStage } from "./assetStage";
 import type { ImageAsset } from "./fetchImageAsset";
 import { IngestionError } from "./errors";
+import { MAX_LINKED_FOOTNOTES } from "./footnoteLinks";
 import { EPUB_MAX_BYTES, PDF_MAX_BYTES } from "./limits";
 import {
   ArticleSchema,
@@ -135,6 +136,20 @@ export function probeRoundTripAnchor(article: CanonicalArticle): AnchorProbeResu
 function unsupportedPartsWarning(count: number): string[] {
   return count > 0
     ? [`${count} part${count === 1 ? "" : "s"} of the original could not be displayed`]
+    : [];
+}
+
+/**
+ * footnotesOmittedWarning — the count-first extractionWarnings line for notes
+ * cut by the note cap (spec #66 / issue #60, ADR-0003): the article is
+ * admitted flagged, and the reader is told how many notes were left out.
+ * Shared by the HTML and Markdown paths (one copy source).
+ */
+export function footnotesOmittedWarning(count: number): string[] {
+  return count > 0
+    ? [
+        `${count} note${count === 1 ? "" : "s"} past the first ${MAX_LINKED_FOOTNOTES.toLocaleString("en-US")} could not be included`,
+      ]
     : [];
 }
 
@@ -773,6 +788,9 @@ export async function ingest(input: IngestionRequest): Promise<IngestionResponse
     // for every other path.
     let transcriptMeta: TranscriptMeta | undefined;
     let transcriptWarnings: string[] = [];
+    // Spec #66 / issue #60 — notes the note cap left out (url / paste /
+    // markdown paths), disclosed count-first in extractionWarnings below.
+    let omittedFootnoteCount = 0;
 
     if (youTubeVideoId !== null) {
       // ── Issue #39 — the YOUTUBE branch (transcript-as-article) ──────────
@@ -894,6 +912,7 @@ export async function ingest(input: IngestionRequest): Promise<IngestionResponse
         provenancePartial,
         isReaderable,
         outlineEvidence = [],
+        omittedFootnoteCount = 0,
       } = extracted);
       // D7-07 immutability — url id derived from finalUrl after redirects.
       id = slugifyUrl(fetched.finalUrl);
@@ -915,6 +934,7 @@ export async function ingest(input: IngestionRequest): Promise<IngestionResponse
         provenancePartial,
         isReaderable,
         outlineEvidence = [],
+        omittedFootnoteCount = 0,
       } = extracted);
       // D7-07 paste id = content-hash slug (slugifyUrl requires a real URL;
       // paste has none — see Rule 3 auto-fix note at the old L172-176).
@@ -960,7 +980,14 @@ export async function ingest(input: IngestionRequest): Promise<IngestionResponse
       const filename = (request as { markdown: string; filename?: string }).filename;
       finalUrl = undefined;
       const extracted = await markdownToBlocks(mdInput);
-      ({ blocks, footnotes, lang, provenancePartial, isReaderable } = extracted);
+      ({
+        blocks,
+        footnotes,
+        lang,
+        provenancePartial,
+        isReaderable,
+        omittedFootnoteCount = 0,
+      } = extracted);
       outlineEvidence = [];
       // D8-18: id = "md-<shortHash(canonical content)>" — content-hash, NOT
       // filename. Two uploads of identical .md content produce the same id
@@ -1117,6 +1144,7 @@ export async function ingest(input: IngestionRequest): Promise<IngestionResponse
           ...unsupportedBlockWarnings,
           ...imageRefusalWarnings,
           ...transcriptWarnings,
+          ...footnotesOmittedWarning(omittedFootnoteCount),
         ],
         // Issue #39 — the youtube branch's block-keyed timing metadata.
         // Absent for every other source (Pitfall 9 additive-optional).

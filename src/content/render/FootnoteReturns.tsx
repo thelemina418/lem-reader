@@ -9,8 +9,9 @@
 //     followed) plus one return per reference — a, b, c — each labelled with
 //     its reference ("Return to reference Na") and leading to its own
 //     occurrence.
-//   - A note with no reference keeps the historical dead return to fn-ref-N
-//     (unreferenced notes are #56/#60).
+//   - A note with no reference in the body (an unreferenced note, or one
+//     whose only marker was lost at ingest) gets no return at all — never a
+//     link that leads nowhere (issue #60).
 //
 // The hidden measurement projection renders the SAME text as aria-hidden
 // spans (no links, no identifiers) so measured line boxes match the page.
@@ -53,12 +54,13 @@ export function FootnoteReturns({
 }): React.ReactElement {
   const n = footnoteId.replace(/^fn-/, "");
   const refs = footnoteReferenceSpans(article).filter((s) => s.footnoteId === footnoteId);
+  if (refs.length === 0) return <></>;
   const several = refs.length > 1;
   const items: { key: string; text: string; href: string; label: string; plain: boolean }[] = [
     {
       key: "plain",
       text: "↩",
-      href: `#${refs[0]?.anchorId ?? `fn-ref-${n}`}`,
+      href: `#${refs[0]!.anchorId}`,
       label: several ? `Return from note ${n}` : `Return to reference ${n}`,
       plain: true,
     },

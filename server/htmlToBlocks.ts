@@ -61,16 +61,20 @@ type Mark =
   | { type: "footnote-ref"; footnoteId: string; occurrence: number };
 
 /** Spec #66 / issue #55 — the inline walk's view of the detected notes:
- * how many exist (a controlled `#fn-N` href is a reference only when N names
- * one) and the per-note occurrence counter, advanced in document order so
- * each reference gets its own anchor identity. */
+ * which exist (a controlled `#fn-N` href is a reference only when N names a
+ * note the article keeps — issue #60: never a link to a missing note) and
+ * the per-note occurrence counter, advanced in document order so each
+ * reference gets its own anchor identity. */
 interface FootnoteRefWalk {
-  noteCount: number;
+  isNote: (n: number) => boolean;
   occurrences: Map<string, number>;
 }
 
-function newFootnoteRefWalk(noteCount: number): FootnoteRefWalk {
-  return { noteCount, occurrences: new Map() };
+/** `notes`: the count of notes `fn-1…fn-N`, or the set of note numbers kept. */
+function newFootnoteRefWalk(notes: number | ReadonlySet<number>): FootnoteRefWalk {
+  const isNote =
+    typeof notes === "number" ? (n: number) => n <= notes : (n: number) => notes.has(n);
+  return { isNote, occurrences: new Map() };
 }
 
 type InlineRunT = { text: string; marks: Mark[] };
@@ -166,7 +170,15 @@ DOMPurify.addHook("afterSanitizeAttributes", (node) => {
  * README): without clearWindow, the jsdom window leaks across requests.
  */
 export function sanitizeExtractedHtml(html: string): string {
-  const clean = DOMPurify.sanitize(html, SANITIZE_CONFIG);
+  return sanitizeExtractedHtmlEach([html])[0]!;
+}
+
+/** sanitizeExtractedHtml over several fragments with ONE clearWindow() at
+ * the end (issue #60: an article may carry ~1,000 notes, and releasing the
+ * window per note rebuilds a jsdom window per note). Same config, same
+ * per-fragment output. */
+function sanitizeExtractedHtmlEach(htmls: readonly string[]): string[] {
+  const clean = htmls.map((html) => DOMPurify.sanitize(html, SANITIZE_CONFIG));
   clearWindow();
   return clean;
 }
@@ -198,7 +210,7 @@ function extractInlineNodes(nodes: Node[], marks: Mark[], refs?: FootnoteRefWalk
         // detectLinkedFootnotes) naming a detected note becomes the inline
         // footnote-ref mark; its text is the publisher's marker.
         const noteNumber = refs ? footnoteNumberFromHref(href) : null;
-        if (refs && noteNumber !== null && noteNumber <= refs.noteCount) {
+        if (refs && noteNumber !== null && refs.isNote(noteNumber)) {
           const footnoteId = `fn-${noteNumber}`;
           const occurrence = (refs.occurrences.get(footnoteId) ?? 0) + 1;
           refs.occurrences.set(footnoteId, occurrence);
@@ -733,10 +745,10 @@ export function htmlToBlocks(
   sanitizedDom: Document,
   sourceUrl: string | undefined,
   figureSrcResolver?: FigureSrcResolver,
-  noteCount = 0,
+  notes: number | ReadonlySet<number> = 0,
 ): HtmlToBlocksResult {
   const root = findContentRoot(sanitizedDom);
-  const blocks = visitChildren(root, newFootnoteRefWalk(noteCount), figureSrcResolver);
+  const blocks = visitChildren(root, newFootnoteRefWalk(notes), figureSrcResolver);
 
   return {
     blocks,
@@ -800,16 +812,29 @@ function noteParagraphNodes(root: Node): Node[][] {
   return paragraphs;
 }
 
-/** One detected note's raw HTML → its paragraphs of inline runs, through the
- * SHARED sanitizer and inline walk (the mXSS-suite surface — no fork).
- * References inside a note are never live (note-to-note citations read as
- * text). Empty paragraphs are dropped, and publisher return glyphs and
- * carets are stripped from the note's start and end. */
-export function footnoteBodyParagraphs(noteHtml: string, url: string | undefined): InlineRun[][] {
-  const dom = new JSDOM(`<body>${sanitizeExtractedHtml(noteHtml)}</body>`, {
-    url: url ?? undefined,
+/** The detected notes' raw HTML → each note's paragraphs of inline runs,
+ * through the SHARED sanitizer and inline walk (the mXSS-suite surface — no
+ * fork). One document parses every note in turn (its body is reset per
+ * note), so a heavily annotated work (issue #60: up to ~1,000 notes) does
+ * not build a jsdom per note. */
+export function footnoteBodiesParagraphs(
+  noteHtml: readonly string[],
+  url: string | undefined,
+): InlineRun[][][] {
+  const sanitized = sanitizeExtractedHtmlEach(noteHtml);
+  const body = new JSDOM("<body></body>", { url: url ?? undefined }).window.document.body;
+  return sanitized.map((html) => {
+    body.innerHTML = html;
+    return footnoteBodyParagraphs(body);
   });
-  const paragraphs = noteParagraphNodes(dom.window.document.body)
+}
+
+/** One note's parsed body → its paragraphs of inline runs. References
+ * inside a note are never live (note-to-note citations read as text). Empty
+ * paragraphs are dropped, and publisher return glyphs and carets are
+ * stripped from the note's start and end. */
+function footnoteBodyParagraphs(body: HTMLElement): InlineRun[][] {
+  const paragraphs = noteParagraphNodes(body)
     .map((nodes) => tidyRuns(extractInlineNodes(nodes, [])))
     .filter((runs) => runs.length > 0);
   // The note's start: carets and return glyphs left once back-links are gone.
@@ -1086,6 +1111,10 @@ function detectLang(document: Document): string {
 // ── extractAndNormalize — the full extract → sanitize → walk stage ───────────
 export interface ExtractAndNormalizeResult extends HtmlToBlocksResult {
   isReaderable: boolean;
+  /** Notes past MAX_LINKED_FOOTNOTES that were left out (issue #60); the
+   * orchestrator discloses them (footnotesOmittedWarning). Absent when none
+   * were. */
+  omittedFootnoteCount?: number;
 }
 
 /**
@@ -1129,9 +1158,12 @@ export async function extractAndNormalize(
   // controlled marker links and lifts matched notes out of the body flow,
   // BEFORE Readability sees the document.
   const linked = detectLinkedFootnotes(document);
-  const footnotes = linked.noteHtml
-    .map((html, i) => footnoteBodyFromParagraphs(`fn-${i + 1}`, footnoteBodyParagraphs(html, url)))
+  const footnotes = footnoteBodiesParagraphs(linked.noteHtml, url)
+    .map((paragraphs, i) => footnoteBodyFromParagraphs(`fn-${i + 1}`, paragraphs))
     .filter((fn) => fn.content.length > 0);
+  // Issue #60: a reference to a note that came out empty would lead nowhere —
+  // only the notes kept are live reference targets.
+  const keptNotes = new Set(footnotes.map((fn) => Number(fn.id.slice("fn-".length))));
 
   // 4. Readability on a clone (Readability MUTATES its input). cloneNode
   // returns Node per the DOM lib types; Readability expects a Document.
@@ -1140,13 +1172,21 @@ export async function extractAndNormalize(
 
   // 5. null extraction → orchestrator handles via deriveConfidence.
   if (article === null || !article.content) {
-    return { blocks: [], footnotes: [], lang, provenancePartial, outlineEvidence, isReaderable };
+    return {
+      blocks: [],
+      footnotes: [],
+      lang,
+      provenancePartial,
+      outlineEvidence,
+      isReaderable,
+      ...(linked.omittedCount > 0 ? { omittedFootnoteCount: linked.omittedCount } : {}),
+    };
   }
 
   // 6. Sanitize the extracted content, re-parse, walk to Block tree.
   const sanitized = sanitizeExtractedHtml(article.content);
   const cleanDom = new JSDOM(sanitized, { url: url ?? undefined });
-  const walked = htmlToBlocks(cleanDom.window.document, url, undefined, linked.noteHtml.length);
+  const walked = htmlToBlocks(cleanDom.window.document, url, undefined, keptNotes);
 
   // The original-document lang + provenance are richer than what htmlToBlocks
   // can extract from the sanitized content fragment — prefer them.
@@ -1157,5 +1197,6 @@ export async function extractAndNormalize(
     provenancePartial,
     outlineEvidence,
     isReaderable,
+    ...(linked.omittedCount > 0 ? { omittedFootnoteCount: linked.omittedCount } : {}),
   };
 }

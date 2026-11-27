@@ -19,7 +19,7 @@
 //
 // Pure DOM reading and rewriting over already-open archive text: nothing is
 // fetched or executed. The copied markup is sanitized with every other note
-// (footnoteBodyParagraphs → sanitizeExtractedHtml).
+// (footnoteBodiesParagraphs → sanitizeExtractedHtmlEach).
 import { footnoteParagraphs, type FootnoteBodyT } from "../src/content/footnoteBody";
 import type { Block, InlineRun } from "../src/content/schema";
 import {

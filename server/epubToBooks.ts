@@ -75,7 +75,7 @@ import {
 } from "./epubFootnotes";
 import { detectLinkedFootnotes } from "./footnoteLinks";
 import {
-  footnoteBodyParagraphs,
+  footnoteBodiesParagraphs,
   htmlToBlocks,
   sanitizeExtractedHtml,
   type FigureSrcResolver,
@@ -753,8 +753,8 @@ function walkChapterDocument(
   const copied = copyReferencedNotes({ path, document: rawDocument }, noteSources, resolveBookHref);
   const linked = detectLinkedFootnotes(rawDocument, { epubSemantics: true });
   const footnoteSources = settleCopiedNotes(copied, linked.noteHtml.length);
-  const footnotes = linked.noteHtml.map((html, i) =>
-    footnoteBodyFromParagraphs(`fn-${i + 1}`, footnoteBodyParagraphs(html, undefined)),
+  const footnotes = footnoteBodiesParagraphs(linked.noteHtml, undefined).map((paragraphs, i) =>
+    footnoteBodyFromParagraphs(`fn-${i + 1}`, paragraphs),
   );
 
   // A document with no notes walks its original markup, byte-stable.

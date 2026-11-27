@@ -20,11 +20,18 @@
 //   - matched notes are removed from the body flow (they appear once, in the
 //     article's notes) and handed back as raw HTML with their back-links
 //     removed; the caller sanitizes each one through the shared sanitizer.
-// Unmatched markers and notes nothing references are left exactly where they
-// were (the pre-#55 behaviour — no content is dropped).
+// Issue #60 — honest handling of imperfect footnotes:
+//   - a marker-like same-page link that is not a detected reference (its note
+//     is missing, or was cut by the cap) loses its href: plain marker text,
+//     never a link that leads nowhere;
+//   - a note nothing references, sitting beside detected notes in the same
+//     notes structure, is kept as a note (in note order) rather than left
+//     for Readability to keep or drop;
+//   - notes past MAX_LINKED_FOOTNOTES are cut, and counted so the caller can
+//     disclose the cut and admit the article flagged (ADR 0003).
 
-/** Notes beyond this are left in the body flow, unextracted. Issue #60 owns
- * the visible over-cap disclosure and flagged admission (ADR 0003). */
+/** The most notes one article keeps (Markdown shares it). Notes past it are
+ * left out and counted in `omittedCount` for the ingest disclosure. */
 export const MAX_LINKED_FOOTNOTES = 1000;
 
 /** The controlled reference href the rewrite emits for note `n` (1-based). */
@@ -42,6 +49,8 @@ export interface LinkedFootnotes {
   /** Raw (UNSANITIZED) inner HTML of each detected note, in note order:
    * index i is note `fn-(i+1)`. Back-links are already removed. */
   noteHtml: string[];
+  /** Notes found past MAX_LINKED_FOOTNOTES and left out (issue #60). */
+  omittedCount: number;
 }
 
 function decodeFragment(fragment: string): string | null {
@@ -175,7 +184,8 @@ function isHeading(el: Element): boolean {
 function headingWithin(el: Element): Element | null {
   if (isHeading(el)) return el;
   const only = el.children.length === 1 ? el.children[0]! : null;
-  if (only === null || (el.textContent ?? "").trim() !== (only.textContent ?? "").trim()) return null;
+  if (only === null || (el.textContent ?? "").trim() !== (only.textContent ?? "").trim())
+    return null;
   return headingWithin(only);
 }
 
@@ -205,7 +215,8 @@ export function inNotesSection(note: Element, body: Element): boolean {
     const before = el.previousElementSibling;
     if (before !== null && isNotesHeading(before)) return true;
     const first = el.firstElementChild;
-    if (first !== null && first !== note && !first.contains(note) && isNotesHeading(first)) return true;
+    if (first !== null && first !== note && !first.contains(note) && isNotesHeading(first))
+      return true;
   }
   return false;
 }
@@ -242,6 +253,76 @@ function removeOrphanedNotesHeading(candidate: Element | null, body: Element): v
   removeEmptiedContainers(parent, body);
 }
 
+/** Text a publisher's return link carries: a marker or return glyphs only. */
+const RETURN_TEXT = /^(?:\s|\^|[\u21A9\u21AA\u2191]|\uFE0E|\uFE0F)*$/u;
+
+/** Notes nothing in the body references (issue #60): the other entries of a
+ * structure that holds detected notes — list items beside a detected list
+ * item, or blocks sharing a detected block note's tag and class (Substack's
+ * `div.footnote`; the class is only a hint that the block is one of the same
+ * notes, never what makes a page's notes notes). */
+function unreferencedSiblings(notes: readonly Element[]): Element[] {
+  const known = new Set(notes);
+  const shapeOf = (el: Element): string => {
+    const tag = el.tagName.toLowerCase();
+    return tag === "li" ? "li" : `${tag}.${el.getAttribute("class") ?? ""}`;
+  };
+  // The note shapes each container holds: one scan per container, never one
+  // per note (a heavily annotated work would make that quadratic). A block
+  // note without a class names no shape to match.
+  const shapesByParent = new Map<Element, Set<string>>();
+  for (const note of notes) {
+    const parent = note.parentElement;
+    if (parent === null || shapeOf(note).endsWith(".")) continue;
+    shapesByParent.set(parent, (shapesByParent.get(parent) ?? new Set()).add(shapeOf(note)));
+  }
+  const found: Element[] = [];
+  for (const [parent, shapes] of shapesByParent) {
+    for (const sibling of Array.from(parent.children)) {
+      if (known.has(sibling) || !shapes.has(shapeOf(sibling))) continue;
+      if ((sibling.textContent ?? "").trim() === "") continue;
+      if (notes.some((n) => sibling.contains(n))) continue;
+      found.push(sibling);
+    }
+  }
+  return found;
+}
+
+/** An unreferenced note's own return links (to a reference that no longer
+ * exists, or back into the body), recognised by their marker or glyph text. */
+function orphanedReturnLinks(
+  note: Element,
+  notes: readonly Element[],
+  document: Document,
+): Set<Element> {
+  const links = new Set<Element>();
+  for (const a of Array.from(note.querySelectorAll("a[href]"))) {
+    if (sameDocumentFragment(a, document) === null) continue;
+    const text = (a.textContent ?? "").replace(/\s+/g, "");
+    if (!RETURN_TEXT.test(text) && !MARKER.test(text)) continue;
+    const target = targetOf(a, document);
+    if (target === null || !notes.some((n) => n.contains(target))) links.add(a);
+  }
+  return links;
+}
+
+/** Same-page links that read as markers but are not live references (issue
+ * #60): their href goes, so the marker stays plain text, never a dead link.
+ * Also the forgery guard — a source link already shaped like a controlled
+ * `#fn-N` reference loses its href whatever its text. */
+function unlinkNonReferences(
+  body: Element,
+  references: ReadonlySet<Element>,
+  document: Document,
+): void {
+  for (const link of Array.from(body.querySelectorAll("a[href]"))) {
+    if (references.has(link)) continue;
+    const id = sameDocumentFragment(link, document);
+    if (id === null) continue;
+    if (/^fn-\d+$/.test(id) || isMarkerLike(link)) link.removeAttribute("href");
+  }
+}
+
 /**
  * detectLinkedFootnotes — find Footnote references by their link graph and
  * rewrite `document` in place (see the module comment). Returns the detected
@@ -252,7 +333,7 @@ export function detectLinkedFootnotes(
   options: { epubSemantics?: boolean } = {},
 ): LinkedFootnotes {
   const body = document.body;
-  if (!body) return { noteHtml: [] };
+  if (!body) return { noteHtml: [], omittedCount: 0 };
 
   // 1. Candidate edges: reference link → note that follows it and links back.
   const refsByNote = new Map<Element, Element[]>();
@@ -293,26 +374,32 @@ export function detectLinkedFootnotes(
     if (targets.size > 1) refsByNote.delete(note);
   }
   const allNotes = Array.from(refsByNote.keys());
-  const notes = allNotes
-    .filter((note) => {
-      const refs = refsByNote.get(note)!.filter((ref) => !allNotes.some((n) => n.contains(ref)));
-      refsByNote.set(note, refs);
-      return refs.length > 0;
-    })
-    .sort((a, b) => (follows(a, b) ? -1 : 1))
-    .slice(0, MAX_LINKED_FOOTNOTES);
-  if (notes.length === 0) return { noteHtml: [] };
+  const referenced = allNotes.filter((note) => {
+    const refs = refsByNote.get(note)!.filter((ref) => !allNotes.some((n) => n.contains(ref)));
+    refsByNote.set(note, refs);
+    return refs.length > 0;
+  });
+  // Issue #60: the unreferenced entries of the same notes structures are
+  // notes too; every note is numbered in document order, then capped.
+  const unreferenced = unreferencedSiblings(referenced);
+  for (const note of unreferenced) {
+    refsByNote.set(note, []);
+    backLinksByNote.set(note, orphanedReturnLinks(note, referenced, document));
+  }
+  const found = [...referenced, ...unreferenced].sort((a, b) => (follows(a, b) ? -1 : 1));
+  const notes = found.slice(0, MAX_LINKED_FOOTNOTES);
+  const omitted = found.slice(MAX_LINKED_FOOTNOTES);
 
-  // 3. Neutralize source links that already look like controlled references
-  // (forgery guard) — before any rewrite, so ours are never touched.
   const detectedRefs = new Set(notes.flatMap((note) => refsByNote.get(note)!));
-  for (const link of Array.from(body.querySelectorAll("a[href]"))) {
-    if (detectedRefs.has(link)) continue;
-    const id = sameDocumentFragment(link, document);
-    if (id !== null && /^fn-\d+$/.test(id)) link.removeAttribute("href");
+  if (found.length === 0) {
+    unlinkNonReferences(body, detectedRefs, document);
+    return { noteHtml: [], omittedCount: 0 };
   }
 
-  // 4. Extract each note (back-links removed), then lift it out of the flow.
+  // 3. Extract each note (back-links removed), then lift every found note —
+  // kept or cut by the cap — out of the flow. Containers they leave empty go
+  // once per container, after all its notes are gone (not once per note: a
+  // heavily annotated work would make that quadratic).
   const noteHtml: string[] = [];
   notes.forEach((note) => {
     const clone = note.cloneNode(true) as Element;
@@ -324,11 +411,25 @@ export function detectLinkedFootnotes(
       if (backLinks.has(a)) copies[k]?.remove();
     });
     noteHtml.push(clone.innerHTML);
-    const list = note.parentElement;
-    const previous = note.previousElementSibling;
-    note.remove();
-    removeOrphanedNotesHeading(removeEmptiedContainers(list, body) ?? previous, body);
   });
+  const leaving = new Set(found);
+  const lastInContainer = new Map<Element | null, Element>();
+  for (const note of found) lastInContainer.set(note.parentElement, note);
+  const cleanups = Array.from(lastInContainer, ([container, last]) => {
+    let previous = last.previousElementSibling;
+    while (previous !== null && leaving.has(previous)) previous = previous.previousElementSibling;
+    return { container, previous };
+  });
+  for (const note of found) note.remove();
+  for (const { container, previous } of cleanups.reverse()) {
+    removeOrphanedNotesHeading(removeEmptiedContainers(container, body) ?? previous, body);
+  }
+
+  // 4. Unlink every same-page marker left in the body that is not a kept
+  // reference (forgery guard included) — after the notes leave (their own
+  // back-links are theirs to drop) and before the rewrite, so ours are never
+  // touched. References to notes the cap cut become plain text here.
+  unlinkNonReferences(body, detectedRefs, document);
 
   // 5. Rewrite each reference into the controlled marker link.
   notes.forEach((note, i) => {
@@ -351,5 +452,5 @@ export function detectLinkedFootnotes(
     }
   });
 
-  return { noteHtml };
+  return { noteHtml, omittedCount: omitted.length };
 }

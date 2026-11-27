@@ -224,3 +224,25 @@ A sentence with a caret in brackets, [^not-a-note], stays text. A [reference lin
     );
   });
 });
+
+describe("the note cap on Markdown (issue #60)", () => {
+  it("past about 1,000 notes, keeps the first 1,000 and admits the document flagged with the count", async () => {
+    const n = 1002;
+    const body = Array.from({ length: n }, (_, i) => `Point ${i + 1}[^${i + 1}].`).join(" ");
+    const defs = Array.from({ length: n }, (_, i) => `[^${i + 1}]: Note number ${i + 1}.`).join(
+      "\n\n",
+    );
+    const result = await ingest({ markdown: `# Annotated\n\n${FILLER}\n\n${body}\n\n${defs}\n` });
+    if (!result.ok || !("article" in result)) throw new Error("expected an article");
+    const article = ArticleSchema.parse(result.article);
+    expect(article.footnotes).toHaveLength(1000);
+    expect(article.ingestionMeta?.extractionWarnings).toEqual([
+      "2 notes past the first 1,000 could not be included",
+    ]);
+    const text = normalizeText(article);
+    expect(text).not.toContain("Note number 1001.");
+    // A cut note's reference reads as its plain marker, never a link.
+    expect(text).toContain("Point 10011001.");
+    expect(JSON.stringify(article.blocks)).not.toContain('"fn-1001"');
+  }, 60_000);
+});

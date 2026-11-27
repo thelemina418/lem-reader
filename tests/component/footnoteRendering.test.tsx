@@ -481,3 +481,58 @@ describe("footnotes with several paragraphs (issue #59)", () => {
     expect(note?.querySelector('a[href="#fn-ref-1"]')).not.toBeNull();
   });
 });
+
+/** Note 1 is referenced; note 2 has no reference left in the body (an
+ * unreferenced note, or one whose only marker was lost at ingest). */
+const halfReferencedArticle = (): CanonicalArticle => ({
+  ...inlineArticle(),
+  id: "half-referenced",
+  footnotes: [
+    { id: "fn-1", content: [{ text: "The note.", marks: [] }] },
+    { id: "fn-2", content: [{ text: "Nobody cites this note.", marks: [] }] },
+  ],
+});
+
+describe("a note with no reference (issue #60)", () => {
+  it("is listed in the scrolling notes without a return that leads nowhere", () => {
+    const { container } = render(<ArticleBody article={halfReferencedArticle()} highlights={[]} />);
+    const note = container.querySelector("li#fn-2");
+    expect(note?.textContent).toContain("Nobody cites this note.");
+    expect(note?.querySelector("a")).toBeNull();
+    expect(container.querySelector('a[href="#fn-ref-2"]')).toBeNull();
+    // The referenced note keeps its return.
+    expect(container.querySelector('#fn-1 a[href="#fn-ref-1"]')).not.toBeNull();
+  });
+
+  it("carries no return glyph in the hidden measurement rows either", () => {
+    const { container } = render(
+      <ArticleBody article={halfReferencedArticle()} highlights={[]} measurementProjection />,
+    );
+    const items = container.querySelectorAll('section[aria-label="Footnotes"] li');
+    expect(items[0]?.textContent).toContain("↩");
+    expect(items[1]?.textContent).not.toContain("↩");
+  });
+
+  it("is listed on its page without a return", () => {
+    const article = halfReferencedArticle();
+    const row = footnoteRows(article)[1]!;
+    const page: PageFragment = {
+      schemaVersion: 1,
+      pageIndex: 0,
+      blocks: [
+        {
+          blockIndex: article.blocks.length,
+          footnoteIndex: row.index,
+          startGrapheme: 0,
+          endGrapheme: row.length,
+        },
+      ],
+    };
+    const { container } = render(
+      <PageFragmentView fragment={page} pageIndex={0} article={article} lang="en" />,
+    );
+    const note = container.querySelector("li#fn-2");
+    expect(note?.textContent).toContain("Nobody cites this note.");
+    expect(note?.querySelector("a")).toBeNull();
+  });
+});

@@ -285,11 +285,12 @@ describe("ArticleBody — footnotes region + reading order (DOC-02)", () => {
     const { container } = render(
       <ArticleBody
         article={article(
-          [paragraph("Body.")],
+          [paragraph("Body."), { kind: "footnote-reference", footnoteId: "fn-1", marker: "1" }],
           [{ id: "fn-1", content: [{ text: "A footnote body.", marks: [] }] }],
         )}
       />,
     );
+    // (Issue #60: only a note something references gets a return.)
     // The new back-link lives inside the footnote <li> and targets the
     // reference anchor's id (rendered by the footnote-reference BlockView),
     // with an accessible name describing its purpose.
