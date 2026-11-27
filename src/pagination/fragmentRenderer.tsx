@@ -61,6 +61,7 @@ import type { CodeSegment } from "../annotations/highlightRanges";
 // spike's measureChild parameter is gone — there is one child measure.
 import { blockViewSlices, sliceBlockHighlights } from "../annotations/unifiedHighlightSlicer";
 import { InlineList } from "../content/render/InlineRenderer";
+import { firstFootnoteReference } from "../content/footnoteReferences";
 import type { GraphemeRange } from "../annotations/unifiedHighlightSlicer";
 // Issue #42: the synthetic spoken-word marker entry — appended to the SAME
 // per-entry highlight translation the annotation highlights ride, then
@@ -363,14 +364,21 @@ function FootnoteEntryView({
     claimSlicesFirstOccurrence(highlightSlices, seenHighlightIds);
   }
   const n = fn.id.replace(/^fn-/, "");
+  // Issue #60: no return for a note nothing in the body references.
+  const referenced = firstFootnoteReference(article, fn.id) !== undefined;
   return (
     <li id={fn.id} tabIndex={-1} data-footnote-index={footnoteIndex}>
       <span data-footnote-content>
         <InlineList runs={runs} highlightSlices={highlightSlices} />
-      </span>{" "}
-      <a href={`#fn-ref-${n}`} aria-label={`Return to reference ${n}`}>
-        {"\u21A9"}
-      </a>
+      </span>
+      {referenced ? (
+        <>
+          {" "}
+          <a href={`#fn-ref-${n}`} aria-label={`Return to reference ${n}`}>
+            {"\u21A9"}
+          </a>
+        </>
+      ) : null}
     </li>
   );
 }

@@ -78,6 +78,7 @@ import { ImageIcon } from "../../ui/icons";
 // split-semantic kind through the ONE shared primitive (the same slicing
 // page fragments use — never a fork).
 import { footnoteBodyBlock, resolveBlockSlice } from "../../pagination/splitBlock";
+import { firstFootnoteReference } from "../footnoteReferences";
 
 /**
  * The subset of a ResolvedHighlight the renderer needs. Defined locally so
@@ -825,15 +826,25 @@ export const ArticleBody = memo(
                 // Issue #235: the measurement projection renders WITHOUT
                 // the li id — the visible page is the only place fn-N exists.
                 const n = fn.id.replace(/^fn-/, "");
+                // Issue #60: a note nothing in the body references (an
+                // unreferenced note, or one whose marker was lost at ingest)
+                // gets no return — never a link that leads nowhere.
+                const referenced = firstFootnoteReference(article, fn.id) !== undefined;
                 return (
                   <li key={fn.id} id={measurementProjection ? undefined : fn.id}>
-                    <InlineList runs={fn.content} />{" "}
-                    {measurementProjection ? (
-                      <span aria-hidden="true">{"\u21A9"}</span>
+                    <InlineList runs={fn.content} />
+                    {!referenced ? null : measurementProjection ? (
+                      <>
+                        {" "}
+                        <span aria-hidden="true">{"\u21A9"}</span>
+                      </>
                     ) : (
-                      <a href={`#fn-ref-${n}`} aria-label={`Return to reference ${n}`}>
-                        {"\u21A9"}
-                      </a>
+                      <>
+                        {" "}
+                        <a href={`#fn-ref-${n}`} aria-label={`Return to reference ${n}`}>
+                          {"\u21A9"}
+                        </a>
+                      </>
                     )}
                   </li>
                 );

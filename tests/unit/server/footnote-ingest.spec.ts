@@ -5,6 +5,7 @@
 // source documents pinned by the canonical article they produce.
 import { describe, expect, it } from "vitest";
 import { extractAndNormalize } from "../../../server/htmlToBlocks";
+import { ingest as ingestRequest } from "../../../server/ingest";
 import { ArticleSchema } from "../../../src/content/schema";
 import { normalizeText } from "../../../src/content/normalizeText";
 
@@ -157,19 +158,19 @@ describe("linked footnotes — Pandoc-style HTML (issue #55)", () => {
 
 /** Collect every footnote-ref mark in the body, in document order. */
 function refMarks(article: ReturnType<typeof canonical>) {
-  return JSON.parse(JSON.stringify(article.blocks), (_k, v) => v).flatMap(
-    function walk(node: unknown): unknown[] {
-      if (Array.isArray(node)) return node.flatMap(walk);
-      if (node === null || typeof node !== "object") return [];
-      const o = node as Record<string, unknown>;
-      if (typeof o.text === "string" && Array.isArray(o.marks)) {
-        return (o.marks as { type: string }[])
-          .filter((m) => m.type === "footnote-ref")
-          .map((m) => ({ marker: o.text, ...m }));
-      }
-      return Object.values(o).flatMap(walk);
-    },
-  );
+  return JSON.parse(JSON.stringify(article.blocks), (_k, v) => v).flatMap(function walk(
+    node: unknown,
+  ): unknown[] {
+    if (Array.isArray(node)) return node.flatMap(walk);
+    if (node === null || typeof node !== "object") return [];
+    const o = node as Record<string, unknown>;
+    if (typeof o.text === "string" && Array.isArray(o.marks)) {
+      return (o.marks as { type: string }[])
+        .filter((m) => m.type === "footnote-ref")
+        .map((m) => ({ marker: o.text, ...m }));
+    }
+    return Object.values(o).flatMap(walk);
+  });
 }
 
 function noteTexts(article: ReturnType<typeof canonical>): string[] {
@@ -247,7 +248,10 @@ describe("linked footnotes — Substack footnotes (issue #56)", () => {
       { marker: "1", type: "footnote-ref", footnoteId: "fn-1", occurrence: 1 },
       { marker: "2", type: "footnote-ref", footnoteId: "fn-2", occurrence: 1 },
     ]);
-    expect(noteTexts(article)).toEqual(["Mostly grain and timber.", "In 1805, after the blockade."]);
+    expect(noteTexts(article)).toEqual([
+      "Mostly grain and timber.",
+      "In 1805, after the blockade.",
+    ]);
     expect(article.blocks).toHaveLength(3);
     expect(normalizeText(article).split("Mostly grain and timber.")).toHaveLength(2);
   });
@@ -358,9 +362,135 @@ describe("linked footnotes — notes section without back-links (issue #56)", ()
   });
 
   it("a list nobody calls notes is not a notes section", async () => {
-    const html = NOTES_SECTION_HTML.replace("<h2 id=\"notes\">Notes</h2>", "<h2 id=\"notes\">Timeline</h2>");
+    const html = NOTES_SECTION_HTML.replace(
+      '<h2 id="notes">Notes</h2>',
+      '<h2 id="notes">Timeline</h2>',
+    );
     const { article } = await ingest(html);
     expect(article.footnotes).toEqual([]);
     expect(refMarks(article)).toEqual([]);
+  });
+});
+
+describe("half-matched footnotes (issue #60)", () => {
+  it("keeps a note nothing references as a note, in note order, not in the body", async () => {
+    // Pandoc output where the author deleted the second marker but not its
+    // note. Readability would drop the short leftover list on its own.
+    const html = PANDOC_HTML.replace(
+      '<a href="#fn2" class="footnote-ref" id="fnref2" role="doc-noteref"><sup>2</sup></a>',
+      "",
+    ).replace(
+      "</ol>",
+      '<li id="fn3"><p>The third note’s text.<a href="#fnref3" class="footnote-back" role="doc-backlink">↩︎</a></p></li></ol>',
+    );
+    const { article } = await ingest(html);
+    expect(refMarks(article)).toEqual([
+      { marker: "1", type: "footnote-ref", footnoteId: "fn-1", occurrence: 1 },
+    ]);
+    expect(noteTexts(article)).toEqual([
+      "The first note’s text.",
+      "The second note’s text.",
+      "The third note’s text.",
+    ]);
+    const text = normalizeText(article);
+    expect(text.split("The second note’s text.")).toHaveLength(2); // exactly once
+    expect(article.blocks.some((b) => b.kind === "numbered-list")).toBe(false);
+  });
+
+  it("keeps unreferenced Substack-style notes beside the referenced ones", async () => {
+    const html = SUBSTACK_HTML.replace(
+      '<a class="footnote-anchor" data-component-name="FootnoteAnchorToDOM" id="footnote-anchor-2" href="#footnote-2" target="_self">2</a>',
+      "",
+    );
+    const { article } = await ingest(html, "https://example.substack.com/p/on-harbours");
+    expect(refMarks(article)).toHaveLength(1);
+    expect(noteTexts(article)).toEqual([
+      "Mostly grain and timber.",
+      "In 1805, after the blockade.",
+    ]);
+    expect(normalizeText(article).split("In 1805, after the blockade.")).toHaveLength(2);
+  });
+
+  it("a marker whose note cannot be found stays plain text, never a link", async () => {
+    const html = PANDOC_HTML.replace(`<p>${FILLER}</p>`, "").replace(
+      "follows.",
+      'follows<a href="#fn9" id="fnref9"><sup>9</sup></a> and<a href="https://example.com/essay#fn8"><sup>8</sup></a> again.',
+    );
+    const { article } = await ingest(html);
+    expect(refMarks(article).map((r: { marker: string }) => r.marker)).toEqual(["1", "2"]);
+    const json = JSON.stringify(article.blocks);
+    expect(json).not.toContain("#fn9");
+    expect(json).not.toContain("#fn8");
+    expect(normalizeText(article)).toContain("A second point 2 follows9 and8 again.");
+  });
+
+  it("a note whose only reference sits in a figure caption is still listed", async () => {
+    const html = PANDOC_HTML.replace(
+      `<p>${FILLER}</p>`,
+      `<figure><img src="https://example.com/map.png" alt="A map"><figcaption>The map<a href="#fn2" id="fnref2b"><sup>2</sup></a>.</figcaption></figure><p>${FILLER}</p>`,
+    )
+      .replace(
+        '<a href="#fn2" class="footnote-ref" id="fnref2" role="doc-noteref"><sup>2</sup></a>',
+        "",
+      )
+      .replace('href="#fnref2"', 'href="#fnref2b"');
+    const { article } = await ingest(html);
+    expect(noteTexts(article)).toContain("The second note’s text.");
+    expect(refMarks(article).map((r: { footnoteId: string }) => r.footnoteId)).not.toContain(
+      "fn-2",
+    );
+  });
+
+  it("keeps every note of an article with several hundred", async () => {
+    const { article } = await ingest(manyNotesHtml(400));
+    expect(article.footnotes).toHaveLength(400);
+    expect(refMarks(article)).toHaveLength(400);
+    expect(noteTexts(article)[399]).toBe("Note number 400.");
+  });
+});
+
+/** A Pandoc-style article with `n` referenced notes. */
+function manyNotesHtml(n: number): string {
+  const refs = Array.from(
+    { length: n },
+    (_, i) => `Point ${i + 1}<a href="#fn${i + 1}" id="fnref${i + 1}"><sup>${i + 1}</sup></a>.`,
+  ).join(" ");
+  const notes = Array.from(
+    { length: n },
+    (_, i) => `<li id="fn${i + 1}"><p>Note number ${i + 1}.<a href="#fnref${i + 1}">↩︎</a></p></li>`,
+  ).join("");
+  return `<!doctype html><html lang="en"><head><title>Annotated</title></head><body><article>
+    <h1>Annotated</h1><p>${FILLER}</p><p>${refs} ${FILLER}</p>
+    <section role="doc-endnotes"><hr /><ol>${notes}</ol></section>
+  </article></body></html>`;
+}
+
+describe("the note cap (issue #60)", () => {
+  it("past about 1,000 notes, keeps the first 1,000 and admits the article flagged with the count", async () => {
+    const result = await ingestRequest({ html: manyNotesHtml(1003) });
+    expect(result.ok).toBe(true);
+    if (!result.ok || !("article" in result)) throw new Error("unreachable");
+    const { article } = result;
+    expect(article.footnotes).toHaveLength(1000);
+    expect(article.ingestionMeta?.extractionWarnings).toEqual([
+      "3 notes past the first 1,000 could not be included",
+    ]);
+    // The cut notes are not in the body, and their markers are plain text.
+    const text = normalizeText(article);
+    expect(text).not.toContain("Note number 1001.");
+    expect(text).toContain("Point 10011001.");
+    expect(refMarks(article)).toHaveLength(1000);
+  }, 60_000);
+
+  it("half-matched footnotes alone never flag the article", async () => {
+    const html = PANDOC_HTML.replace(
+      '<a href="#fn2" class="footnote-ref" id="fnref2" role="doc-noteref"><sup>2</sup></a>',
+      '<a href="#fn9"><sup>9</sup></a>',
+    );
+    const result = await ingestRequest({ html });
+    expect(result.ok).toBe(true);
+    if (!result.ok || !("article" in result)) throw new Error("unreachable");
+    expect(result.article.footnotes).toHaveLength(2);
+    expect(result.article.ingestionMeta?.extractionWarnings).toEqual([]);
   });
 });

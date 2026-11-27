@@ -44,6 +44,7 @@ import { gfmFootnoteFromMarkdown } from "mdast-util-gfm-footnote";
 import { parse as parseYaml } from "yaml"; // strict YAML 1.2 (safe-schema; no implicit type coercion)
 import type { Block, InlineRun } from "../src/content/schema";
 import { attachAdjacentCaptions, withCaption } from "./figureCaptions";
+import { MAX_LINKED_FOOTNOTES } from "./footnoteLinks";
 
 /** ProvenancePartial — same shape as `server/htmlToBlocks.ts` L37-42. The
  * orchestrator merges this into a full Provenance + computes originalHtmlHash
@@ -431,6 +432,9 @@ export interface MarkdownToBlocksResult {
   lang: string;
   provenancePartial: ProvenancePartial;
   isReaderable: boolean;
+  /** Definitions past MAX_LINKED_FOOTNOTES that were left out (issue #60);
+   * absent when none were. */
+  omittedFootnoteCount?: number;
 }
 
 /**
@@ -463,7 +467,11 @@ export async function markdownToBlocks(md: string): Promise<MarkdownToBlocksResu
     }
     body.push(node);
   }
-  const notes = numberFootnotes(body, definitions);
+  const numbered = numberFootnotes(body, definitions);
+  // Issue #60 — the note cap HTML shares; the rest are counted for the
+  // ingest disclosure (their references already read as plain markers).
+  const notes = numbered.slice(0, MAX_LINKED_FOOTNOTES);
+  const omittedFootnoteCount = numbered.length - notes.length;
   const blocks = visitChildren(body);
   const footnotes = notes.map((def, i) => ({ id: `fn-${i + 1}`, content: noteRuns(def) }));
 
@@ -473,6 +481,8 @@ export async function markdownToBlocks(md: string): Promise<MarkdownToBlocksResu
     lang: "en", // markdown carries no lang attribute (mirrors htmlToBlocks detectLang default)
     provenancePartial,
     isReaderable: blocks.length >= 3, // mirrors deriveConfidence heuristic; planner-tunable
+    // Present only when the cap cut notes: documents under it are unchanged.
+    ...(omittedFootnoteCount > 0 ? { omittedFootnoteCount } : {}),
   };
 }
 
@@ -505,7 +515,9 @@ function takeFootnoteDefinitions(root: MdastNode): Map<string, MdastNode> {
 /** Assign every reference its role and return the notes in `fn-N` order:
  * notes numbered by their first body reference (GitHub's rendered order),
  * then definitions nothing in the body points at, in definition order —
- * kept rather than silently dropped. The body walk is a plain document-order
+ * kept rather than silently dropped. Notes past MAX_LINKED_FOOTNOTES are
+ * still returned (the caller cuts and counts them); their body references
+ * become plain markers. The body walk is a plain document-order
  * traversal, matching the order the canonical reference spans read. */
 function numberFootnotes(body: MdastNode[], definitions: Map<string, MdastNode>): MdastNode[] {
   const numbers = new Map<string, number>();
@@ -527,6 +539,12 @@ function numberFootnotes(body: MdastNode[], definitions: Map<string, MdastNode>)
         if (!definitions.has(id)) continue;
         if (inNote) continue; // numbered after the body pass
         const n = number(id);
+        if (n > MAX_LINKED_FOOTNOTES) {
+          // Past the cap (issue #60): the note is left out, so its
+          // reference is its plain marker, never a link to nowhere.
+          referenceRoles.set(node, { kind: "plain", marker: String(n) });
+          continue;
+        }
         const footnoteId = `fn-${n}`;
         const occurrence = (occurrences.get(footnoteId) ?? 0) + 1;
         occurrences.set(footnoteId, occurrence);
