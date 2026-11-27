@@ -216,15 +216,6 @@ function removeOrphanedNotesHeading(candidate: Element | null, body: Element): v
   removeEmptiedContainers(parent, body);
 }
 
-/** Separate a note's block children with a space so their text never glues
- * together ("first.Second") once the note is read as inline runs. Multi-
- * paragraph notes proper are issue #59. */
-function spaceBlockChildren(note: Element, document: Document): void {
-  for (const block of Array.from(note.querySelectorAll("p, div, li, blockquote"))) {
-    block.after(document.createTextNode(" "));
-  }
-}
-
 /**
  * detectLinkedFootnotes — find Footnote references by their link graph and
  * rewrite `document` in place (see the module comment). Returns the detected
@@ -296,7 +287,6 @@ export function detectLinkedFootnotes(document: Document): LinkedFootnotes {
     originals.forEach((a, k) => {
       if (backLinks.has(a)) copies[k]?.remove();
     });
-    spaceBlockChildren(clone, document);
     noteHtml.push(clone.innerHTML);
     const list = note.parentElement;
     const previous = note.previousElementSibling;

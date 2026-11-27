@@ -1,6 +1,11 @@
 import { describe, expect, it } from "vitest";
 import { ArticleSchema } from "../../src/content/schema";
-import { BLOCK_SEPARATOR, normalizeRunText, normalizeText } from "../../src/content/normalizeText";
+import {
+  BLOCK_SEPARATOR,
+  footnoteRows,
+  normalizeRunText,
+  normalizeText,
+} from "../../src/content/normalizeText";
 import type { CanonicalArticle } from "../../src/content/types";
 
 /**
@@ -142,5 +147,34 @@ describe("footnote body participates AFTER body blocks (Pitfall 3)", () => {
     const bodyOffset = text.indexOf("Footnote body text here");
     expect(refOffset).toBeGreaterThanOrEqual(0);
     expect(bodyOffset).toBeGreaterThan(refOffset);
+  });
+});
+
+describe("multi-paragraph footnote bodies (issue #59)", () => {
+  const article = parseArticle({
+    ...baseArticle,
+    blocks: [{ kind: "paragraph", content: [{ text: "Body." }] }],
+    footnotes: [
+      {
+        id: "fn-1",
+        content: [{ text: "First  paragraph." }],
+        laterParagraphs: [[{ text: "Second paragraph." }], [{ text: "Third." }]],
+      },
+      { id: "fn-2", content: [{ text: "Short note." }] },
+    ],
+  });
+
+  it("joins a note's paragraphs with the block separator", () => {
+    expect(normalizeText(article)).toBe(
+      "Body.\nFirst paragraph.\nSecond paragraph.\nThird.\nShort note.",
+    );
+  });
+
+  it("the note's canonical row covers all of its paragraphs", () => {
+    // "First paragraph.\nSecond paragraph.\nThird." = 16 + 1 + 17 + 1 + 6
+    expect(footnoteRows(article)).toEqual([
+      { index: 0, start: 6, length: 41 },
+      { index: 1, start: 48, length: 11 },
+    ]);
   });
 });

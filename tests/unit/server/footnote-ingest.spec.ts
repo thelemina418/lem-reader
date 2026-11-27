@@ -155,21 +155,97 @@ describe("linked footnotes — Pandoc-style HTML (issue #55)", () => {
   });
 });
 
+describe("notes with several paragraphs (issue #59)", () => {
+  const SCHOLARLY_HTML = `<!doctype html><html lang="en"><head><title>T</title></head><body><article>
+    <h1>T</h1>
+    <p>${FILLER}</p>
+    <p>A long-noted claim<a href="#fn1" id="fnref1"><sup>1</sup></a> stands. ${FILLER}</p>
+    <p>A short-noted claim<a href="#fn2" id="fnref2"><sup>2</sup></a> too. ${FILLER}</p>
+    <section class="footnotes"><ol>
+      <li id="fn1">
+        <p>The note opens with <em>context</em>.</p>
+        <blockquote><p>A quoted source line.</p><p>Its second line.</p></blockquote>
+        <ul><li>First listed point;</li><li>second listed point.</li></ul>
+        <p>The note closes.<a href="#fnref1">↩︎</a></p>
+      </li>
+      <li id="fn2"><p>A one-paragraph note.<a href="#fnref2">↩︎</a></p></li>
+    </ol></section>
+  </article></body></html>`;
+
+  it("keeps a note's paragraphs, flattening its quotation and list into paragraphs", async () => {
+    const { article } = await ingest(SCHOLARLY_HTML);
+    expect(article.footnotes[0]).toEqual({
+      id: "fn-1",
+      content: [
+        { text: "The note opens with ", marks: [] },
+        { text: "context", marks: [{ type: "em" }] },
+        { text: ".", marks: [] },
+      ],
+      laterParagraphs: [
+        [{ text: "A quoted source line.", marks: [] }],
+        [{ text: "Its second line.", marks: [] }],
+        [{ text: "First listed point;", marks: [] }],
+        [{ text: "second listed point.", marks: [] }],
+        [{ text: "The note closes.", marks: [] }],
+      ],
+    });
+  });
+
+  it("a one-paragraph note keeps today's single-content shape", async () => {
+    const { article } = await ingest(SCHOLARLY_HTML);
+    expect(article.footnotes[1]).toEqual({
+      id: "fn-2",
+      content: [{ text: "A one-paragraph note.", marks: [] }],
+    });
+  });
+
+  it("joins a note's paragraphs with the block separator in the normalized text", async () => {
+    const { article } = await ingest(SCHOLARLY_HTML);
+    expect(normalizeText(article)).toContain(
+      [
+        "The note opens with context .", // (runs join with one space — the D-05 rule)
+        "A quoted source line.",
+        "Its second line.",
+        "First listed point;",
+        "second listed point.",
+        "The note closes.",
+        "A one-paragraph note.",
+      ].join("\n"),
+    );
+  });
+
+  it("a back-link in its own trailing paragraph leaves no empty paragraph", async () => {
+    const html = `<!doctype html><html lang="en"><head><title>T</title></head><body><article>
+      <h1>T</h1><p>${FILLER}</p>
+      <p>Claim<a href="#n1" id="r1"><sup>1</sup></a> here. ${FILLER}</p>
+      <ol><li id="n1"><p>One.</p><p>Two.</p><p><a href="#r1">↩</a></p></li></ol>
+    </article></body></html>`;
+    const { article } = await ingest(html);
+    expect(article.footnotes).toEqual([
+      {
+        id: "fn-1",
+        content: [{ text: "One.", marks: [] }],
+        laterParagraphs: [[{ text: "Two.", marks: [] }]],
+      },
+    ]);
+  });
+});
+
 /** Collect every footnote-ref mark in the body, in document order. */
 function refMarks(article: ReturnType<typeof canonical>) {
-  return JSON.parse(JSON.stringify(article.blocks), (_k, v) => v).flatMap(
-    function walk(node: unknown): unknown[] {
-      if (Array.isArray(node)) return node.flatMap(walk);
-      if (node === null || typeof node !== "object") return [];
-      const o = node as Record<string, unknown>;
-      if (typeof o.text === "string" && Array.isArray(o.marks)) {
-        return (o.marks as { type: string }[])
-          .filter((m) => m.type === "footnote-ref")
-          .map((m) => ({ marker: o.text, ...m }));
-      }
-      return Object.values(o).flatMap(walk);
-    },
-  );
+  return JSON.parse(JSON.stringify(article.blocks), (_k, v) => v).flatMap(function walk(
+    node: unknown,
+  ): unknown[] {
+    if (Array.isArray(node)) return node.flatMap(walk);
+    if (node === null || typeof node !== "object") return [];
+    const o = node as Record<string, unknown>;
+    if (typeof o.text === "string" && Array.isArray(o.marks)) {
+      return (o.marks as { type: string }[])
+        .filter((m) => m.type === "footnote-ref")
+        .map((m) => ({ marker: o.text, ...m }));
+    }
+    return Object.values(o).flatMap(walk);
+  });
 }
 
 function noteTexts(article: ReturnType<typeof canonical>): string[] {
@@ -247,7 +323,10 @@ describe("linked footnotes — Substack footnotes (issue #56)", () => {
       { marker: "1", type: "footnote-ref", footnoteId: "fn-1", occurrence: 1 },
       { marker: "2", type: "footnote-ref", footnoteId: "fn-2", occurrence: 1 },
     ]);
-    expect(noteTexts(article)).toEqual(["Mostly grain and timber.", "In 1805, after the blockade."]);
+    expect(noteTexts(article)).toEqual([
+      "Mostly grain and timber.",
+      "In 1805, after the blockade.",
+    ]);
     expect(article.blocks).toHaveLength(3);
     expect(normalizeText(article).split("Mostly grain and timber.")).toHaveLength(2);
   });
@@ -358,7 +437,10 @@ describe("linked footnotes — notes section without back-links (issue #56)", ()
   });
 
   it("a list nobody calls notes is not a notes section", async () => {
-    const html = NOTES_SECTION_HTML.replace("<h2 id=\"notes\">Notes</h2>", "<h2 id=\"notes\">Timeline</h2>");
+    const html = NOTES_SECTION_HTML.replace(
+      '<h2 id="notes">Notes</h2>',
+      '<h2 id="notes">Timeline</h2>',
+    );
     const { article } = await ingest(html);
     expect(article.footnotes).toEqual([]);
     expect(refMarks(article)).toEqual([]);

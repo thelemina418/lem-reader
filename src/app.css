@@ -881,6 +881,21 @@ body:has(main.paginated-main) {
   margin-block: 1.25em;
   margin-inline: 0;
 }
+/* Issue #59 — a Footnote with several paragraphs (FootnoteBodyContent).
+   The wrapper is inline and its last paragraph runs inline, so the note's
+   return (placed after the wrapper) trails the note's final words exactly as
+   it does for a one-paragraph note; the first paragraph starts on the
+   marker line with no extra block margin. Measurement rows render the same
+   wrapper, so pagination measures the layout the page shows. */
+.article-body .footnote-paragraphs {
+  display: inline;
+}
+.article-body .footnote-paragraphs > p:first-child {
+  margin-block-start: 0;
+}
+.article-body .footnote-paragraphs > p:last-child {
+  display: inline;
+}
 .article-body blockquote {
   font-style: italic;
   margin-inline: 1em;

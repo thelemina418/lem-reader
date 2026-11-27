@@ -446,6 +446,54 @@ export function BlockView({
  * placeholder's visible alt text is media-box text — unmarkable (D19-02
  * gap rule extends to visible alt, UI-SPEC Auto-Resolved #13).
  */
+/**
+ * A Footnote body's visible content (issue #59) — the ONE renderer every
+ * footnote surface shares (scrolling notes section, windowed measurement
+ * rows, paged entries), so the hidden measurement rows and the visible page
+ * always lay out the same paragraphs. `body` is the note's block-shaped view
+ * (footnoteBodyBlock), optionally sliced through resolveBlockSlice:
+ *
+ * - a one-paragraph note renders its runs inline (byte-identical to the
+ *   pre-#59 markup), in `<span data-footnote-content>` when `contentWrapper`;
+ * - a multi-paragraph note renders one `<p>` per paragraph (never a
+ *   blockquote — the container is a coordinate view only) inside
+ *   `.footnote-paragraphs`. Its last paragraph runs inline (app.css), so the
+ *   return the caller places after this element trails the note's text.
+ *
+ * `contentWrapper` marks the element the overflow guard reads: its
+ * textContent is exactly the note's raw run text, chrome-free.
+ */
+export function FootnoteBodyContent({
+  body,
+  highlightSlices,
+  childHighlightSlices,
+  contentWrapper = false,
+}: {
+  body: Block;
+  highlightSlices?: HighlightSlice[];
+  childHighlightSlices?: (HighlightSlice[] | undefined)[];
+  contentWrapper?: boolean;
+}): React.ReactElement {
+  const wrapperProps = contentWrapper ? { "data-footnote-content": "" } : {};
+  if (body.kind !== "blockquote") {
+    const runs = body.kind === "paragraph" ? body.content : [];
+    const inline = <InlineList runs={runs} highlightSlices={highlightSlices} />;
+    return contentWrapper ? <span {...wrapperProps}>{inline}</span> : inline;
+  }
+  return (
+    <div className="footnote-paragraphs" {...wrapperProps}>
+      {body.children.map((child, i) => (
+        <p key={i}>
+          <InlineList
+            runs={child.kind === "paragraph" ? child.content : []}
+            highlightSlices={childHighlightSlices?.[i]}
+          />
+        </p>
+      ))}
+    </div>
+  );
+}
+
 function FigureMedia({ block }: { block: Extract<Block, { kind: "figure" }> }) {
   const objectUrl = useAssetUrl(block.src);
   const [broken, setBroken] = useState(false);
@@ -801,10 +849,9 @@ export const ArticleBody = memo(
                       endCut ?? Number.POSITIVE_INFINITY,
                       article.lang,
                     );
-                    const runs = resolved.kind === "paragraph" ? resolved.content : fn.content;
                     return (
                       <li key={fn.id} data-footnote-index={row.index}>
-                        <InlineList runs={runs} />
+                        <FootnoteBodyContent body={resolved} />
                       </li>
                     );
                   })}
@@ -833,7 +880,7 @@ export const ArticleBody = memo(
                     id={measurementProjection ? undefined : fn.id}
                     tabIndex={measurementProjection ? undefined : -1}
                   >
-                    <InlineList runs={fn.content} />{" "}
+                    <FootnoteBodyContent body={footnoteBodyBlock(fn, article.lang)} />{" "}
                     <FootnoteReturns
                       article={article}
                       footnoteId={fn.id}
