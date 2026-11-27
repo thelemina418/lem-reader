@@ -215,8 +215,23 @@ test("a keyboard turn across single-page windows hands focus to a fresh boundary
   const nextStart = (await scope(page)).scope.endBlock;
   const previousBoundary = await page.locator(".page-start-heading").elementHandle();
   await page.locator(".page-start-heading").focus();
-  await page.keyboard.press("PageDown");
-  await page.keyboard.press("PageDown"); // a held key must not cancel the pending focus handoff
+  // A held key: the repeat keydown must arrive while the first crossing is
+  // still PENDING and must not cancel its focus handoff (issue #24). Two
+  // separate keyboard.press calls are two protocol round-trips, so on a
+  // fast engine the crossing could settle in between, and the second press
+  // was then a legitimate second turn (block 64, not 32). Dispatching both
+  // keydowns in ONE task pins the pending case deterministically: the
+  // first turn sets the pending crossing synchronously before the second
+  // is dispatched. The window keyboard bundle receives synthetic keys in
+  // every engine (see the walk cell above).
+  await page.evaluate(() => {
+    const target = document.activeElement ?? document.body;
+    for (const repeat of [false, true]) {
+      target.dispatchEvent(
+        new KeyboardEvent("keydown", { key: "PageDown", repeat, bubbles: true, cancelable: true }),
+      );
+    }
+  });
   await expect.poll(async () => (await scope(page)).scope.startBlock).toBe(nextStart);
   await waitForPaginationSettled(page);
   await expect(page.locator(".page-start-heading")).toBeFocused();
