@@ -1,9 +1,9 @@
 // src/reader/annotations/HighlightSlotEntry.tsx
 // Issue #222 — the ONE color control of the annotation panel (and the review
-// color dialog): ONE row of five slot pills in the color-pill anatomy
+// color dialog): ONE wrapping row of slot pills in the color-pill anatomy
 // (swatch + number + name). The old named-color picker (HighlightColorEntry,
 // issue #118) and the separate "Apply slot" row (issue #195) are gone — the
-// five slots are THE color vocabulary everywhere a highlight's color is
+// slots are THE color vocabulary everywhere a highlight's color is
 // chosen.
 //
 // The pills are ACTION BUTTONS, not radios: no checked/current state (a
@@ -30,9 +30,17 @@ import { StatusRegion } from "../../ui/StatusRegion";
 // Issue #196 — the ONE slot swatch anatomy (the ACTIVE hex vs. named class).
 import { SlotSwatch } from "./SlotSwatch";
 import type { HighlightTintBases } from "../../settings/highlightTint";
+// Issue #41 — the ONE label vocabulary (an unnamed slot reads "Slot 6 · Neutral").
+import { slotDisplayName } from "../../annotations/highlightSlots";
+
+/** "Apply slot 2: Yellow" / "Apply Slot 6 · Neutral" — the pill's name. */
+function applyLabel(slot: HighlightSlot, index: number): string {
+  const display = slotDisplayName(slot, index);
+  return display === slot.name ? `Apply slot ${index + 1}: ${display}` : `Apply ${display}`;
+}
 
 interface HighlightSlotEntryProps {
-  /** The settings' five numbered slots (issue #195). */
+  /** The settings' ordered slots (issue #195; issue #41 — 1..10, all shown). */
   slots: HighlightSlot[];
   /** Reader panel presentation; review dialogs retain full-name pills. */
   compact?: boolean;
@@ -87,13 +95,13 @@ export function HighlightSlotEntry({
       <div className="highlight-slot-picker">
         {slots.map((slot, i) => (
           <button
-            key={`${i}-${slot.name}`}
+            key={slot.id}
             type="button"
             className="highlight-slot-choice"
-            aria-label={`Apply slot ${i + 1}: ${slot.name}`}
+            aria-label={applyLabel(slot, i)}
             aria-describedby={compact ? labelId : undefined}
             {...(compact
-              ? inspectionProps(`Apply slot ${i + 1}: ${slot.name}`, () => void commit(slot))
+              ? inspectionProps(applyLabel(slot, i), () => void commit(slot))
               : { onClick: () => void commit(slot) })}
           >
             {/* Issue #196 — a custom-color slot paints its derived tint (the
@@ -103,7 +111,7 @@ export function HighlightSlotEntry({
             <span className="highlight-slot-number" aria-hidden="true">
               {i + 1}
             </span>
-            {!compact && <span className="highlight-slot-name">{slot.name}</span>}
+            {!compact && <span className="highlight-slot-name">{slotDisplayName(slot, i)}</span>}
           </button>
         ))}
       </div>

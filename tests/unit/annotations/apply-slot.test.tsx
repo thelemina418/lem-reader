@@ -59,6 +59,7 @@ vi.mock("../../../src/ingestion/library/tagsStore", () => ({
 }));
 
 const SLOT: HighlightSlot = {
+  id: "t-1",
   name: "Key ideas",
   color: "blue",
   customColorActive: false,
@@ -129,6 +130,7 @@ describe("applyHighlightSlot — the ONE slot-application seam (issue #195)", ()
     vi.mocked(setHighlightTags).mockImplementation(async (_id, tags) => [...tags]);
     await act(async () => {
       await apply("hl-1", {
+        id: "t-2",
         name: "Amber",
         color: "default",
         customColor: "#e9c46a",
@@ -142,6 +144,7 @@ describe("applyHighlightSlot — the ONE slot-application seam (issue #195)", ()
     // the application paints the slot's named color (issue #222).
     await act(async () => {
       await apply("hl-1", {
+        id: "t-3",
         name: "Amber",
         color: "yellow",
         customColor: "#e9c46a",

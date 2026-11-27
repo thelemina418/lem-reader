@@ -37,7 +37,7 @@ import { StatusRegion } from "../../ui/StatusRegion";
 // the selection toolbar + the highlight controls).
 import { computeAnchoredPosition, effectiveZoom } from "./anchorPosition";
 import type { ToolbarCaptureResult } from "./HighlightOverlay";
-// Issue #195 — the five numbered slots (HighlightSlot rides the settings
+// Issue #195 — the numbered slots (HighlightSlot rides the settings
 // record; the toolbar renders one labeled button per slot).
 import type { HighlightSlot } from "../../content/schema";
 // Issue #190 — the shared refusal copy (one string, two surfaces: this hint
@@ -45,6 +45,16 @@ import type { HighlightSlot } from "../../content/schema";
 import { OVERLAP_REFUSAL_COPY } from "./HighlightOverlay";
 // Issue #196 — the ONE slot swatch anatomy (custom tint vs. named class).
 import { SlotSwatch } from "./SlotSwatch";
+// Issue #41 — the ONE label vocabulary (an unnamed slot reads "Slot 6 · Neutral").
+import { slotDisplayName, slotLabel } from "../../annotations/highlightSlots";
+
+/** The visible hold label ("Save as 2: Yellow"; an unnamed slot already
+ * carries its number — "Save as Slot 6 · Neutral", never a doubled one). */
+function saveAsLabel(slot: HighlightSlot, index: number, isDefault: boolean): string {
+  const display = slotDisplayName(slot, index);
+  const base = display === slot.name ? `Save as ${index + 1}: ${display}` : `Save as ${display}`;
+  return `${base}${isDefault ? " — default slot" : ""}`;
+}
 import type { HighlightTintBases } from "../../settings/highlightTint";
 
 export interface SelectionToolbarProps {
@@ -63,7 +73,8 @@ export interface SelectionToolbarProps {
   /** Activate "Highlight + note" (creates + opens note popover in Plan 05-03). */
   onHighlightAndNote: () => void;
   /**
-   * Issue #195 — the settings' five numbered slots. Each renders as one
+   * Issue #195 — the settings' numbered slots (issue #41: 1..10, every one
+   * shown in order, wrapping at narrow widths). Each renders as one
    * labeled button ("Slot N: name") with a decorative swatch: the number + name
    * identify the slot, never the color alone (A11Y-05). Activating with a
    * fresh selection creates with that slot's color + tags immediately (the
@@ -71,7 +82,7 @@ export interface SelectionToolbarProps {
    * to an EXISTING highlight lives in the annotation panel). Issue #222 —
    * the row IS the creation vocabulary: the generic "Highlight" button is
    * gone (the default-slot creation is the default slot's pill), leaving the
-   * five slot pills + "Highlight + note".
+   * slot pills + "Highlight + note".
    */
   slots: HighlightSlot[];
   defaultSlotIndex?: number;
@@ -153,7 +164,9 @@ export function SelectionToolbar({
   hintRef.current = isHint;
   // Issue #195 — slot renames/color edits resize the slot row; the signature
   // re-runs the measure when the slot configuration changes.
-  const slotsSignature = slots.map((s) => `${s.name}:${s.color}:${s.tags.length}`).join("|");
+  const slotsSignature = slots
+    .map((s) => `${s.id}:${s.name}:${s.color}:${s.tags.length}`)
+    .join("|");
   useEffect(() => {
     const el = toolbarRef.current;
     if (!el) return;
@@ -278,13 +291,13 @@ export function SelectionToolbar({
               remain accessible and appear in the shared inspection label. */}
           <div className="selection-toolbar-slots" role="group" aria-label="Save highlight as">
             {slots.map((slot, i) => {
-              const label = `Save as ${i + 1}: ${slot.name}${i === defaultSlotIndex ? " — default slot" : ""}`;
+              const label = saveAsLabel(slot, i, i === defaultSlotIndex);
               return (
                 <button
-                  key={`${i}-${slot.name}`}
+                  key={slot.id}
                   type="button"
                   className="selection-toolbar-button selection-toolbar-slot"
-                  aria-label={`Slot ${i + 1}: ${slot.name}`}
+                  aria-label={slotLabel(slot, i)}
                   aria-describedby={`${descriptionId}${i === defaultSlotIndex ? ` ${descriptionId}-default` : ""}`}
                   {...inspectionProps(label, () => onActivateSlot(i))}
                 >
@@ -332,8 +345,8 @@ export function SelectionToolbar({
           >
             {/* Reserve the largest label footprint without moving the control row. */}
             {slots.map((slot, i) => (
-              <span className="selection-toolbar-label-measure" key={i}>
-                {`Save as ${i + 1}: ${slot.name}${i === defaultSlotIndex ? " — default slot" : ""}`}
+              <span className="selection-toolbar-label-measure" key={slot.id}>
+                {saveAsLabel(slot, i, i === defaultSlotIndex)}
               </span>
             ))}
             <span className="selection-toolbar-label-text">{activeLabel}</span>

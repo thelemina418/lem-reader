@@ -57,6 +57,7 @@ describe("migrateReaderSettings — the #222 dormancy migration", () => {
       highlightSlots: Array<Record<string, unknown>>;
     };
     expect(out.highlightSlots[2]).toEqual({
+      id: "slot-3", // issue #41 — the identity migration composes
       name: "Custom",
       color: "blue",
       customColor: "#e9c46a",
@@ -70,12 +71,14 @@ describe("migrateReaderSettings — the #222 dormancy migration", () => {
       highlightSlots: Array<Record<string, unknown>>;
     };
     expect(out.highlightSlots[0]).toEqual({
+      id: "slot-1",
       name: "Default",
       color: "default",
       customColorActive: false,
       tags: [],
     });
     expect(out.highlightSlots[4]).toEqual({
+      id: "slot-5",
       name: "Pink",
       color: "pink",
       customColorActive: false,
@@ -83,22 +86,25 @@ describe("migrateReaderSettings — the #222 dormancy migration", () => {
     });
   });
 
-  it("an already-migrated (v8) row passes through UNCHANGED — same reference, idempotent at the seams", () => {
+  it("an already-migrated (v9) row passes through UNCHANGED — same reference, idempotent at the seams", () => {
+    const { defaultHighlightSlot: _index, ...v7 } = v7Row();
     const row = {
-      ...v7Row(),
-      schemaVersion: 8,
+      ...v7,
+      schemaVersion: 9,
+      defaultHighlightSlotId: "slot-3",
       highlightSlots: [
-        { name: "Default", color: "default", customColorActive: false, tags: [] },
-        { name: "Yellow", color: "yellow", customColorActive: false, tags: [] },
+        { id: "slot-1", name: "Default", color: "default", customColorActive: false, tags: [] },
+        { id: "slot-2", name: "Yellow", color: "yellow", customColorActive: false, tags: [] },
         {
+          id: "slot-3",
           name: "Custom",
           color: "blue",
           customColor: "#e9c46a",
           customColorActive: true,
           tags: [],
         },
-        { name: "Blue", color: "blue", customColorActive: false, tags: [] },
-        { name: "Pink", color: "pink", customColorActive: false, tags: [] },
+        { id: "slot-4", name: "Blue", color: "blue", customColorActive: false, tags: [] },
+        { id: "slot-5", name: "Pink", color: "pink", customColorActive: false, tags: [] },
       ],
     };
     expect(migrateReaderSettings(row)).toBe(row);
@@ -107,11 +113,13 @@ describe("migrateReaderSettings — the #222 dormancy migration", () => {
   it("a row WITHOUT highlightSlots passes through UNCHANGED (the .default() hydration owns it)", () => {
     const row: Record<string, unknown> = { ...v7Row() };
     delete row.highlightSlots;
+    delete row.defaultHighlightSlot; // a pre-#195 row carries neither slot field
     expect(migrateReaderSettings(row)).toBe(row);
   });
 
   it("a GARBAGE highlightSlots (non-array) rides through untouched — downstream parse fails → the honest corrupt routing", () => {
-    const row = { ...v7Row(), highlightSlots: "five slots" };
+    const row: Record<string, unknown> = { ...v7Row(), highlightSlots: "five slots" };
+    delete row.defaultHighlightSlot;
     expect(migrateReaderSettings(row)).toBe(row);
   });
 
@@ -139,42 +147,48 @@ describe("migrateReaderSettings — the #222 dormancy migration", () => {
 
 describe("ReaderSettingsSchema — the dormancy shape (issue #222)", () => {
   it("an ACTIVE slot (true + hex) parses; the parsed row round-trips BYTE-STABLY", () => {
-    const row = { ...v7Row(), schemaVersion: 8 } as Record<string, unknown>;
-    // Fill the migration by hand (the exact bytes a v8 write emits).
+    const row = { ...v7Row(), schemaVersion: 9 } as Record<string, unknown>;
+    delete row.defaultHighlightSlot; // issue #41 — the default is an identity now
+    // Fill the migration by hand (the exact bytes a v9 write emits).
     row.highlightSlots = [
-      { name: "Default", color: "default", customColorActive: false, tags: [] },
-      { name: "Yellow", color: "yellow", customColorActive: false, tags: [] },
+      { id: "slot-1", name: "Default", color: "default", customColorActive: false, tags: [] },
+      { id: "slot-2", name: "Yellow", color: "yellow", customColorActive: false, tags: [] },
       {
+        id: "slot-3",
         name: "Custom",
         color: "blue",
         customColor: "#e9c46a",
         customColorActive: true,
         tags: [],
       },
-      { name: "Blue", color: "blue", customColorActive: false, tags: [] },
-      { name: "Pink", color: "pink", customColorActive: false, tags: [] },
+      { id: "slot-4", name: "Blue", color: "blue", customColorActive: false, tags: [] },
+      { id: "slot-5", name: "Pink", color: "pink", customColorActive: false, tags: [] },
     ];
+    row.defaultHighlightSlotId = "slot-3";
     const parsed = ReaderSettingsSchema.parse(JSON.parse(JSON.stringify(row)));
-    // Byte-stable: the Dexie/mirror/bundle re-write of a parsed v8 row
+    // Byte-stable: the Dexie/mirror/bundle re-write of a parsed v9 row
     // cannot churn a single byte.
     expect(JSON.stringify(parsed)).toBe(JSON.stringify(row));
   });
 
   it("a DORMANT slot (false + retained hex) parses byte-stably", () => {
-    const row = { ...v7Row(), schemaVersion: 8 } as Record<string, unknown>;
+    const row = { ...v7Row(), schemaVersion: 9 } as Record<string, unknown>;
+    delete row.defaultHighlightSlot; // issue #41 — the default is an identity now
     row.highlightSlots = [
-      { name: "Default", color: "default", customColorActive: false, tags: [] },
-      { name: "Yellow", color: "yellow", customColorActive: false, tags: [] },
+      { id: "slot-1", name: "Default", color: "default", customColorActive: false, tags: [] },
+      { id: "slot-2", name: "Yellow", color: "yellow", customColorActive: false, tags: [] },
       {
+        id: "slot-3",
         name: "Custom",
         color: "blue",
         customColor: "#e9c46a",
         customColorActive: false,
         tags: [],
       },
-      { name: "Blue", color: "blue", customColorActive: false, tags: [] },
-      { name: "Pink", color: "pink", customColorActive: false, tags: [] },
+      { id: "slot-4", name: "Blue", color: "blue", customColorActive: false, tags: [] },
+      { id: "slot-5", name: "Pink", color: "pink", customColorActive: false, tags: [] },
     ];
+    row.defaultHighlightSlotId = "slot-3";
     const parsed = ReaderSettingsSchema.parse(JSON.parse(JSON.stringify(row)));
     expect(JSON.stringify(parsed)).toBe(JSON.stringify(row));
   });
@@ -186,12 +200,14 @@ describe("ReaderSettingsSchema — the dormancy shape (issue #222)", () => {
     "a slot with customColorActive %s and %s fails parse — `true` without a hex is unrepresentable",
     (_label, active, hex) => {
       const row = { ...v7Row(), schemaVersion: 8 } as Record<string, unknown>;
+      delete row.defaultHighlightSlot;
+      row.defaultHighlightSlotId = "slot-1";
       const slots = [
-        { name: "Default", color: "default", customColorActive: false, tags: [] },
-        { name: "Yellow", color: "yellow", customColorActive: false, tags: [] },
-        { name: "Custom", color: "blue", customColorActive: active, tags: [] },
-        { name: "Blue", color: "blue", customColorActive: false, tags: [] },
-        { name: "Pink", color: "pink", customColorActive: false, tags: [] },
+        { id: "slot-1", name: "Default", color: "default", customColorActive: false, tags: [] },
+        { id: "slot-2", name: "Yellow", color: "yellow", customColorActive: false, tags: [] },
+        { id: "slot-3", name: "Custom", color: "blue", customColorActive: active, tags: [] },
+        { id: "slot-4", name: "Blue", color: "blue", customColorActive: false, tags: [] },
+        { id: "slot-5", name: "Pink", color: "pink", customColorActive: false, tags: [] },
       ];
       if (hex !== undefined) (slots[2] as Record<string, unknown>).customColor = hex;
       row.highlightSlots = slots;
@@ -204,18 +220,18 @@ describe("ReaderSettingsSchema — the dormancy shape (issue #222)", () => {
     expect(parsed.success).toBe(true);
   });
 
-  it("schemaVersion 9 forward-rejects (the V5 boundary discipline holds)", () => {
+  it("schemaVersion 10 forward-rejects (the V5 boundary discipline holds — issue #41 made 9 current)", () => {
     const row = {
       ...(migrateReaderSettings(v7Row()) as Record<string, unknown>),
-      schemaVersion: 9,
+      schemaVersion: 10,
     };
     expect(ReaderSettingsSchema.safeParse(row).success).toBe(false);
   });
 });
 
 describe("the shipped defaults (issue #222)", () => {
-  it("the canonical write version is 8", () => {
-    expect(DEFAULT_SETTINGS.schemaVersion).toBe(8);
+  it("the canonical write version is 9 (issue #41 moved it from #222's 8)", () => {
+    expect(DEFAULT_SETTINGS.schemaVersion).toBe(9);
   });
 
   it("every shipped slot starts INACTIVE (no custom colors — the shipped defaults stay named)", () => {

@@ -32,7 +32,7 @@ const NON_DEFAULT: ReaderSettings = {
   librarySort: "recently-added", // issue #115 — the additive preference
   openAfterAdd: true,
   highlightSlots: defaultHighlightSlots(),
-  defaultHighlightSlot: 0,
+  defaultHighlightSlotId: "slot-1",
   showReadAloud: true,
   speechNoticeDismissed: false, // issue #163 — the remembered add-dialog checkbox
   schemaVersion: 2,
@@ -114,8 +114,8 @@ describe("readSettingsMirror", () => {
     ["wrong value shapes (size as string)", JSON.stringify({ ...NON_DEFAULT, size: "twenty-two" })],
     ["unknown enum value (theme)", JSON.stringify({ ...NON_DEFAULT, theme: "neon" })],
     [
-      "unknown schemaVersion (v9 forward-reject)",
-      JSON.stringify({ ...NON_DEFAULT, schemaVersion: 9 }),
+      "unknown schemaVersion (v10 forward-reject)",
+      JSON.stringify({ ...NON_DEFAULT, schemaVersion: 10 }),
     ],
     ["non-object stored value", '"just a string"'],
   ])("returns null on a stored value that fails ReaderSettingsSchema (%s)", (_label, stored) => {

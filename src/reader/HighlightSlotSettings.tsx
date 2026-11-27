@@ -1,5 +1,5 @@
 // src/reader/HighlightSlotSettings.tsx
-// Issue #195 — the five highlight slots' configuration editor, hosted by the
+// Issue #195 — the highlight slots' configuration editor, hosted by the
 // settings panel's "Highlights" group. Each numbered slot exposes exactly the
 // three editable fields the slot contract names — short name, ONE color
 // choice, zero or more highlight tags — plus the EXPLICIT default-slot
@@ -62,10 +62,20 @@
 // color input renders ONLY while Custom is the slot's active source (the
 // always-visible input was the field feedback's chief confusion). The slot
 // is the memory home: highlight records keep no dormant hex.
+//
+// Issue #41 (ADR 0012) — the slots are an ORDERED list of one to ten. "Add
+// slot" appends an unnamed Neutral slot (opened, focus on its name); each
+// expanded editor carries Move up / Move down (announced, focus stays on the
+// pressed control — no drag and drop) and Remove (an inline confirmation;
+// removing the default makes slot 1 the default, with a visible note). Rows
+// are keyed — and their DOM ids minted — by the slot's stable IDENTITY, so
+// a move carries the open editor, the default badge, and focus with it.
+// Bound-limited controls stay focusable (aria-disabled, never `disabled`)
+// with their reason shown, so focus never drops when a move reaches an end.
 import { HIGHLIGHT_COLOR_CHOICES } from "../annotations/highlightColors";
 import { highlightClassName } from "../annotations/highlightColors";
 import { normalizeTags } from "../ingestion/library/tagText";
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { flushSync } from "react-dom";
 import { useSettings } from "../settings/SettingsContext";
 import { highlightBases, customHighlightTint, tintMarkStyle } from "../settings/highlightTint";
@@ -76,6 +86,17 @@ import { CustomColorPill } from "./annotations/CustomColorPill";
 // Issue #222 — the ONE slot swatch anatomy (the collapsed rows' swatch —
 // a dormant hex never paints; SlotSwatch reads the activeCustomColor gate).
 import { SlotSwatch } from "./annotations/SlotSwatch";
+// Issue #41 (ADR 0012) — the ordered-list operations + the ONE label an
+// unnamed slot reads by.
+import {
+  addSlot,
+  moveSlot,
+  removeSlot,
+  slotDisplayName,
+  slotLabel,
+} from "../annotations/highlightSlots";
+import { MAX_HIGHLIGHT_SLOTS, MIN_HIGHLIGHT_SLOTS } from "../content/schema";
+import { StatusRegion } from "../ui/StatusRegion";
 
 /** The hex a slot's Custom choice seeds with on FIRST-EVER activation (a
  * calm amber clearly outside the five named fills — the native color picker
@@ -208,25 +229,41 @@ function useColorDraft({
 function HighlightSlotEditor({
   slot,
   index,
+  count,
   isDefault,
   bases,
+  confirmingRemove,
   onPatch,
   onSetDefault,
+  onMove,
+  onRequestRemove,
+  onCancelRemove,
+  onConfirmRemove,
 }: {
   slot: HighlightSlot;
   index: number;
+  /** Issue #41 — the slot count (the move/remove bounds). */
+  count: number;
   isDefault: boolean;
   /** Issue #196 — the active theme's surface + ink pair (the preview's
    * derivation bases — the SAME resolver the render surfaces use). */
   bases: ReturnType<typeof highlightBases>;
+  /** Issue #41 — the inline remove confirmation is showing for this slot. */
+  confirmingRemove: boolean;
   onPatch: (patch: Partial<HighlightSlot>) => void;
   onSetDefault: () => void;
+  onMove: (delta: -1 | 1) => void;
+  onRequestRemove: () => void;
+  onCancelRemove: () => void;
+  onConfirmRemove: () => void;
 }) {
   const n = index + 1;
-  // Local draft for the name field: the schema requires a non-empty name, so
-  // an intermediate empty value stays in the FIELD while the setting keeps
-  // the last valid name — clearing + retyping behaves like a plain input,
-  // and blur restores the saved name when the draft is whitespace-only.
+  // Issue #41 — DOM ids follow the slot's identity (never its position), so
+  // a move never re-points a label, a radio group, or the tag combobox.
+  const key = slot.id;
+  // Local draft for the name field: the stored name is trimmed, so the draft
+  // keeps the reader's in-progress spacing. Issue #41 — an EMPTY name is an
+  // unnamed slot (it reads "Slot N · Color"), so clearing the field saves.
   const [nameDraft, setNameDraft] = useState(slot.name);
   useEffect(() => {
     setNameDraft(slot.name);
@@ -266,11 +303,12 @@ function HighlightSlotEditor({
           type="text"
           value={nameDraft}
           maxLength={40}
+          id={`slot-name-${key}`}
           aria-label={`Slot ${n} name`}
           onChange={(e) => {
             const name = e.currentTarget.value;
             setNameDraft(name);
-            if (name.trim().length > 0) onPatch({ name: name.trim() });
+            onPatch({ name: name.trim() });
           }}
           onBlur={() => {
             if (nameDraft.trim().length === 0) setNameDraft(slot.name);
@@ -289,7 +327,7 @@ function HighlightSlotEditor({
             >
               <input
                 type="radio"
-                name={`slot-color-${index}`}
+                name={`slot-color-${key}`}
                 value={choice.id}
                 checked={!isCustom && slot.color === choice.id}
                 onChange={() => {
@@ -323,7 +361,7 @@ function HighlightSlotEditor({
               describes its own action; the preview MARK below paints the
               active source). */}
           <CustomColorPill
-            name={`slot-color-${index}`}
+            name={`slot-color-${key}`}
             checked={isCustom}
             onActivate={() =>
               onPatch({
@@ -381,16 +419,16 @@ function HighlightSlotEditor({
       )}
       {/* The byte-unchanged TagEntry — the ONE tag vocabulary. saveTags
           normalizes (trim/dedupe) then replaces the slot's tag array; the
-          unique inputId keeps the five combobox ids distinct in one document. */}
+          unique inputId keeps every slot's combobox id distinct in one document. */}
       <div className="highlight-slot-editor-field">
-        <span className="highlight-slot-tags-label" id={`slot-tags-label-${index}`}>
+        <span className="highlight-slot-tags-label" id={`slot-tags-label-${key}`}>
           Slot {n} tags
         </span>
         <TagEntry
-          recordId={`highlight-slot-${index}`}
+          recordId={`highlight-slot-${key}`}
           tags={slot.tags}
           saveTags={async (next) => onPatch({ tags: normalizeTags(next) })}
-          inputId={`slot-tags-input-${index}`}
+          inputId={`slot-tags-input-${key}`}
         />
         <p className="settings-help">
           Tags this slot adds to a new highlight. Existing tags on a highlight are never removed.
@@ -400,41 +438,152 @@ function HighlightSlotEditor({
         <input
           type="radio"
           name="default-highlight-slot"
-          value={index}
+          value={slot.id}
           checked={isDefault}
           onChange={onSetDefault}
         />
         <span>Default for new highlights</span>
       </label>
+      {/* Issue #41 — the slot's place in the list. Move up / Move down (no
+          drag and drop); a move at an end is unavailable but stays
+          focusable (aria-disabled) so focus never drops off the control the
+          reader just pressed. Remove asks first, inline; the last slot
+          cannot be removed and says why. */}
+      <div className="highlight-slot-order-actions" role="group" aria-label={`Slot ${n} order`}>
+        <button
+          type="button"
+          className="btn btn-quiet"
+          id={`slot-move-up-${key}`}
+          aria-disabled={index === 0 ? true : undefined}
+          onClick={() => {
+            if (index > 0) onMove(-1);
+          }}
+        >
+          Move up
+        </button>
+        <button
+          type="button"
+          className="btn btn-quiet"
+          id={`slot-move-down-${key}`}
+          aria-disabled={index === count - 1 ? true : undefined}
+          onClick={() => {
+            if (index < count - 1) onMove(1);
+          }}
+        >
+          Move down
+        </button>
+        <button
+          type="button"
+          className="btn btn-quiet"
+          id={`slot-remove-${key}`}
+          aria-disabled={count <= MIN_HIGHLIGHT_SLOTS ? true : undefined}
+          aria-describedby={count <= MIN_HIGHLIGHT_SLOTS ? `slot-remove-reason-${key}` : undefined}
+          aria-expanded={count > MIN_HIGHLIGHT_SLOTS ? confirmingRemove : undefined}
+          onClick={() => {
+            if (count > MIN_HIGHLIGHT_SLOTS) onRequestRemove();
+          }}
+        >
+          Remove
+        </button>
+      </div>
+      {count <= MIN_HIGHLIGHT_SLOTS && (
+        <p className="settings-help" id={`slot-remove-reason-${key}`}>
+          There is always at least one slot, so the last one can&apos;t be removed.
+        </p>
+      )}
+      {confirmingRemove && (
+        <div
+          className="highlight-slot-remove-confirm"
+          role="group"
+          aria-labelledby={`slot-remove-question-${key}`}
+          onKeyDown={(e) => {
+            // Escape keeps the slot (the non-destructive answer) and stays
+            // inside the editor — it never also closes the host panel.
+            if (e.key === "Escape") {
+              e.preventDefault();
+              e.stopPropagation();
+              onCancelRemove();
+            }
+          }}
+        >
+          <p id={`slot-remove-question-${key}`}>
+            {slot.name.trim().length > 0
+              ? `Remove slot ${n} ‘${slot.name}’?`
+              : `Remove ${slotDisplayName(slot, index)}?`}{" "}
+            Highlights you made with it keep their color and tags.
+          </p>
+          <div className="dialog-actions">
+            <button
+              type="button"
+              className="btn btn-destructive"
+              id={`slot-remove-confirm-${key}`}
+              onClick={onConfirmRemove}
+            >
+              Remove slot
+            </button>
+            <button
+              type="button"
+              className="btn btn-quiet"
+              id={`slot-remove-keep-${key}`}
+              onClick={onCancelRemove}
+            >
+              Keep slot
+            </button>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
 
 /**
- * HighlightSlotSettings — the collapsed accordion of five slot rows + the
- * shared help lines (issue #222: the five editors no longer stack into a
- * wall — one row per slot shows its swatch, number, name, and the default
- * badge; ONE editor is expanded at a time). Reads and writes the settings
- * record through useSettings; each patch rebuilds the slot array immutably
- * (and strips an undefined-valued customColor so the stored row stays
- * JSON-clean).
+ * HighlightSlotSettings — the collapsed accordion of slot rows + the shared
+ * help lines (issue #222: one row per slot shows its swatch, number, name,
+ * and the default badge; ONE editor is expanded at a time). Issue #41: the
+ * list is ordered and editable (1..10 — Add slot at the end; Move / Remove
+ * inside each editor). Reads and writes the settings record through
+ * useSettings; each patch rebuilds the slot array immutably (and strips an
+ * undefined-valued customColor so the stored row stays JSON-clean).
  */
 export function HighlightSlotSettings(): React.ReactElement {
   const { settings, update } = useSettings();
   const slots = settings.highlightSlots;
-  const defaultIndex = settings.defaultHighlightSlot;
+  const defaultId = settings.defaultHighlightSlotId;
   // Issue #196 — the preview + swatch derivation bases (the SAME resolver
   // ArticleView feeds its render surfaces — preview = render by
   // construction, in every theme including the derived custom slots).
   const bases = useMemo(() => highlightBases(settings), [settings]);
   // Issue #222 — the ONE expanded editor (null = all collapsed; the calm
-  // first paint is a collapsed list).
-  const [openIndex, setOpenIndex] = useState<number | null>(null);
+  // first paint is a collapsed list). Issue #41 — named by IDENTITY, so the
+  // open editor travels with its slot when it moves.
+  const [openId, setOpenId] = useState<string | null>(null);
+  // Issue #41 — the slot whose inline remove confirmation is showing.
+  const [confirmRemoveId, setConfirmRemoveId] = useState<string | null>(null);
+  // Issue #41 — the polite announcement of the last list change ("Moved to
+  // slot 2", "Removed slot 4"), and the VISIBLE note a removed default
+  // leaves behind ("Slot 1 is now the default").
+  const [announcement, setAnnouncementState] = useState<{ text: string; seq: number } | null>(null);
+  // A fresh node per announcement (keyed by a sequence number), so two
+  // identical sentences in a row ("Moved to slot 2." twice) are both spoken.
+  const setAnnouncement = (text: string): void =>
+    setAnnouncementState((cur) => ({ text, seq: (cur?.seq ?? 0) + 1 }));
+  const [defaultNote, setDefaultNote] = useState<string | null>(null);
+  // Issue #41 — the element id to focus once the list change has rendered
+  // (a moved row's control, a new slot's name field, the row after a
+  // removal). Reordered DOM nodes can lose focus in some engines, so the
+  // focus is re-asserted explicitly after every list change.
+  const pendingFocusRef = useRef<string | null>(null);
+  useLayoutEffect(() => {
+    const id = pendingFocusRef.current;
+    if (id === null) return;
+    pendingFocusRef.current = null;
+    document.getElementById(id)?.focus();
+  });
 
-  const patchSlot = (index: number, patch: Partial<HighlightSlot>): void => {
+  const patchSlot = (id: string, patch: Partial<HighlightSlot>): void => {
     update({
-      highlightSlots: slots.map((s, i) => {
-        if (i !== index) return s;
+      highlightSlots: slots.map((s) => {
+        if (s.id !== id) return s;
         const merged = { ...s, ...patch };
         // An explicitly-undefined customColor never lands as an
         // undefined-valued key (JSON/IDB shape stays byte-stable). Issue
@@ -445,31 +594,77 @@ export function HighlightSlotSettings(): React.ReactElement {
     });
   };
 
+  const atMax = slots.length >= MAX_HIGHLIGHT_SLOTS;
+  const onAdd = (): void => {
+    if (atMax) return;
+    const next = addSlot(slots);
+    const added = next[next.length - 1]!;
+    update({ highlightSlots: next });
+    setOpenId(added.id);
+    setConfirmRemoveId(null);
+    setDefaultNote(null);
+    setAnnouncement(`Added slot ${next.length}.`);
+    pendingFocusRef.current = `slot-name-${added.id}`;
+  };
+
+  const onMove = (id: string, delta: -1 | 1): void => {
+    const next = moveSlot(slots, id, delta);
+    if (next === slots) return;
+    update({ highlightSlots: next });
+    setConfirmRemoveId(null);
+    const position = next.findIndex((s) => s.id === id) + 1;
+    setAnnouncement(`Moved to slot ${position}.`);
+    pendingFocusRef.current = `${delta < 0 ? "slot-move-up" : "slot-move-down"}-${id}`;
+  };
+
+  const onConfirmRemove = (id: string): void => {
+    const index = slots.findIndex((s) => s.id === id);
+    const result = removeSlot(slots, id, defaultId);
+    if (result.slots === slots) return;
+    update({
+      highlightSlots: result.slots,
+      ...(result.defaultFellBack ? { defaultHighlightSlotId: result.defaultHighlightSlotId } : {}),
+    });
+    setOpenId(null);
+    setConfirmRemoveId(null);
+    const note = result.defaultFellBack ? "Slot 1 is now the default for new highlights." : null;
+    setDefaultNote(note);
+    setAnnouncement(`Removed slot ${index + 1}.${note !== null ? ` ${note}` : ""}`);
+    const focusTarget = result.slots[Math.min(index, result.slots.length - 1)]!;
+    pendingFocusRef.current = `slot-row-toggle-${focusTarget.id}`;
+  };
+
   return (
     <div className="highlight-slots-editor">
       <p className="settings-help">
-        Five numbered quick presets for new highlights. Editing a slot never changes highlights you
-        already made.
+        Up to ten numbered quick presets for new highlights. A slot&apos;s number is its place in
+        the list and the key that saves with it (0 for slot 10). Editing, moving, or removing a slot
+        never changes highlights you already made.
       </p>
       <div className="highlight-slot-rows">
         {slots.map((slot, i) => {
-          const isDefault = defaultIndex === i;
-          const open = openIndex === i;
+          const isDefault = defaultId === slot.id;
+          const open = openId === slot.id;
           return (
-            <div className="highlight-slot-row" key={i}>
+            <div className="highlight-slot-row" key={slot.id}>
               <button
                 type="button"
                 className="highlight-slot-row-toggle"
+                id={`slot-row-toggle-${slot.id}`}
                 aria-expanded={open}
-                aria-controls={`slot-editor-panel-${i}`}
-                aria-label={`Slot ${i + 1}: ${slot.name}${isDefault ? ", default for new highlights" : ""}`}
-                onClick={() => setOpenIndex((cur) => (cur === i ? null : i))}
+                aria-controls={`slot-editor-panel-${slot.id}`}
+                aria-label={`${slotLabel(slot, i)}${isDefault ? ", default for new highlights" : ""}`}
+                onClick={() => {
+                  setConfirmRemoveId(null);
+                  setOpenId((cur) => (cur === slot.id ? null : slot.id));
+                }}
               >
                 {/* Issue #39 — the disclosure caret: part of the row
-                    anatomy (every slot row gets one), decorative only —
-                    aria-expanded on this button stays the announcement.
-                    CSS paints it with the SAME native disclosure marker
-                    the panel's <details> summaries use. */}
+                    anatomy (every slot row gets one — issue #41: added rows
+                    too), decorative only — aria-expanded on this button
+                    stays the announcement. CSS paints it with the SAME
+                    native disclosure marker the panel's <details> summaries
+                    use. */}
                 <span className="highlight-slot-row-caret" aria-hidden="true" />
                 {/* The slot's ACTIVE color (a dormant hex never paints —
                     SlotSwatch reads the ONE activeCustomColor gate). */}
@@ -477,18 +672,33 @@ export function HighlightSlotSettings(): React.ReactElement {
                 <span className="highlight-slot-number" aria-hidden="true">
                   {i + 1}
                 </span>
-                <span className="highlight-slot-row-name">{slot.name}</span>
+                <span className="highlight-slot-row-name">{slotDisplayName(slot, i)}</span>
                 {isDefault && <span className="highlight-slot-default-badge">Default</span>}
               </button>
               {open && (
-                <div className="highlight-slot-row-panel" id={`slot-editor-panel-${i}`}>
+                <div className="highlight-slot-row-panel" id={`slot-editor-panel-${slot.id}`}>
                   <HighlightSlotEditor
                     slot={slot}
                     index={i}
+                    count={slots.length}
                     isDefault={isDefault}
                     bases={bases}
-                    onPatch={(patch) => patchSlot(i, patch)}
-                    onSetDefault={() => update({ defaultHighlightSlot: i })}
+                    confirmingRemove={confirmRemoveId === slot.id}
+                    onPatch={(patch) => patchSlot(slot.id, patch)}
+                    onSetDefault={() => {
+                      setDefaultNote(null);
+                      update({ defaultHighlightSlotId: slot.id });
+                    }}
+                    onMove={(delta) => onMove(slot.id, delta)}
+                    onRequestRemove={() => {
+                      setConfirmRemoveId(slot.id);
+                      pendingFocusRef.current = `slot-remove-keep-${slot.id}`;
+                    }}
+                    onCancelRemove={() => {
+                      setConfirmRemoveId(null);
+                      pendingFocusRef.current = `slot-remove-${slot.id}`;
+                    }}
+                    onConfirmRemove={() => onConfirmRemove(slot.id)}
                   />
                 </div>
               )}
@@ -496,10 +706,30 @@ export function HighlightSlotSettings(): React.ReactElement {
           );
         })}
       </div>
+      {defaultNote !== null && <p className="settings-hint">{defaultNote}</p>}
+      <div className="highlight-slot-add-row">
+        <button
+          type="button"
+          className="btn btn-quiet"
+          aria-disabled={atMax ? true : undefined}
+          aria-describedby={atMax ? "highlight-slot-add-limit" : undefined}
+          onClick={onAdd}
+        >
+          Add slot
+        </button>
+        {atMax && (
+          <span className="settings-help" id="highlight-slot-add-limit">
+            Up to 10 slots
+          </span>
+        )}
+      </div>
+      <StatusRegion className="visually-hidden">
+        {announcement !== null && <p key={announcement.seq}>{announcement.text}</p>}
+      </StatusRegion>
       <p className="settings-help">
         A custom color previews how it will actually read in your current theme. Applying a slot to
-        an existing highlight changes its color and adds the slot's tags — it never removes tags you
-        added, and it never changes your default choice.
+        an existing highlight changes its color and adds the slot&apos;s tags — it never removes
+        tags you added, and it never changes your default choice.
       </p>
     </div>
   );

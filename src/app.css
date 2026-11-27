@@ -6666,6 +6666,41 @@ dialog.highlight-popover .tag-entry legend {
   margin-block-start: var(--space-xs);
 }
 
+/* Issue #41 (ADR 0012) — the slot's place in the list: Move up / Move down /
+   Remove sit together at the editor's foot and wrap at narrow widths. A
+   bound-limited control is aria-disabled (still focusable, so focus never
+   drops off it at an end) and reads quieter. The inline remove confirmation
+   is a calm boxed question inside the editor — no nested modal. */
+.highlight-slot-order-actions,
+.highlight-slot-add-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-sm);
+}
+.highlight-slot-add-row {
+  margin-block-start: var(--space-sm);
+}
+.highlight-slot-order-actions [aria-disabled="true"],
+.highlight-slot-add-row [aria-disabled="true"] {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+.highlight-slot-remove-confirm {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-sm);
+  padding: var(--space-sm) var(--space-md);
+  border: 1px solid var(--hairline);
+  border-radius: var(--radius-sm);
+  font-family: var(--font-ui);
+  font-size: 14px;
+  color: var(--ink);
+}
+.highlight-slot-remove-confirm p {
+  margin: 0;
+}
+
 /* Issue #196 — the slot editor's custom color row + live preview. The row
    keeps the editor's field register (label + native color input); the
    preview mark IS the literal mark anatomy (the shared class string the

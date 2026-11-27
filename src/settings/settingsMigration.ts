@@ -44,8 +44,69 @@
 // (same reference). Garbage `highlightSlots` rides through untouched so the
 // downstream parse still fails — the honest corrupt routing, never a
 // silent reshape.
+//
+// Issue #41 (ADR 0012) — the slot identity migration: a pre-#41 (v7/v8) row
+// carries id-less slots and the default as a POSITION index
+// (`defaultHighlightSlot`). Every id-less slot gains the deterministic
+// legacy identity of its position (legacySlotId — deterministic, so the
+// store, the mirror, and an import all mint the SAME ids and a migrated row
+// is byte-stable), and the default index maps onto the identity of the slot
+// it named; the index key is dropped. An index that names no slot is NEVER
+// silently coerced: the mapped default is left as `null`, which fails the
+// downstream parse → the honest corrupt routing. Idempotent: a row whose
+// slots all carry ids and that has no index key returns the SAME reference.
 import { clampLegacyMeasure } from "./legacyMeasure";
 import { seedCustomTheme } from "./customTheme";
+import { defaultHighlightSlots, legacySlotId } from "../content/schema";
+
+/**
+ * Issue #41 — give a RAW row's id-less slots their legacy identities and map
+ * the legacy default index onto an identity. Returns a NEW row when (and
+ * only when) something mapped; null otherwise.
+ */
+function fillSlotIdentity(row: Record<string, unknown>): Record<string, unknown> | null {
+  const slots = row.highlightSlots;
+  const hasLegacyDefault = Object.hasOwn(row, "defaultHighlightSlot");
+  let filledSlots: unknown[] | null = null;
+  if (Array.isArray(slots)) {
+    let filled = false;
+    const next = slots.map((slot, i) => {
+      if (slot === null || typeof slot !== "object") return slot;
+      const s = slot as Record<string, unknown>;
+      if (Object.hasOwn(s, "id")) return slot;
+      filled = true;
+      return { id: legacySlotId(i), ...s };
+    });
+    if (filled) filledSlots = next;
+  }
+  if (filledSlots === null && !hasLegacyDefault) return null;
+  const migrated: Record<string, unknown> = { ...row };
+  if (filledSlots !== null) migrated.highlightSlots = filledSlots;
+  if (hasLegacyDefault) {
+    delete migrated.defaultHighlightSlot;
+    if (!Object.hasOwn(row, "defaultHighlightSlotId")) {
+      const index = row.defaultHighlightSlot;
+      // A pre-slot row (no slot array) indexes the shipped five.
+      const list = Array.isArray(migrated.highlightSlots)
+        ? (migrated.highlightSlots as unknown[])
+        : null;
+      const count = list ? list.length : defaultHighlightSlots().length;
+      let mapped: string | null = null;
+      if (typeof index === "number" && Number.isInteger(index) && index >= 0 && index < count) {
+        const target = list?.[index];
+        const id =
+          list === null
+            ? legacySlotId(index)
+            : target !== null && typeof target === "object"
+              ? (target as Record<string, unknown>).id
+              : undefined;
+        if (typeof id === "string") mapped = id;
+      }
+      migrated.defaultHighlightSlotId = mapped;
+    }
+  }
+  return migrated;
+}
 
 /**
  * Issue #222 — fill the slots' pre-#222 dormancy key on a RAW row: a slot
@@ -89,17 +150,19 @@ export function migrateReaderSettings(raw: unknown): unknown {
   if (clamped === null || typeof clamped !== "object") return clamped;
   const row = clamped as Record<string, unknown>;
   const dormancyFilled = fillSlotDormancy(row);
+  const identityFilled = fillSlotIdentity(dormancyFilled ?? row);
+  const slotsFilled = identityFilled ?? dormancyFilled;
   if (!["custom", "sepia", "light", "dark"].includes(row.theme as string)) {
-    return dormancyFilled ?? row;
+    return slotsFilled ?? row;
   }
   const legacy = row.customTheme;
-  if (legacy === null || typeof legacy !== "object") return dormancyFilled ?? row;
+  if (legacy === null || typeof legacy !== "object") return slotsFilled ?? row;
   // The carried record is passed through VERBATIM (case included) — the
   // record schema downstream remains the trust boundary for its shape.
   const record = legacy as { baseTheme?: unknown; tokens?: unknown };
-  // The dormancy fill (when it fired) already spread the row — start from it
+  // The slot fills (when they fired) already spread the row — start from it
   // so both rules land on ONE new record.
-  const migrated: Record<string, unknown> = dormancyFilled ?? { ...row };
+  const migrated: Record<string, unknown> = slotsFilled ?? { ...row };
   delete migrated.customTheme;
   if (record.baseTheme === "dark") {
     if (row.theme === "custom") migrated.theme = "custom-dark";

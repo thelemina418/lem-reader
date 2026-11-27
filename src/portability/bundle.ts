@@ -123,6 +123,17 @@
 //     (D9-04 preserved; the validateBundle peek threshold moved to > 10),
 //     and writers emit schemaVersion 10.
 //
+//   - Issue #41 (ADR 0012 — ordered highlight slots) — the ELEVENTH
+//     application of the union discipline: schemaVersion is the 1|..|11
+//     UNION. A v11 bundle's preferences block carries the ordered 1..10 slot
+//     list with stable identities and the default as an identity (settings
+//     schemaVersion 9). No new block: the change rides the preferences
+//     block's own versioned schema. v1..v10 bundles parse exactly as before
+//     — an older five-slot preferences block migrates pre-parse (generated
+//     identities, the default mapped from its index); a v12+ bundle
+//     forward-rejects (the validateBundle peek threshold moved to > 11),
+//     and writers emit schemaVersion 11.
+//
 // This module COMPOSES the existing record schemas — no record shape is
 // re-declared here (REUSE-DO-NOT-FORK; the schemas are the STATE-04 trust
 // boundary shared with every Dexie read/write path).
@@ -193,6 +204,7 @@ export const ExportBundleSchema = z
       z.literal(8),
       z.literal(9),
       z.literal(10),
+      z.literal(11),
     ]),
     exportedAt: z.string().datetime(), // ISO-8601
     appVersion: z.string(), // diagnostic only (D9-04)

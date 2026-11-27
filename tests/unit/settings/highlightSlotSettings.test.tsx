@@ -77,13 +77,13 @@ function slotGroup(index: number): HTMLElement {
 }
 
 function slotColorRadio(index: number, label: string): HTMLInputElement {
-  // The expanded editor scopes its radios with name="slot-color-<i>" —
+  // The expanded editor scopes its radios with name="slot-color-<slot id>" (the shipped ids are slot-<n>) —
   // one radio per slot per choice.
   const radios = screen
     .getAllByRole("radio")
     .filter(
       (r) =>
-        (r as HTMLInputElement).name === `slot-color-${index}` &&
+        (r as HTMLInputElement).name === `slot-color-slot-${index + 1}` &&
         (r as HTMLInputElement).value === label.toLowerCase(),
     );
   expect(radios, `slot ${index + 1} ${label} radio`).toHaveLength(1);
@@ -419,4 +419,137 @@ describe("slot custom color drag settle (issue #219)", () => {
       expect(log.length).toBe(baseline + 2);
     },
   );
+});
+
+// ── Issue #41 (ADR 0012) — the ordered, editable slot list ───────────────────
+
+/** Records the LATEST settings snapshot (the list's observable truth). */
+function LatestProbe({ latest }: { latest: { current: ReaderSettings | null } }): null {
+  latest.current = useSettings().settings;
+  return null;
+}
+
+async function mountWithLatest(): Promise<{ current: ReaderSettings | null }> {
+  const latest: { current: ReaderSettings | null } = { current: null };
+  render(
+    <SettingsProvider>
+      <LatestProbe latest={latest} />
+      <HighlightSlotSettings />
+    </SettingsProvider>,
+  );
+  await act(async () => {});
+  return latest;
+}
+
+function rowToggles(): HTMLElement[] {
+  return screen
+    .getAllByRole("button")
+    .filter((b) => b.getAttribute("aria-expanded") !== null && b.id.startsWith("slot-row-toggle-"));
+}
+
+describe("HighlightSlotSettings — add, remove, reorder (issue #41)", () => {
+  it("Add slot appends an unnamed Neutral slot, opens it, and focuses its name field", async () => {
+    const latest = await mountWithLatest();
+    fireEvent.click(screen.getByRole("button", { name: "Add slot" }));
+    const slots = latest.current!.highlightSlots;
+    expect(slots).toHaveLength(6);
+    expect(slots[5]).toMatchObject({ name: "", color: "default", tags: [] });
+    // It reads by its number and color everywhere.
+    expect(rowToggles()[5]!.getAttribute("aria-label")).toBe("Slot 6 · Neutral");
+    expect(document.activeElement).toBe(screen.getByLabelText("Slot 6 name"));
+    // Every row — the new one too — carries the disclosure caret (#39).
+    expect(rowToggles()[5]!.querySelector(".highlight-slot-row-caret")).not.toBeNull();
+  });
+
+  it("at ten slots Add slot is unavailable and says why", async () => {
+    const latest = await mountWithLatest();
+    for (let i = 0; i < 5; i++) fireEvent.click(screen.getByRole("button", { name: "Add slot" }));
+    expect(latest.current!.highlightSlots).toHaveLength(10);
+    const add = screen.getByRole("button", { name: "Add slot" });
+    expect(add.getAttribute("aria-disabled")).toBe("true");
+    expect(screen.getByText("Up to 10 slots")).toBeTruthy();
+    fireEvent.click(add);
+    expect(latest.current!.highlightSlots).toHaveLength(10);
+  });
+
+  it("Remove asks first, naming the slot; keeping it changes nothing", async () => {
+    const latest = await mountWithLatest();
+    expandSlot(3);
+    fireEvent.click(within(slotGroup(3)).getByRole("button", { name: "Remove" }));
+    expect(
+      screen.getByText(
+        "Remove slot 4 ‘Blue’? Highlights you made with it keep their color and tags.",
+      ),
+    ).toBeTruthy();
+    expect(document.activeElement).toBe(screen.getByRole("button", { name: "Keep slot" }));
+    fireEvent.click(screen.getByRole("button", { name: "Keep slot" }));
+    expect(latest.current!.highlightSlots).toHaveLength(5);
+    expect(screen.queryByRole("button", { name: "Remove slot" })).toBeNull();
+  });
+
+  it("confirming removes the slot; removing the default makes slot 1 the default with a visible note", async () => {
+    const latest = await mountWithLatest();
+    // Make slot 3 the default, then remove it.
+    expandSlot(2);
+    fireEvent.click(within(slotGroup(2)).getByLabelText("Default for new highlights"));
+    expect(latest.current!.defaultHighlightSlotId).toBe("slot-3");
+    fireEvent.click(within(slotGroup(2)).getByRole("button", { name: "Remove" }));
+    fireEvent.click(screen.getByRole("button", { name: "Remove slot" }));
+    const after = latest.current!;
+    expect(after.highlightSlots.map((s) => s.id)).toEqual(["slot-1", "slot-2", "slot-4", "slot-5"]);
+    expect(after.defaultHighlightSlotId).toBe("slot-1");
+    expect(
+      screen.getAllByText("Slot 1 is now the default for new highlights.").length,
+    ).toBeGreaterThan(0);
+    // Focus lands on the row that took the removed slot's place.
+    expect(document.activeElement).toBe(rowToggles()[2]);
+  });
+
+  it("with one slot left, Remove is unavailable and the reason is shown", async () => {
+    const latest = await mountWithLatest();
+    for (let n = 0; n < 4; n++) {
+      expandSlot(0);
+      fireEvent.click(within(slotGroup(0)).getByRole("button", { name: "Remove" }));
+      fireEvent.click(screen.getByRole("button", { name: "Remove slot" }));
+    }
+    expect(latest.current!.highlightSlots).toHaveLength(1);
+    expandSlot(0);
+    const remove = within(slotGroup(0)).getByRole("button", { name: "Remove" });
+    expect(remove.getAttribute("aria-disabled")).toBe("true");
+    expect(screen.getByText(/the last one can.t be removed/)).toBeTruthy();
+    fireEvent.click(remove);
+    expect(screen.queryByRole("button", { name: "Remove slot" })).toBeNull();
+  });
+
+  it("Move up / Move down reorder, announce the new number, keep focus, and the default travels", async () => {
+    const latest = await mountWithLatest();
+    expandSlot(0); // slot 1 ("Default") is the default
+    fireEvent.click(within(slotGroup(0)).getByRole("button", { name: "Move down" }));
+    let ids = latest.current!.highlightSlots.map((s) => s.id);
+    expect(ids).toEqual(["slot-2", "slot-1", "slot-3", "slot-4", "slot-5"]);
+    expect(latest.current!.defaultHighlightSlotId).toBe("slot-1");
+    expect(screen.getByText("Moved to slot 2.")).toBeTruthy();
+    // The editor stayed open on its slot (now number 2), focus on the control.
+    const moveDown = within(slotGroup(1)).getByRole("button", { name: "Move down" });
+    expect(document.activeElement).toBe(moveDown);
+    // The default badge travelled with its slot.
+    expect(rowToggles()[1]!.getAttribute("aria-label")).toBe(
+      "Slot 2: Default, default for new highlights",
+    );
+    fireEvent.click(within(slotGroup(1)).getByRole("button", { name: "Move up" }));
+    fireEvent.click(within(slotGroup(0)).getByRole("button", { name: "Move up" })); // at the top: no-op
+    ids = latest.current!.highlightSlots.map((s) => s.id);
+    expect(ids).toEqual(["slot-1", "slot-2", "slot-3", "slot-4", "slot-5"]);
+    const moveUp = within(slotGroup(0)).getByRole("button", { name: "Move up" });
+    expect(moveUp.getAttribute("aria-disabled")).toBe("true");
+    expect(document.activeElement).toBe(moveUp);
+  });
+
+  it("clearing a slot's name saves it unnamed — it reads by number and color", async () => {
+    const latest = await mountWithLatest();
+    expandSlot(1);
+    fireEvent.change(screen.getByLabelText("Slot 2 name"), { target: { value: "" } });
+    expect(latest.current!.highlightSlots[1]!.name).toBe("");
+    expect(rowToggles()[1]!.getAttribute("aria-label")).toBe("Slot 2 · Yellow");
+  });
 });

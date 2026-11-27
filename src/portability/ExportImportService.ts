@@ -228,8 +228,10 @@ export async function buildBundle(): Promise<ExportBuild> {
     // collections/completions/collectionActiveEntries as three ALWAYS-present
     // arrays (empty on a collection-free library — the presence-is-the-
     // contract books/assets precedent); versions 1–9 remain readable.
-    // Version 7 preserves starter removal.
-    schemaVersion: 10 as const,
+    // Version 7 preserves starter removal. Issue #41: version 11 marks the
+    // preferences block's ordered slot list with stable identities (settings
+    // schemaVersion 9) — no new block.
+    schemaVersion: 11 as const,
     exportedAt: new Date().toISOString(),
     appVersion: resolveAppVersion(),
     articles,
@@ -378,7 +380,8 @@ export async function validateBundle(file: File): Promise<BundleValidationResult
   //    (subscription-capable) parse. Issue #211: > 6 → > 7 — v7 bundles
   //    (starter-removal-capable) parse. Issue #236: > 8 → > 9 — v9 bundles
   //    (structure-snapshot-capable) parse. Issue #248: > 9 → > 10 — v10
-  //    bundles (collection-capable) parse; v11+ refuses.
+  //    bundles (collection-capable) parse. Issue #41: > 10 → > 11 — v11
+  //    bundles (ordered-slot preferences) parse; v12+ refuses.
   let raw: unknown;
   try {
     raw = JSON.parse(strFromU8(bundleBytes));
@@ -389,7 +392,7 @@ export async function validateBundle(file: File): Promise<BundleValidationResult
     };
   }
   const peeked = (raw as { schemaVersion?: unknown }).schemaVersion;
-  if (typeof peeked === "number" && peeked > 10) {
+  if (typeof peeked === "number" && peeked > 11) {
     return {
       ok: false,
       refusal: { kind: "newer-schema-version", bundleVersion: peeked },
@@ -440,7 +443,19 @@ export async function validateBundle(file: File): Promise<BundleValidationResult
   const legacySpeechPrefsAbsent =
     isRecord(rawPrefs) &&
     (rawPrefs.showReadAloud === undefined || rawPrefs.speechNoticeDismissed === undefined);
-  if (isRecord(rawPrefs) && (legacyMeasureApplied || legacyCustomApplied)) {
+  // Issue #41 — a pre-v9 preferences block carries id-less slots and the
+  // default as a position index. It migrates pre-parse (generated
+  // identities, the default mapped from its index — an index naming no slot
+  // stays corrupt) and gates the manifest legacy-shape tolerance in step 6.
+  const legacySlotIdentityApplied =
+    isRecord(rawPrefs) &&
+    (Object.hasOwn(rawPrefs, "defaultHighlightSlot") ||
+      (Array.isArray(rawPrefs.highlightSlots) &&
+        rawPrefs.highlightSlots.some((slot) => isRecord(slot) && !Object.hasOwn(slot, "id"))));
+  if (
+    isRecord(rawPrefs) &&
+    (legacyMeasureApplied || legacyCustomApplied || legacySlotIdentityApplied)
+  ) {
     raw = {
       ...(raw as object),
       preferences: migrateReaderSettings(rawPrefs),
@@ -534,6 +549,7 @@ export async function validateBundle(file: File): Promise<BundleValidationResult
       legacyCustomApplied ||
       legacyOpenAfterAddAbsent ||
       legacySlotFieldsAbsent ||
+      legacySlotIdentityApplied ||
       legacySpeechPrefsAbsent) &&
     claimedBlocks.preferences !== recomputed.blocks.preferences
   ) {
@@ -569,13 +585,27 @@ export async function validateBundle(file: File): Promise<BundleValidationResult
       // Issue #195 — the slot fields ride the export-era shape only when the
       // export actually carried them (pre-v7 blocks omit both; a claimed-v7
       // block missing either still fails its manifest — tampering stays
-      // detected).
-      ...(legacySlotFieldsAbsent && rawPrefs.highlightSlots === undefined
-        ? {}
-        : { highlightSlots: p.highlightSlots }),
-      ...(legacySlotFieldsAbsent && rawPrefs.defaultHighlightSlot === undefined
-        ? {}
-        : { defaultHighlightSlot: p.defaultHighlightSlot }),
+      // detected). Issue #41 — a pre-v9 block's slots ride their RAW
+      // export-era shape (id-less, the default as an index): the claimed
+      // hash was computed over exactly those bytes, so any edit to them
+      // still mismatches.
+      ...(legacySlotIdentityApplied
+        ? {
+            ...(rawPrefs.highlightSlots === undefined
+              ? {}
+              : { highlightSlots: rawPrefs.highlightSlots }),
+            ...(rawPrefs.defaultHighlightSlot === undefined
+              ? {}
+              : { defaultHighlightSlot: rawPrefs.defaultHighlightSlot }),
+          }
+        : {
+            ...(legacySlotFieldsAbsent && rawPrefs.highlightSlots === undefined
+              ? {}
+              : { highlightSlots: p.highlightSlots }),
+            ...(legacySlotFieldsAbsent && rawPrefs.defaultHighlightSlotId === undefined
+              ? {}
+              : { defaultHighlightSlotId: p.defaultHighlightSlotId }),
+          }),
     };
     const legacyHash = await sha256Hex(new TextEncoder().encode(JSON.stringify(legacyView)));
     if (claimedBlocks.preferences === legacyHash) {

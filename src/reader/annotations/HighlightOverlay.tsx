@@ -128,7 +128,7 @@ export interface HighlightOverlayValue {
   /** Resolved highlights for the current article (D5-02 tri-state per record). */
   highlights: ResolvedHighlight[];
   /**
-   * Issue #195 — the settings' five numbered highlight slots (the shipped
+   * Issue #195 — the settings' numbered highlight slots (#41: 1..10) (the shipped
    * set when no settings are wired). The annotation panel's "Apply slot"
    * section reads them from THIS context, so the panel needs no settings
    * dependency — the host (ArticleView) feeds its settings record in.
@@ -266,7 +266,7 @@ export interface HighlightOverlayProviderProps {
    */
   onHighlightEdited?: UseAnnotationStateCallbacks["onHighlightEdited"];
   /**
-   * Issue #195 — the settings' five numbered highlight slots, fed by the
+   * Issue #195 — the settings' numbered highlight slots (#41: 1..10), fed by the
    * host (ArticleView) from its settings record. Defaults to the shipped
    * set so tests and callers without settings keep the pre-slot behavior.
    */

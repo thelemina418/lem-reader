@@ -210,7 +210,7 @@ describe("SettingsContext (02-02 persistence + STATE-05)", () => {
       readingMode: "paginated",
       openAfterAdd: true,
       highlightSlots: defaultHighlightSlots(),
-      defaultHighlightSlot: 0,
+      defaultHighlightSlotId: "slot-1",
       showReadAloud: true,
       speechNoticeDismissed: false, // issue #163 — the remembered add-dialog checkbox
     };
@@ -300,7 +300,7 @@ describe("SettingsContext (02-02 persistence + STATE-05)", () => {
       librarySort: "recently-added",
       openAfterAdd: true,
       highlightSlots: defaultHighlightSlots(),
-      defaultHighlightSlot: 0,
+      defaultHighlightSlotId: "slot-1",
       showReadAloud: true,
       speechNoticeDismissed: false, // issue #163 — the remembered add-dialog checkbox
     };

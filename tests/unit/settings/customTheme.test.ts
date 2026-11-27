@@ -631,7 +631,7 @@ const V3_RECORD: ReaderSettings = {
   librarySort: "recently-added", // issue #115 — the additive preference
   openAfterAdd: true,
   highlightSlots: defaultHighlightSlots(),
-  defaultHighlightSlot: 0,
+  defaultHighlightSlotId: "slot-1",
   showReadAloud: true,
   speechNoticeDismissed: false, // issue #163 — the remembered add-dialog checkbox
   schemaVersion: 3,

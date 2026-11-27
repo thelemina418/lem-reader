@@ -73,8 +73,9 @@ async function readHighlightRows(
   );
 }
 
-/** The persisted explicit default slot (null until the first settings write). */
-async function readDefaultSlot(page: Page): Promise<number | null> {
+/** The persisted explicit default slot's identity (issue #41 — the default
+ * names an identity; null until the first settings write). */
+async function readDefaultSlot(page: Page): Promise<string | null> {
   return page.evaluate(async () => {
     const db = await new Promise<IDBDatabase>((resolve, reject) => {
       const req = indexedDB.open("lem-reader");
@@ -82,7 +83,7 @@ async function readDefaultSlot(page: Page): Promise<number | null> {
       req.onerror = () => reject(req.error);
     });
     try {
-      const row = await new Promise<{ value?: { defaultHighlightSlot?: number } } | undefined>(
+      const row = await new Promise<{ value?: { defaultHighlightSlotId?: string } } | undefined>(
         (resolve, reject) => {
           const tx = db.transaction("settings", "readonly");
           const getReq = tx.objectStore("settings").get("reader-prefs");
@@ -90,7 +91,7 @@ async function readDefaultSlot(page: Page): Promise<number | null> {
           getReq.onerror = () => reject(getReq.error);
         },
       );
-      return row?.value?.defaultHighlightSlot ?? null;
+      return row?.value?.defaultHighlightSlotId ?? null;
     } finally {
       db.close();
     }
@@ -194,7 +195,7 @@ test.describe("held-number selection (issue #197/#220)", () => {
       expect(rows[0]?.tags ?? []).toEqual([]);
 
       // The temporary choice did NOT become the saved default (slot 1).
-      await expect.poll(async () => readDefaultSlot(page)).toBe(0);
+      await expect.poll(async () => readDefaultSlot(page)).toBe("slot-1");
 
       // The undo grace: Escape deletes exactly it.
       await page.keyboard.press("Escape");
@@ -393,8 +394,8 @@ test.describe("held-number selection (issue #197/#220)", () => {
     // disclosure + issue #222 accordion once.
     const slot4 = await openSlotEditor(page, 4);
     const settings = page.locator("dialog.settings-panel");
-    await slot4.locator("input#slot-tags-input-3").fill("key-idea");
-    await slot4.locator("input#slot-tags-input-3").press("Enter");
+    await slot4.locator("input#slot-tags-input-slot-4").fill("key-idea");
+    await slot4.locator("input#slot-tags-input-slot-4").press("Enter");
 
     // Editable-field exclusion: keydown "3" lands INSIDE the slot-name
     // input — the hold must stay clean, so the next drag stays ordinary.
