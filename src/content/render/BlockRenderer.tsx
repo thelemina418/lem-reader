@@ -394,11 +394,7 @@ export function BlockView({
       }
       return (
         <sup {...elementProps}>
-          <a
-            id={`fn-ref-${n}`}
-            href={`#fn-${n}`}
-            aria-label={footnoteMarkerLabel(block.marker)}
-          >
+          <a id={`fn-ref-${n}`} href={`#fn-${n}`} aria-label={footnoteMarkerLabel(block.marker)}>
             {block.marker}
           </a>
         </sup>

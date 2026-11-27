@@ -88,6 +88,14 @@ interface UseScrollSaveOptions {
   /** A scoped scrolling body's bottom is this canonical boundary, not the
    * whole work's completion pin. Explicit saves remain caller-owned. */
   readingEndOffset?: number;
+  /**
+   * Spec #66 / issue #57 — the Footnote excursion's hold. While it returns a
+   * number, every SCHEDULED save (scroll, page commit, listened progress)
+   * persists that offset — the reference the reader followed — instead of
+   * where the reader is in the notes. Explicit saveLocationNow calls stay
+   * caller-owned (Mark read, chapter departure decide their own offset).
+   */
+  heldOffset?: () => number | null;
 }
 
 /**
@@ -219,11 +227,12 @@ export function useScrollSave(
     (graphemeOffset: number) => {
       const currentArticle = articleRef.current;
       if (!currentArticle) return;
+      const held = optionsRef.current?.heldOffset?.() ?? null;
       scheduleSave({
         schemaVersion: 1,
         articleId: currentArticle.id,
         revision: currentArticle.revision,
-        graphemeOffset,
+        graphemeOffset: held ?? graphemeOffset,
         savedAt: new Date().toISOString(),
       });
     },
