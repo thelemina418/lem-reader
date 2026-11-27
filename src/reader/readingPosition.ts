@@ -19,7 +19,7 @@
 //      geometry — moved verbatim from useScrollSave.ts) and isFinalPage
 //      (paginated committed-page — the final page of a MULTI-page set,
 //      260908-oht; a one-page set keeps anchor 0, POLISH-02).
-//   3. End-pins — endPinOffset(article) = graphemeLength(article): the ONE
+//   3. End-pins — endPinOffset(article) = mainTextLength(article): the ONE
 //      offset every completion path persists or anchors at (the scroll-
 //      bottom save, the final-page anchor, and "Mark read and close").
 //   4. Landing behavior for restore/mode-swap offsets at or after the end
@@ -38,7 +38,7 @@
 // unit test with synthetic numbers/records (jsdom-free truth tables).
 import type { CanonicalArticle } from "../content/types";
 import type { LocationRecord } from "../content/schema";
-import { graphemeLength } from "../content/normalizeText";
+import { mainTextLength } from "../content/normalizeText";
 
 /**
  * FINISHED_THRESHOLD — D8-12 + RESEARCH §Pattern 4 L498 recommendation. At
@@ -102,6 +102,21 @@ export function atScrollBottom(geometry: ScrollGeometry): boolean {
 }
 
 /**
+ * mainTextEndInView — issue #58: the SCROLLING-mode "reached the end of the
+ * main text" predicate for a footnoted article. The notes sit below the
+ * main text; once the notes region's top edge (viewport-relative px, null
+ * when the article has no rendered notes) is inside the viewport, the whole
+ * main text has been scrolled to and the article finishes — the reader
+ * never has to walk the notes to reach the document bottom.
+ */
+export function mainTextEndInView(input: {
+  notesTop: number | null;
+  viewportHeight: number;
+}): boolean {
+  return input.notesTop !== null && input.notesTop < input.viewportHeight;
+}
+
+/**
  * isFinalPage — the PAGINATED-mode at-end predicate: the committed page is
  * the last page of a MULTI-page set (the 260908-oht final-page pin
  * eligibility). A one-page set is deliberately NOT at-end (POLISH-02 —
@@ -113,14 +128,22 @@ export function isFinalPage(pageIndex: number, pageCount: number): boolean {
 }
 
 /**
- * endPinOffset — the ONE end-pin: the article's full normalized-text
- * grapheme total (graphemeLength(article)). Every completion path
- * persists or anchors at exactly this offset — the scroll-bottom passive
- * save, the final-page committed anchor, and the explicit "Mark read and
- * close" gesture — so they can never disagree about what "the end" is.
+ * endPinOffset — the ONE end-pin: the end of the article's MAIN TEXT
+ * (mainTextLength — the whole normalized-text total when the article has
+ * no notes). Every completion path persists or anchors at exactly this
+ * offset — the scroll-bottom passive save, the final-page committed
+ * anchor, and the explicit "Mark read and close" gesture — so they can
+ * never disagree about what "the end" is.
+ *
+ * Issue #58 — the notes at the end of an article are reference material,
+ * not part of reading it through: the article finishes at the end of the
+ * main text, never by reaching (or walking) the notes. A saved position
+ * inside the notes lies past this pin and reads finished by the threshold's
+ * clamp; keeping excursion positions out of the notes is the Footnote
+ * excursion's job (CONTEXT.md).
  */
 export function endPinOffset(article: CanonicalArticle): number {
-  return graphemeLength(article);
+  return mainTextLength(article);
 }
 
 /**
@@ -146,7 +169,15 @@ export type RestoreLanding = "end" | "passage";
  * path). Pure decision only: the DOM scroll itself stays at the call
  * site.
  */
-export function landingForRestore(offset: number, total: number): RestoreLanding {
+export function landingForRestore(
+  offset: number,
+  total: number,
+  streamEnd: number = total,
+): RestoreLanding {
+  // Issue #58 — `total` is the end pin (the main-text end); `streamEnd` is
+  // the whole coordinate stream's end (past the notes). A position strictly
+  // inside the notes is a passage: it restores into its note.
+  if (offset > total && offset < streamEnd) return "passage";
   return isAtArticleEnd(offset, total) ? "end" : "passage";
 }
 

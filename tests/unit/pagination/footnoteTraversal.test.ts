@@ -13,6 +13,7 @@ import {
   graphemeLength,
   inlineText,
   normalizeText,
+  mainTextLength,
 } from "../../../src/content/normalizeText";
 import {
   blockWindowForOffset,
@@ -650,41 +651,38 @@ describe("a note with several paragraphs longer than a page (issue #59)", () => 
 });
 
 describe("anchors speak footnote coordinates (issue #235)", () => {
-  it("gives a short footnoted work a reachable completing note page", () => {
+  // Issue #58 — the notes are not reading (rewritten from #235's "the note
+  // pages finish the work"): the page holding the end of the MAIN TEXT pins
+  // the end-pin; note pages anchor at their own passage, past that pin.
+  it("a short footnoted work's note pages anchor their own passage, never the pin", () => {
     const article = articleWith();
     expect(canUseBlockWindows(article)).toBe(true);
     const windows = blockWindows(article);
-    const body = paginate(article, windows[0]!);
-    expect(pageAnchorOffset(article, body.pages, body.pages.length - 1)).toBeLessThan(
-      graphemeLength(article),
-    );
     const notes = paginate(article, windows.at(-1)!);
     expect(notes.status).toBe("ok");
-    expect(pageAnchorOffset(article, notes.pages, notes.pages.length - 1)).toBe(
-      graphemeLength(article),
+    const last = notes.pages.length - 1;
+    expect(pageAnchorOffset(article, notes.pages, last)).toBe(
+      pageStartGlobalOffset(article, notes.pages[last]!),
     );
+    expect(pageAnchorOffset(article, notes.pages, last)).toBeGreaterThan(mainTextLength(article));
   });
 
-  it("pins the work end only when the LAST footnote row is fully reached", () => {
+  it("pins the end of the main text on the last body page, not on the notes", () => {
     const article = longFootnotedWork();
     const windows = blockWindows(article);
     const lastBodyWindow = windows.filter((w) => w.startFootnote === undefined).at(-1)!;
     const bodyResult = paginate(article, lastBodyWindow);
     const bodyLast = bodyResult.pages.length - 1;
-    // Body-window end must NOT finish a footnoted work: the anchor is the
-    // page's own passage, never the total.
-    expect(pageAnchorOffset(article, bodyResult.pages, bodyLast)).toBe(
-      pageStartGlobalOffset(article, bodyResult.pages[bodyLast]!),
-    );
-    expect(pageAnchorOffset(article, bodyResult.pages, bodyLast)).toBeLessThan(
-      articleGraphemeIndex(article).totalGraphemes,
-    );
-    // The final FOOTNOTE page does complete the work.
+    // The body's end finishes the work: the anchor is the end-pin (the end of
+    // the main text), well short of the stream's total.
+    expect(pageAnchorOffset(article, bodyResult.pages, bodyLast)).toBe(mainTextLength(article));
+    expect(mainTextLength(article)).toBeLessThan(articleGraphemeIndex(article).totalGraphemes);
+    // The final FOOTNOTE page is not the pin: its own passage.
     const fnWindow = windows.at(-1)!;
     const fnResult = paginate(article, fnWindow);
     const fnLast = fnResult.pages.length - 1;
     expect(pageAnchorOffset(article, fnResult.pages, fnLast)).toBe(
-      articleGraphemeIndex(article).totalGraphemes,
+      pageStartGlobalOffset(article, fnResult.pages[fnLast]!),
     );
   });
 

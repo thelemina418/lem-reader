@@ -11,6 +11,8 @@
 //     every consumer shares, and the label map whose missing key is the
 //     empty state.
 import { describe, expect, it } from "vitest";
+import { ArticleSchema } from "../../../src/content/schema";
+import { mainTextLength } from "../../../src/content/normalizeText";
 import { ReadingSessionRecordSchema } from "../../../src/content/schema";
 import type { ReadingSessionRecord } from "../../../src/content/schema";
 import {
@@ -199,5 +201,21 @@ describe("estimatedReadingTimeLabel — the whole-article estimate (issue #40)",
 
   it("never reads like the accrued 'read here' line", () => {
     expect(estimatedReadingTimeLabel(1428 * 5)).not.toMatch(/read here/);
+  });
+
+  // Issue #58 — the notes at the end of an article are reference material,
+  // not reading: the estimate counts the main text only. Worked example: a
+  // main text of exactly 12 minutes (1428 × 12 graphemes) with 30 minutes of
+  // notes still reads "about 12 min".
+  it("leaves the notes out of the estimate", () => {
+    const article = ArticleSchema.parse({
+      id: "noted",
+      revision: 1,
+      lang: "en",
+      provenance: { title: "Noted", retrievedAt: "2026-01-01T00:00:00Z", originalHtmlHash: "x" },
+      blocks: [{ kind: "paragraph", content: [{ text: "a".repeat(1428 * 12), marks: [] }] }],
+      footnotes: [{ id: "fn-1", content: [{ text: "n".repeat(1428 * 30), marks: [] }] }],
+    });
+    expect(estimatedReadingTimeLabel(mainTextLength(article))).toBe("about 12 min read");
   });
 });
