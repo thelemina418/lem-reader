@@ -41,6 +41,7 @@ import type { Book, CanonicalArticle } from "../../content/schema";
 import { TagEntry } from "../../reader/TagEntry";
 import { setBookTags } from "./tagsStore";
 import {
+  bookGraphemeTotal,
   chapterOrdinal,
   deriveBookProgress,
   orderedLiveChapters,
@@ -99,9 +100,8 @@ export function BookRow({ book, chapters, snapshot, onRemove }: BookRowProps) {
   const estimatedReadingTime = useMemo(
     () =>
       estimatedReadingTimeLabel(
-        orderedChapters.reduce(
-          (sum, chapter) => sum + (snapshot.totalsByArticleId.get(chapter.id) ?? 0),
-          0,
+        bookGraphemeTotal(orderedChapters, (articleId) =>
+          snapshot.totalsByArticleId.get(articleId),
         ),
       ),
     [orderedChapters, snapshot.totalsByArticleId],

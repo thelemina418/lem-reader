@@ -147,3 +147,17 @@ export function chapterOrdinal(book: Book, chapterId: string): number {
   const index = book.chapterArticleIds.indexOf(chapterId);
   return index === -1 ? 0 : index + 1;
 }
+
+/**
+ * bookGraphemeTotal — issue #40: the book's ONE estimated-reading-time
+ * input, the sum of its live chapters' grapheme totals (read from the
+ * snapshot's ONE totals fold). A chapter with no total contributes 0.
+ */
+export function bookGraphemeTotal(
+  liveChapters: ReadonlyArray<{ readonly id: string }>,
+  textLengthOf: (articleId: string) => number | undefined,
+): number {
+  let total = 0;
+  for (const chapter of liveChapters) total += textLengthOf(chapter.id) ?? 0;
+  return total;
+}

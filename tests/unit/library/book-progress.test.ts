@@ -12,6 +12,7 @@
 // before.
 import { describe, expect, it } from "vitest";
 import {
+  bookGraphemeTotal,
   deriveBookProgress,
   resolveResumeChapterId,
   chapterOrdinal,
@@ -204,5 +205,18 @@ describe("chapterOrdinal (D12-06 — the book's own TOC numbering)", () => {
   it("returns 0 for an id outside the record (partial-import tolerance)", () => {
     const book = makeBook(["ch-alpha"]);
     expect(chapterOrdinal(book, "ch-unknown")).toBe(0);
+  });
+});
+
+describe("bookGraphemeTotal (issue #40 — the book's one estimate input)", () => {
+  it("sums the live chapters' totals; chapters without a total add nothing", () => {
+    const totals = new Map([
+      ["c0", 100],
+      ["c1", 250],
+    ]);
+    expect(
+      bookGraphemeTotal([{ id: "c0" }, { id: "c1" }, { id: "c2" }], (id) => totals.get(id)),
+    ).toBe(350);
+    expect(bookGraphemeTotal([], (id) => totals.get(id))).toBe(0);
   });
 });

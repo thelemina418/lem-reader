@@ -146,10 +146,13 @@ export function timeReadLabels(stats: ReadingStats): Map<string, string> {
 // per minute, applied to every language and source alike (YouTube
 // transcripts included — no special case).
 //
-// What counts is exactly the D-05 normalized text the totals fold
-// segments: prose, headings, quotes, lists, captions, footnotes and code
-// (verbatim). Images add no time allowance (an image's alt text is part of
-// the D-05 stream, and is short enough not to move the estimate).
+// What counts is the D-05 normalized text the totals fold segments: prose,
+// headings, quotes, lists, captions, footnotes and code (verbatim). Images
+// add no per-image time allowance. The stream also carries a few short
+// incidental strings — image alt text, footnote markers like "[1]", and
+// the plain description of an unsupported block — which are too small to
+// move a minute-rounded estimate, so they are left in rather than forking
+// the one fold.
 
 /** Typical silent-reading pace, in words per minute. */
 const READING_PACE_WORDS_PER_MINUTE = 238;
