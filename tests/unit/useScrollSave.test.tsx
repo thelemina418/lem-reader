@@ -231,6 +231,25 @@ describe("useScrollSave — the landed write broadcasts ONE invalidation (issue 
     broadcasts.unsub();
   });
 
+  // Spec #66 review S2 (story 14) — closing mid-excursion resumes at the
+  // reference: an IMMEDIATE save during a Footnote excursion (read-aloud
+  // finishing a note) persists the held reference, exactly like a
+  // scheduled one. Callers that mean to leave the excursion end it first.
+  it("saveLocationNow persists the excursion's held reference", async () => {
+    const { useScrollSave } = await loadHook();
+    const broadcasts = await subscribeBroadcastCounter();
+
+    const { result } = renderHook(() =>
+      useScrollSave(article, { current: null }, { heldOffset: () => 4 }),
+    );
+    result.current.saveLocationNow(9);
+
+    await waitFor(() => expect(broadcasts.count()).toBe(1), { timeout: 800 });
+    const rows = await loadRows();
+    expect(rows[0]?.graphemeOffset).toBe(4);
+    broadcasts.unsub();
+  });
+
   it("a FAILED write routes STATE-05 and broadcasts nothing", async () => {
     const { useScrollSave } = await loadHook();
     const saveLocationMock = await loadSaveLocationMock();

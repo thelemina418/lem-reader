@@ -1241,6 +1241,7 @@ export function ArticleView({
     // the ONE end-pin offset as the session's end position before the
     // unmount flush closes the row.
     noteActivity(endPinOffset(article));
+    excursionRef.current = null; // spec #66 — an explicit finish leaves any excursion
     saveLocationNow(endPinOffset(article));
   }, [article, saveLocationNow, noteActivity]);
 
@@ -1265,6 +1266,7 @@ export function ArticleView({
         direction === "next"
           ? endPinOffset(article)
           : (surfaceRef.current?.getCurrentAnchorOffset() ?? currentAnchorOffsetRef.current);
+      excursionRef.current = null; // spec #66 — leaving the chapter ends any excursion
       saveLocationNow(departing);
     },
     [article, saveLocationNow],
@@ -1396,6 +1398,9 @@ export function ArticleView({
         // Issue #58 — a session started inside a note read that note only:
         // it is not reading the article through. The position stays at the
         // note's end (never the main-text end-pin), and no chapter handoff.
+        // Spec #66 review S2 — mid-excursion, the save keeps the reference
+        // (useScrollSave's hold covers saveLocationNow), so closing after
+        // listening to a note still resumes where the reader left from.
         if (info.noteEnd !== undefined) {
           currentAnchorOffsetRef.current = info.noteEnd;
           lastPreciseAnchorRef.current = info.noteEnd;

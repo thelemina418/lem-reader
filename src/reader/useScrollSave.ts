@@ -92,8 +92,8 @@ interface UseScrollSaveOptions {
    * Spec #66 / issue #57 — the Footnote excursion's hold. While it returns a
    * number, every SCHEDULED save (scroll, page commit, listened progress)
    * persists that offset — the reference the reader followed — instead of
-   * where the reader is in the notes. Explicit saveLocationNow calls stay
-   * caller-owned (Mark read, chapter departure decide their own offset).
+   * where the reader is in the notes. saveLocationNow is held too (review
+   * S2); callers that leave the excursion on purpose end it first.
    */
   heldOffset?: () => number | null;
 }
@@ -262,11 +262,16 @@ export function useScrollSave(
   const saveLocationNow = useCallback<ScheduleLocationSave>((graphemeOffset: number) => {
     const currentArticle = articleRef.current;
     if (!currentArticle) return;
+    // Spec #66 review S2 — the excursion's hold covers immediate saves too
+    // (story 14: closing mid-excursion resumes at the reference). A caller
+    // that deliberately leaves the excursion (Mark read, a chapter
+    // departure) ends it before saving.
+    const held = optionsRef.current?.heldOffset?.() ?? null;
     pendingRef.current = {
       schemaVersion: 1,
       articleId: currentArticle.id,
       revision: currentArticle.revision,
-      graphemeOffset,
+      graphemeOffset: held ?? graphemeOffset,
       savedAt: new Date().toISOString(),
     };
     if (saveTimer.current !== null) {
