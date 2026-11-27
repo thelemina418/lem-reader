@@ -203,6 +203,13 @@ export interface PaginatedSurfaceProps {
    * itself), so follower turns stay silent here. Optional.
    */
   onUserTurn?: () => void;
+  /**
+   * Spec #66 / issue #57 — the footnote excursion's routing for a clicked
+   * footnote link (reference or return): the element id to land on, or
+   * null to use the link's own target. The windowed surface's delegated
+   * footnote handler consults it before navigating. Optional.
+   */
+  routeFootnoteLink?: (anchor: HTMLAnchorElement) => string | null;
   /** Window boundaries are not work boundaries; the host loads their neighbors. */
   hasPreviousWindow?: boolean;
   hasNextWindow?: boolean;

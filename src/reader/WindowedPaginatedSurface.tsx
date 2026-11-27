@@ -502,7 +502,11 @@ export const WindowedPaginatedSurface = forwardRef<PaginatedSurfaceHandle, Props
           "a[href^='#fn-']",
         ) as HTMLAnchorElement | null;
         if (!anchor) return;
-        const href = anchor.getAttribute("href");
+        // Issue #57 — the host's excursion routing may redirect a return
+        // to the reference actually followed (and records the excursion
+        // when a reference is followed).
+        const routed = propsRef.current.routeFootnoteLink?.(anchor);
+        const href = routed ? `#${routed}` : anchor.getAttribute("href");
         if (!href) return;
         const target = footnoteAnchorOffset(article, href);
         if (target === null) return; // unknown id — let the browser no-op
