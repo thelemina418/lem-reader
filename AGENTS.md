@@ -10,7 +10,7 @@ Lem Reader is a calm, booklike reader for web articles and documents, designed f
 
 ### Constraints
 
-- **Content scope**: Text, headings, links, quotations, lists, images, captions, footnotes, and code blocks — rich long-form publishing, not full-web compatibility (tables/math/embeds excluded).
+- **Content scope**: Text, headings, links, quotations, lists, images, captions, footnotes, and code blocks — rich long-form publishing, not full-web compatibility (tables and math excluded). Embedded content appears only as embed cards captured at ingest — no third-party code loads while reading (ADR 0015).
 - **Reading modes**: Paginated and scrolling modes must both remain available — accessibility and reader preference take precedence over enforcing pagination.
 - **Accessibility**: Semantic HTML, keyboard navigation, screen-reader compatibility, zoom, visible focus, and reduced motion are foundational.
 - **Persistence**: Reading position, highlights, notes, library, and preferences are local-first — cross-device via versioned export/import, not accounts.

@@ -103,3 +103,35 @@ _Avoid_: undo timer, auto-dismiss (that is the toolbar leaving)
 **Escape ladder**:
 Escape acts on the topmost layer only: the open dialog dismisses (saving), then the undo grace fires, then the fresh selection toolbar clears its selection, then an armed slot hold cancels. Escape is never a blanket delete.
 _Avoid_: Escape deletes the highlight (as an unqualified description)
+
+**Footnote reference**:
+The publisher's marker inside the text (such as "1", "[2]", "*") that leads to its footnote. The marker keeps the publisher's own wording and stays part of the article's text, but it is never spoken by read-aloud.
+_Avoid_: citation (a footnote need not cite anything), superscript (a presentation, not the concept)
+
+**Footnote**:
+The note a footnote reference leads to, collected in the article's notes at its end, with a return to the reference.
+_Avoid_: endnote (same thing to the reader), reference (that is the marker)
+
+**Footnote excursion**:
+A trip from a footnote reference to its footnote and back. Not reading progress: the reading position stays at the reference until the reader returns or reads on from the notes themselves, and reaching the notes never finishes the article.
+_Avoid_: jump (as a noun), navigation (too general)
+
+**Correction**:
+One change the reader makes to how an article was processed — giving a block a different type, moving words across a block boundary, splitting, merging, or hiding a block. Corrections sit on top of the article as it was ingested, which is never overwritten: each can be undone on its own, and the original can always be restored.
+_Avoid_: edit (that is changing a note or highlight), repair (that is the app reprocessing a PDF), fix
+
+**Correction view**:
+The way of viewing an article while making corrections, entered and left like the reading-mode toggle without losing the reader's place. Always a scrolling column with block boundaries visible.
+_Avoid_: edit mode, editor
+
+**Hidden block**:
+A block the reader has hidden by correction: gone from reading, read-aloud, and reading time, but still shown dimmed in the correction view so it can be brought back. Never deleted.
+_Avoid_: deleted block, removed content
+
+**Reprocessing**:
+Running an existing article through ingestion again — re-fetching its address, or the reader choosing the original file again — so it gains what ingestion has since learned. Always the reader's explicit choice, previewed before it applies; never automatic. The reader's corrections are re-applied, and any that no longer fit are listed, never dropped silently.
+_Avoid_: re-import (that is library import), refresh, sync
+
+**Embed card**:
+What the article shows in place of embedded content from another service — a video, a social post — captured when the article was added: what it is, who made it, its text or title, and a way to open the original. Nothing from the other service is loaded while reading. A card that could not capture the content says so on itself.
+_Avoid_: embed (for what the reader sees), widget, player, preview
