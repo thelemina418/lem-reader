@@ -37,7 +37,7 @@ import {
 // Issue #176 — the shared zoom-compensation factor (the §25 register; the
 // inline left/top/width are divided by it for the zoomed local space).
 import { hasNoteContent } from "../../annotations/noteText";
-// Issue #222 — the ONE color control: one row of five slot pills (the named
+// Issue #222 — the ONE color control: one wrapping row of slot pills (the named
 // color picker is gone — the slots are THE color vocabulary).
 import { HighlightSlotEntry } from "./HighlightSlotEntry";
 import { TagEntry } from "../TagEntry";
@@ -152,7 +152,7 @@ export function NotePopover(): React.ReactElement | null {
     noteSavePhase,
     resetNoteSaveState,
     deleteHighlight,
-    // Issue #195 — the five numbered slots ride the overlay context (the
+    // Issue #195 — the numbered slots ride the overlay context (the
     // host feeds its settings record in; no settings dependency here).
     highlightSlots,
     // Issue #196 — the active-theme base pair for the custom-color tints

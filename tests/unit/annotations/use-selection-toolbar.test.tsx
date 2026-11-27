@@ -854,11 +854,17 @@ describe("highlight slots (issue #195)", () => {
   /** Custom slot configuration: renamed slot 1 with tags, and slot 3 the
    * explicit default (recolored + tagged). */
   const SLOTS: HighlightSlot[] = [
-    { name: "Reading list", color: "default", customColorActive: false, tags: ["to-read"] },
-    { name: "Yellow", color: "yellow", customColorActive: false, tags: [] },
-    { name: "Key ideas", color: "blue", customColorActive: false, tags: ["key-idea"] },
-    { name: "Blue", color: "blue", customColorActive: false, tags: [] },
-    { name: "Pink", color: "pink", customColorActive: false, tags: [] },
+    {
+      id: "t-1",
+      name: "Reading list",
+      color: "default",
+      customColorActive: false,
+      tags: ["to-read"],
+    },
+    { id: "t-2", name: "Yellow", color: "yellow", customColorActive: false, tags: [] },
+    { id: "t-3", name: "Key ideas", color: "blue", customColorActive: false, tags: ["key-idea"] },
+    { id: "t-4", name: "Blue", color: "blue", customColorActive: false, tags: [] },
+    { id: "t-5", name: "Pink", color: "pink", customColorActive: false, tags: [] },
   ];
 
   function releasePointerOnParagraph() {
@@ -1086,11 +1092,17 @@ describe("highlight slots (issue #195)", () => {
 
 describe("held-number selection (issue #197)", () => {
   const SLOTS: HighlightSlot[] = [
-    { name: "Reading list", color: "default", customColorActive: false, tags: ["to-read"] },
-    { name: "Yellow", color: "yellow", customColorActive: false, tags: [] },
-    { name: "Key ideas", color: "blue", customColorActive: false, tags: ["key-idea"] },
-    { name: "Blue", color: "blue", customColorActive: false, tags: [] },
-    { name: "Pink", color: "pink", customColorActive: false, tags: [] },
+    {
+      id: "t-6",
+      name: "Reading list",
+      color: "default",
+      customColorActive: false,
+      tags: ["to-read"],
+    },
+    { id: "t-7", name: "Yellow", color: "yellow", customColorActive: false, tags: [] },
+    { id: "t-8", name: "Key ideas", color: "blue", customColorActive: false, tags: ["key-idea"] },
+    { id: "t-9", name: "Blue", color: "blue", customColorActive: false, tags: [] },
+    { id: "t-10", name: "Pink", color: "pink", customColorActive: false, tags: [] },
   ];
 
   function paragraphEl(): Element {
@@ -1696,11 +1708,17 @@ describe("armed-hold live paint (issue #220)", () => {
 
 describe("stale-arm hygiene (issue #220)", () => {
   const SLOTS_HELD: HighlightSlot[] = [
-    { name: "Reading list", color: "default", customColorActive: false, tags: ["to-read"] },
-    { name: "Yellow", color: "yellow", customColorActive: false, tags: [] },
-    { name: "Key ideas", color: "blue", customColorActive: false, tags: ["key-idea"] },
-    { name: "Blue", color: "blue", customColorActive: false, tags: [] },
-    { name: "Pink", color: "pink", customColorActive: false, tags: [] },
+    {
+      id: "t-11",
+      name: "Reading list",
+      color: "default",
+      customColorActive: false,
+      tags: ["to-read"],
+    },
+    { id: "t-12", name: "Yellow", color: "yellow", customColorActive: false, tags: [] },
+    { id: "t-13", name: "Key ideas", color: "blue", customColorActive: false, tags: ["key-idea"] },
+    { id: "t-14", name: "Blue", color: "blue", customColorActive: false, tags: [] },
+    { id: "t-15", name: "Pink", color: "pink", customColorActive: false, tags: [] },
   ];
 
   it("a failed-capture armed release with the digit already up disarms: a later plain drag stays ordinary", async () => {
@@ -1836,11 +1854,17 @@ describe("cancelled gestures and pending creation grace", () => {
 
 describe("armed release never flashes the toolbar (field-feedback round)", () => {
   const SLOTS: HighlightSlot[] = [
-    { name: "Reading list", color: "default", customColorActive: false, tags: ["to-read"] },
-    { name: "Yellow", color: "yellow", customColorActive: false, tags: [] },
-    { name: "Key ideas", color: "blue", customColorActive: false, tags: ["key-idea"] },
-    { name: "Blue", color: "blue", customColorActive: false, tags: [] },
-    { name: "Pink", color: "pink", customColorActive: false, tags: [] },
+    {
+      id: "t-16",
+      name: "Reading list",
+      color: "default",
+      customColorActive: false,
+      tags: ["to-read"],
+    },
+    { id: "t-17", name: "Yellow", color: "yellow", customColorActive: false, tags: [] },
+    { id: "t-18", name: "Key ideas", color: "blue", customColorActive: false, tags: ["key-idea"] },
+    { id: "t-19", name: "Blue", color: "blue", customColorActive: false, tags: [] },
+    { id: "t-20", name: "Pink", color: "pink", customColorActive: false, tags: [] },
   ];
 
   function paragraphEl(): Element {
@@ -1947,11 +1971,17 @@ describe("armed release never flashes the toolbar (field-feedback round)", () =>
 
 describe("digit tap commits (field-feedback round)", () => {
   const SLOTS: HighlightSlot[] = [
-    { name: "Reading list", color: "default", customColorActive: false, tags: ["to-read"] },
-    { name: "Yellow", color: "yellow", customColorActive: false, tags: [] },
-    { name: "Key ideas", color: "blue", customColorActive: false, tags: ["key-idea"] },
-    { name: "Blue", color: "blue", customColorActive: false, tags: [] },
-    { name: "Pink", color: "pink", customColorActive: false, tags: [] },
+    {
+      id: "t-21",
+      name: "Reading list",
+      color: "default",
+      customColorActive: false,
+      tags: ["to-read"],
+    },
+    { id: "t-22", name: "Yellow", color: "yellow", customColorActive: false, tags: [] },
+    { id: "t-23", name: "Key ideas", color: "blue", customColorActive: false, tags: ["key-idea"] },
+    { id: "t-24", name: "Blue", color: "blue", customColorActive: false, tags: [] },
+    { id: "t-25", name: "Pink", color: "pink", customColorActive: false, tags: [] },
   ];
   function pressDigit(key: string): void {
     fireEvent(window, new KeyboardEvent("keydown", { key, bubbles: true }));
@@ -2022,11 +2052,17 @@ describe("digit tap commits (field-feedback round)", () => {
 
 describe("Enter commits the default slot (field-feedback round)", () => {
   const SLOTS: HighlightSlot[] = [
-    { name: "Reading list", color: "default", customColorActive: false, tags: ["to-read"] },
-    { name: "Yellow", color: "yellow", customColorActive: false, tags: [] },
-    { name: "Key ideas", color: "blue", customColorActive: false, tags: ["key-idea"] },
-    { name: "Blue", color: "blue", customColorActive: false, tags: [] },
-    { name: "Pink", color: "pink", customColorActive: false, tags: [] },
+    {
+      id: "t-26",
+      name: "Reading list",
+      color: "default",
+      customColorActive: false,
+      tags: ["to-read"],
+    },
+    { id: "t-27", name: "Yellow", color: "yellow", customColorActive: false, tags: [] },
+    { id: "t-28", name: "Key ideas", color: "blue", customColorActive: false, tags: ["key-idea"] },
+    { id: "t-29", name: "Blue", color: "blue", customColorActive: false, tags: [] },
+    { id: "t-30", name: "Pink", color: "pink", customColorActive: false, tags: [] },
   ];
 
   it("Enter over a valid toolbar selection creates with the EXPLICIT default slot", async () => {

@@ -171,7 +171,7 @@ describe("bundle v10 — collections round trip (issue #248)", () => {
       completions?: unknown[];
       collectionActiveEntries?: unknown[];
     };
-    expect(bundleJson.schemaVersion).toBe(10);
+    expect(bundleJson.schemaVersion).toBe(11);
     expect(bundleJson.collections).toEqual([]);
     expect(bundleJson.completions).toEqual([]);
     expect(bundleJson.collectionActiveEntries).toEqual([]);
@@ -219,11 +219,11 @@ describe("bundle v10 — collections round trip (issue #248)", () => {
     expect(await db.collectionActiveEntries.toArray()).toEqual([]);
   });
 
-  it("forward-refuses a v11 bundle at the peek", async () => {
+  it("forward-refuses a v12 bundle at the peek", async () => {
     const { validateBundle } = await loadService();
     const entries = {
       "bundle.json": new TextEncoder().encode(
-        JSON.stringify({ schemaVersion: 11, exportedAt: "x", appVersion: "x" }),
+        JSON.stringify({ schemaVersion: 12, exportedAt: "x", appVersion: "x" }),
       ),
       "manifest.json": new TextEncoder().encode(JSON.stringify({})),
     };

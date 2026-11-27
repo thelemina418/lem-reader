@@ -63,11 +63,23 @@ const ALL_SKIP = {
  * recolored, and the EXPLICIT default moved to slot 3). Issue #222 — every
  * slot carries its dormancy key (all named sources: inactive). */
 const EDITED_SLOTS: HighlightSlot[] = [
-  { name: "Reading list", color: "default", customColorActive: false, tags: ["to-read"] },
-  { name: "Yellow", color: "yellow", customColorActive: false, tags: [] },
-  { name: "Key ideas", color: "blue", customColorActive: false, tags: ["key-idea", "essays"] },
-  { name: "Blue", color: "blue", customColorActive: false, tags: [] },
-  { name: "Pink", color: "pink", customColorActive: false, tags: [] },
+  {
+    id: "slot-1",
+    name: "Reading list",
+    color: "default",
+    customColorActive: false,
+    tags: ["to-read"],
+  },
+  { id: "slot-2", name: "Yellow", color: "yellow", customColorActive: false, tags: [] },
+  {
+    id: "slot-3",
+    name: "Key ideas",
+    color: "blue",
+    customColorActive: false,
+    tags: ["key-idea", "essays"],
+  },
+  { id: "slot-4", name: "Blue", color: "blue", customColorActive: false, tags: [] },
+  { id: "slot-5", name: "Pink", color: "pink", customColorActive: false, tags: [] },
 ];
 
 /** Issue #196 — the same edited slots with slot 3 carrying a custom color
@@ -76,22 +88,24 @@ const EDITED_SLOTS: HighlightSlot[] = [
  * (customColorActive: true — the only semantics #196 had). */
 const EDITED_SLOTS_CUSTOM: HighlightSlot[] = [
   {
+    id: "slot-1",
     name: "Reading list",
     color: "default",
     customColor: "#e9c46a",
     customColorActive: true,
     tags: ["to-read"],
   },
-  { name: "Yellow", color: "yellow", customColorActive: false, tags: [] },
+  { id: "slot-2", name: "Yellow", color: "yellow", customColorActive: false, tags: [] },
   {
+    id: "slot-3",
     name: "Key ideas",
     color: "blue",
     customColor: "#1234AB",
     customColorActive: true,
     tags: ["key-idea", "essays"],
   },
-  { name: "Blue", color: "blue", customColorActive: false, tags: [] },
-  { name: "Pink", color: "pink", customColorActive: false, tags: [] },
+  { id: "slot-4", name: "Blue", color: "blue", customColorActive: false, tags: [] },
+  { id: "slot-5", name: "Pink", color: "pink", customColorActive: false, tags: [] },
 ];
 
 function zipFileOf(entries: Record<string, Uint8Array>): File {
@@ -142,7 +156,7 @@ describe("highlight slots travel in the versioned bundle (issue #195)", () => {
     await saveSettings({
       ...current.DEFAULT_SETTINGS,
       highlightSlots: EDITED_SLOTS,
-      defaultHighlightSlot: 2,
+      defaultHighlightSlotId: EDITED_SLOTS[2]!.id,
     });
 
     const { buildBundle, validateBundle, applyImport } = await loadService();
@@ -157,7 +171,7 @@ describe("highlight slots travel in the versioned bundle (issue #195)", () => {
     expect(validation.ok).toBe(true);
     if (!validation.ok) return;
     expect(validation.bundle.preferences.highlightSlots).toEqual(EDITED_SLOTS);
-    expect(validation.bundle.preferences.defaultHighlightSlot).toBe(2);
+    expect(validation.bundle.preferences.defaultHighlightSlotId).toBe(EDITED_SLOTS[2]!.id);
 
     const preview = await detectImportPreview(validation.bundle);
     const plan = await resolveImportPlan(
@@ -175,7 +189,7 @@ describe("highlight slots travel in the versioned bundle (issue #195)", () => {
     expect(result.ok).toBe(true);
     if (!result.ok) return;
     expect(result.settings.highlightSlots).toEqual(EDITED_SLOTS);
-    expect(result.settings.defaultHighlightSlot).toBe(2);
+    expect(result.settings.defaultHighlightSlotId).toBe(EDITED_SLOTS[2]!.id);
   });
 
   it("a pre-#195 export (no slot fields in preferences) validates via the legacy tolerance and imports hydrated", async () => {
@@ -192,7 +206,7 @@ describe("highlight slots travel in the versioned bundle (issue #195)", () => {
     expect(prefs.highlightSlots).toBeDefined(); // the current writer emits the fields
     const exportEraPrefs: Record<string, unknown> = { ...prefs };
     delete exportEraPrefs.highlightSlots;
-    delete exportEraPrefs.defaultHighlightSlot;
+    delete exportEraPrefs.defaultHighlightSlotId;
     exportEraPrefs.schemaVersion = 6;
     const exportEraBundle = { ...raw, preferences: exportEraPrefs };
     const parsed = ExportBundleSchema.parse(exportEraBundle);
@@ -210,7 +224,7 @@ describe("highlight slots travel in the versioned bundle (issue #195)", () => {
     // The parse hydrated the slot fields (Pitfall 9) — the tolerance accepted
     // the export-era hash and the imported row carries the shipped slots.
     expect(validation.bundle.preferences.highlightSlots).toBeDefined();
-    expect(validation.bundle.preferences.defaultHighlightSlot).toBe(0);
+    expect(validation.bundle.preferences.defaultHighlightSlotId).toBe("slot-1");
 
     const preview = await detectImportPreview(validation.bundle);
     const plan = await resolveImportPlan(
@@ -227,7 +241,7 @@ describe("highlight slots travel in the versioned bundle (issue #195)", () => {
     expect(result.ok).toBe(true);
     if (!result.ok) return;
     expect(result.settings.highlightSlots).toHaveLength(5);
-    expect(result.settings.defaultHighlightSlot).toBe(0);
+    expect(result.settings.defaultHighlightSlotId).toBe("slot-1");
   });
 
   it("a claimed-v7 preferences block missing a slot field refuses as corrupted (tampering stays detected)", async () => {
@@ -268,7 +282,7 @@ describe("highlight slots travel in the versioned bundle (issue #195)", () => {
     await saveSettings({
       ...current.DEFAULT_SETTINGS,
       highlightSlots: EDITED_SLOTS_CUSTOM,
-      defaultHighlightSlot: 0,
+      defaultHighlightSlotId: EDITED_SLOTS_CUSTOM[0]!.id,
     });
 
     const { buildBundle, validateBundle, applyImport } = await loadService();
@@ -348,5 +362,171 @@ describe("highlight slots travel in the versioned bundle (issue #195)", () => {
     const highlights = await loadAllHighlights();
     expect(settings.ok && settings.settings.highlightSlots[0]?.customColor).toBe("#e9c46a");
     expect(highlights.find((h) => h.id === "hl-custom-pref")?.customColor).toBe("#e9c46a");
+  });
+});
+
+// ── Issue #41 (ADR 0012) — the ordered slot list with stable identities ──────
+
+/** Reshape a REAL current bundle into the pre-#41 export-era shape: bundle
+ * v10, preferences v8 with id-less slots and the default as an index — and
+ * a manifest computed over exactly those bytes (what a v10 writer emitted;
+ * JSON.stringify speaks insertion order, the legacy view uses the raw slot
+ * objects verbatim). */
+async function preIdentityExport(defaultIndex: number): Promise<{
+  bundle: Record<string, unknown>;
+  manifest: Record<string, unknown>;
+}> {
+  const { buildBundle } = await loadService();
+  const { sha256Hex } = await loadManifest();
+  const { bytes } = await buildBundle();
+  const raw = JSON.parse(strFromU8(unzipSync(bytes)["bundle.json"]!)) as Record<string, unknown>;
+  const manifest = JSON.parse(strFromU8(unzipSync(bytes)["manifest.json"]!)) as {
+    blocks: Record<string, string>;
+  };
+  const prefs = { ...(raw.preferences as Record<string, unknown>) };
+  const slots = (prefs.highlightSlots as Array<Record<string, unknown>>).map(
+    ({ id: _id, ...rest }) => rest,
+  );
+  delete prefs.highlightSlots;
+  delete prefs.defaultHighlightSlotId;
+  const exportEraPrefs = {
+    ...prefs,
+    schemaVersion: 8,
+    highlightSlots: slots,
+    defaultHighlightSlot: defaultIndex,
+  };
+  manifest.blocks.preferences = await sha256Hex(strToU8(JSON.stringify(exportEraPrefs)));
+  return {
+    bundle: { ...raw, schemaVersion: 10, preferences: exportEraPrefs },
+    manifest,
+  };
+}
+
+describe("ordered highlight slots travel in the versioned bundle (issue #41)", () => {
+  beforeEach(async () => {
+    await wipeDatabase();
+  });
+
+  it("writers emit bundle schemaVersion 11 with identity-bearing slots", async () => {
+    const { buildBundle } = await loadService();
+    const { bytes } = await buildBundle();
+    const raw = JSON.parse(strFromU8(unzipSync(bytes)["bundle.json"]!)) as {
+      schemaVersion: number;
+      preferences: { schemaVersion: number; highlightSlots: Array<{ id: string }> };
+    };
+    expect(raw.schemaVersion).toBe(11);
+    expect(raw.preferences.schemaVersion).toBe(9);
+    expect(raw.preferences.highlightSlots.every((s) => typeof s.id === "string")).toBe(true);
+  });
+
+  it("an older five-slot bundle imports as five, with the default mapped from its index", async () => {
+    const { saveSettings } = await import("../../../src/persistence/settingsStore");
+    const current = await import("../../../src/settings/defaults");
+    await saveSettings({ ...current.DEFAULT_SETTINGS, highlightSlots: EDITED_SLOTS });
+    const { bundle, manifest } = await preIdentityExport(2);
+
+    await wipeDatabase();
+    const { validateBundle, applyImport } = await loadService();
+    const { detectImportPreview, resolveImportPlan } = await loadConflicts();
+    const validation = await validateBundle(
+      zipFileOf({
+        "bundle.json": strToU8(JSON.stringify(bundle)),
+        "manifest.json": strToU8(JSON.stringify(manifest)),
+      }),
+    );
+    expect(validation.ok).toBe(true);
+    if (!validation.ok) return;
+    const prefs = validation.bundle.preferences;
+    expect(prefs.highlightSlots.map((s) => s.name)).toEqual(EDITED_SLOTS.map((s) => s.name));
+    expect(prefs.defaultHighlightSlotId).toBe(prefs.highlightSlots[2]!.id);
+
+    const preview = await detectImportPreview(validation.bundle);
+    const plan = await resolveImportPlan(
+      validation.bundle,
+      preview,
+      ALL_SKIP,
+      true,
+      undefined,
+      validation.assets,
+    );
+    await applyImport(plan);
+    const { loadSettings } = await import("../../../src/persistence/settingsStore");
+    const result = await loadSettings();
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.settings.highlightSlots).toHaveLength(5);
+    expect(result.settings.highlightSlots[2]!.name).toBe("Key ideas");
+    expect(result.settings.defaultHighlightSlotId).toBe(result.settings.highlightSlots[2]!.id);
+  });
+
+  it("an edited slot in an older five-slot bundle still fails its manifest (tampering stays detected)", async () => {
+    const { bundle, manifest } = await preIdentityExport(0);
+    const prefs = bundle.preferences as { highlightSlots: Array<Record<string, unknown>> };
+    prefs.highlightSlots[1] = { ...prefs.highlightSlots[1], name: "Tampered" };
+    const { validateBundle } = await loadService();
+    const result = await validateBundle(
+      zipFileOf({
+        "bundle.json": strToU8(JSON.stringify(bundle)),
+        "manifest.json": strToU8(JSON.stringify(manifest)),
+      }),
+    );
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+    expect(result.refusal).toEqual({ kind: "corrupted", failedBlocks: ["preferences"] });
+  });
+
+  it("importing replaces the whole slot list (count, order, default) — never merges", async () => {
+    const { saveSettings } = await import("../../../src/persistence/settingsStore");
+    const current = await import("../../../src/settings/defaults");
+    const exported: HighlightSlot[] = [
+      { id: "s-c", name: "Third", color: "pink", customColorActive: false, tags: [] },
+      { id: "s-a", name: "First", color: "blue", customColorActive: false, tags: ["x"] },
+      { id: "s-b", name: "", color: "default", customColorActive: false, tags: [] },
+    ];
+    await saveSettings({
+      ...current.DEFAULT_SETTINGS,
+      highlightSlots: exported,
+      defaultHighlightSlotId: "s-a",
+    });
+    const { buildBundle, validateBundle, applyImport } = await loadService();
+    const { detectImportPreview, resolveImportPlan } = await loadConflicts();
+    const { bytes } = await buildBundle();
+
+    // The importing device has its own, longer, differently ordered list.
+    await wipeDatabase();
+    const local: HighlightSlot[] = Array.from({ length: 7 }, (_, i) => ({
+      id: i === 0 ? "s-a" : `s-local-${i}`,
+      name: `Local ${i + 1}`,
+      color: "yellow",
+      customColorActive: false,
+      tags: [],
+    }));
+    await saveSettings({
+      ...current.DEFAULT_SETTINGS,
+      highlightSlots: local,
+      defaultHighlightSlotId: "s-local-3",
+    });
+
+    const validation = await validateBundle(
+      new File([new Uint8Array(bytes)], "lem-reader-bundle-v1.zip", { type: "application/zip" }),
+    );
+    expect(validation.ok).toBe(true);
+    if (!validation.ok) return;
+    const preview = await detectImportPreview(validation.bundle);
+    const plan = await resolveImportPlan(
+      validation.bundle,
+      preview,
+      ALL_SKIP,
+      true,
+      undefined,
+      validation.assets,
+    );
+    await applyImport(plan);
+    const { loadSettings } = await import("../../../src/persistence/settingsStore");
+    const result = await loadSettings();
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.settings.highlightSlots).toEqual(exported);
+    expect(result.settings.defaultHighlightSlotId).toBe("s-a");
   });
 });

@@ -36,7 +36,7 @@
 // ONE invalidateLibrarySnapshot() so mounted surfaces re-derive.
 import { SPEECH_BROWSER_NOTICE } from "../readaloud/webSpeech";
 import { RestoreStarterButton } from "./RestoreStarterButton";
-// Issue #195 — the five highlight slots' editor (its own module: the editor
+// Issue #195 — the highlight slots' editor (its own module: the editor
 // is form-heavy and settings-only; the panel stays readable).
 import { HighlightSlotSettings } from "./HighlightSlotSettings";
 import { lazy, Suspense, useEffect, useRef, useState } from "react";
@@ -956,7 +956,7 @@ export function SettingsPanel({ open, onClose }: SettingsPanelProps) {
               <p className="settings-help">{SPEECH_BROWSER_NOTICE}</p>
             ) : null}
           </details>
-          {/* Issue #195 — the five highlight slots: name/color/tags per slot
+          {/* Issue #195 — the highlight slots (#41: an ordered 1..10 list): name/color/tags per slot
               plus the explicit default-slot choice, in their own collapsible
               group (the form-heavy editor lives in HighlightSlotSettings).
               Issue #196 — the editors mount ONLY while the panel is open:

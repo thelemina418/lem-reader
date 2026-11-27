@@ -276,8 +276,8 @@ test.describe("highlight slots in the reader (issue #195)", () => {
     const slot2 = await openSlotEditor(page, 2);
     await slot2.getByRole("textbox", { name: "Slot 2 name" }).fill("Important");
     await slot2.getByRole("radio", { name: "Blue" }).click();
-    await slot2.locator("input#slot-tags-input-1").fill("key-idea");
-    await slot2.locator("input#slot-tags-input-1").press("Enter");
+    await slot2.locator("input#slot-tags-input-slot-2").fill("key-idea");
+    await slot2.locator("input#slot-tags-input-slot-2").press("Enter");
     await slot2.getByRole("radio", { name: "Default for new highlights" }).click();
     await expect(slot2.getByRole("radio", { name: "Default for new highlights" })).toBeChecked();
     await settings.getByRole("button", { name: "Close reading settings" }).click();
@@ -342,8 +342,8 @@ test.describe("highlight slots in the reader (issue #195)", () => {
     // ADD that tag to an existing highlight.
     const settings = await openSettingsPanel(page);
     const slot2 = await openSlotEditor(page, 2);
-    await slot2.locator("input#slot-tags-input-1").fill("key-idea");
-    await slot2.locator("input#slot-tags-input-1").press("Enter");
+    await slot2.locator("input#slot-tags-input-slot-2").fill("key-idea");
+    await slot2.locator("input#slot-tags-input-slot-2").press("Enter");
     await settings.getByRole("button", { name: "Close reading settings" }).click();
     await waitForSettingsSlot(page, 1, "Yellow");
     await page.keyboard.press("Escape"); // close the settings sheet

@@ -292,7 +292,7 @@ test.describe("D17-01/D17-02 + META-01 — save flow + persistence", () => {
     await expect(dialog).not.toBeVisible();
     await expect(page.locator(`#title-${articleId}`)).toHaveText("My Renamed Title");
     const editedRow = page.locator(".library-list > li").filter({ hasText: "My Renamed Title" });
-    await expect(editedRow.locator("p.meta:not(.source-badge)")).toHaveText("Renamed Author");
+    await expect(editedRow.locator("p.meta.library-row-author")).toHaveText("Renamed Author");
 
     // 6. ROW TRUTH (META-01): the stored row carries the overrides while
     //    provenance.title, id, and revision are untouched.
@@ -378,7 +378,7 @@ test.describe("META-03 + D17-04 — reset + blank refusal", () => {
     await openLibrary(page);
     // Baseline: no author line on the row (only the source badge's .meta).
     const bareRow = page.locator(".library-list > li").filter({ hasText: ABSENT_AUTHOR_TITLE });
-    await expect(bareRow.locator("p.meta:not(.source-badge):not(.finished-mark)")).toHaveCount(0);
+    await expect(bareRow.locator("p.meta.library-row-author")).toHaveCount(0);
 
     // The author placeholder carries the No author fallback (D17-03).
     let dialog = await openEditDialog(page, ABSENT_AUTHOR_TITLE);
@@ -395,9 +395,7 @@ test.describe("META-03 + D17-04 — reset + blank refusal", () => {
 
     // The author line now renders (effectiveAuthor truthy).
     const authoredRow = page.locator(".library-list > li").filter({ hasText: ABSENT_AUTHOR_TITLE });
-    await expect(authoredRow.locator("p.meta:not(.source-badge):not(.finished-mark)")).toHaveText(
-      "Anonymous Reader",
-    );
+    await expect(authoredRow.locator("p.meta.library-row-author")).toHaveText("Anonymous Reader");
     let row = await readRow(page, "articles", articleId);
     expect(row?.readerAuthor).toBe("Anonymous Reader");
     expect(Object.prototype.hasOwnProperty.call(row, "readerTitle")).toBe(false);
@@ -409,9 +407,7 @@ test.describe("META-03 + D17-04 — reset + blank refusal", () => {
     await dialog.getByRole("button", { name: "Save" }).click();
     await expect(dialog).not.toBeVisible();
     const restoredRow = page.locator(".library-list > li").filter({ hasText: ABSENT_AUTHOR_TITLE });
-    await expect(restoredRow.locator("p.meta:not(.source-badge):not(.finished-mark)")).toHaveCount(
-      0,
-    );
+    await expect(restoredRow.locator("p.meta.library-row-author")).toHaveCount(0);
     row = await readRow(page, "articles", articleId);
     expect(
       Object.prototype.hasOwnProperty.call(row, "readerAuthor"),

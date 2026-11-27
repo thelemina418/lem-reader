@@ -85,7 +85,7 @@ const CLAMPED_RECORD_PARSED = {
   // Issue #195 — the slot fields hydrate from the shipped defaults on every
   // Zod read boundary (a v2-era record predates them).
   highlightSlots: defaultHighlightSlots(),
-  defaultHighlightSlot: 0,
+  defaultHighlightSlotId: "slot-1",
 } as const;
 
 beforeEach(() => {
@@ -272,7 +272,7 @@ async function legacyBundle(manifestPreferencesOverride?: Manifest["blocks"]) {
     showReadAloud: _speechControlsAbsent,
     speechNoticeDismissed: _speechNoticeAbsent,
     highlightSlots: _slotsAbsent,
-    defaultHighlightSlot: _defaultSlotAbsent,
+    defaultHighlightSlotId: _defaultSlotAbsent,
     ...exportEraPrefs
   } = parsed.preferences;
   const legacyManifest: Manifest = {

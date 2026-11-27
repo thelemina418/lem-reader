@@ -12,7 +12,7 @@
 //   - the keyboard routing matrix (Enter/Space on <mark>, Tab routing onto
 //     the toolbar, Tab-past dismissal, H/N shortcuts),
 //   - focus-exit dismissal,
-//   - issue #197/#220 — the ARMED slot-hold creation gesture: a digit 1–5
+//   - issue #197/#220 — the ARMED slot-hold creation gesture: a slot digit (1–9, 0 for slot 10)
 //     pressed at ANY point during a pointer gesture arms that slot; the
 //     creation fires on pointer-up regardless of digit/pointer release
 //     order. Escape mid-drag cancels; a new pointerdown re-arms after a
@@ -37,9 +37,9 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import type { MutableRefObject, RefObject } from "react";
 import type { CanonicalArticle } from "../../content/types";
 import type { HighlightSlot } from "../../content/schema";
-import { defaultHighlightSlots } from "../../content/schema";
+import { MAX_HIGHLIGHT_SLOTS, defaultHighlightSlots } from "../../content/schema";
 // Issue #195 — the ONE slot→creation-preset vocabulary (normalizeTags-backed).
-import { defaultSlotPreset, slotPreset } from "../../annotations/highlightSlots";
+import { slotPreset } from "../../annotations/highlightSlots";
 import type { HighlightSlotPreset } from "../../annotations/highlightSlots";
 // Issue #220 — the ONE slot→selection-tint derivation (same as the mark).
 import { slotSelectionTint } from "../../settings/highlightTint";
@@ -59,9 +59,13 @@ const FALLBACK_SLOTS = defaultHighlightSlots();
 const GRACE_MS = 4000;
 
 /** Issue #220 — the 0-based slot index a held digit key names, or null for
- * any other key. The one digit→slot vocabulary for keydown AND keyup. */
-function slotIndexFromDigit(key: string): number | null {
-  return /^[1-5]$/.test(key) ? Number(key) - 1 : null;
+ * any other key. The one digit→slot vocabulary for keydown AND keyup.
+ * Issue #41 (ADR 0012) — `1`–`9` name slots 1–9 and `0` names slot 10; a
+ * digit beyond the current slot count is gated at the arm site (it does
+ * nothing). */
+export function slotIndexFromDigit(key: string): number | null {
+  if (key === "0") return MAX_HIGHLIGHT_SLOTS - 1;
+  return /^[1-9]$/.test(key) ? Number(key) - 1 : null;
 }
 
 export interface UseSelectionToolbarArgs {
@@ -92,13 +96,14 @@ export interface UseSelectionToolbarArgs {
    */
   highlightApiRef: MutableRefObject<HighlightOverlayValue | null>;
   /**
-   * Issue #195 — the settings' five highlight slots. Defaults to the shipped
+   * Issue #195 — the settings' ordered highlight slots (issue #41: 1..10). Defaults to the shipped
    * set so the hook's unit harness (and any caller without settings) keeps
    * the pre-slot behavior byte-for-byte.
    */
   highlightSlots?: HighlightSlot[];
   /**
-   * Issue #195 — the settings' explicit default-slot index (0..4). Ordinary
+   * Issue #195 — the POSITION of the settings' explicit default slot (issue
+   * #41: the route resolves the stored identity → position). Ordinary
    * creation routes (Highlight button, H/N, the completed pointer gesture
    * showing slots) read it per creation; defaults to 0 (slot 1).
    */
@@ -257,10 +262,14 @@ export function useSelectionToolbar({
     (index: number): HighlightSlot => slots[index] ?? FALLBACK_SLOTS[0]!,
     [slots],
   );
+  // Issue #41 — the event-time slot count: a digit beyond it never arms (the
+  // keydown listener is registered once per mount, so it reads the ref).
+  const slotCountRef = useRef(slots.length);
+  slotCountRef.current = slots.length;
   /** The explicit default slot's creation payload, read per invocation. */
   const defaultPreset = useCallback(
-    (): HighlightSlotPreset => defaultSlotPreset(slots, defaultHighlightSlotIndex),
-    [slots, defaultHighlightSlotIndex],
+    (): HighlightSlotPreset => slotPreset(slotAt(defaultHighlightSlotIndex)),
+    [slotAt, defaultHighlightSlotIndex],
   );
   // Issue #220 — the armed-hold live paint value (render-derived): the same
   // derivation the eventual mark uses, so the release is seamless.
@@ -565,7 +574,8 @@ export function useSelectionToolbar({
       ) {
         generationRef.current += 1;
       }
-      // Issue #220 — arm-on-press. A bare digit 1–5 (never with modifier
+      // Issue #220 — arm-on-press. A bare slot digit (issue #41: 1–9, 0 for
+      // slot 10 — only within the current slot count; never with modifier
       // keys, never in editable fields — the isFormField bail above) arms
       // that slot for the current or next pointer gesture; auto-repeat
       // re-affirms. The arm survives a digit keyup DURING a gesture
@@ -573,6 +583,7 @@ export function useSelectionToolbar({
       const digitSlot = slotIndexFromDigit(key);
       if (
         digitSlot !== null &&
+        digitSlot < slotCountRef.current &&
         !event.ctrlKey &&
         !event.metaKey &&
         !event.altKey &&

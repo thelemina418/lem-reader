@@ -9,11 +9,9 @@
 //     created record carries exactly the tags vocabulary the rest of the
 //     annotation stack expects.
 //
-//   - defaultSlotPreset: the settings' EXPLICIT default-slot choice → the
-//     creation payload every ordinary route (H/N shortcuts, the toolbar's
-//     Highlight button, the completed pointer gesture) uses. Applying
-//     another slot never rewrites the choice — this reads it fresh at
-//     every creation.
+//   - defaultSlotIndex: the settings' EXPLICIT default-slot identity → its
+//     current position (issue #41). Every ordinary creation route resolves
+//     the default through it; applying another slot never rewrites it.
 //
 //   - mergeSlotTags: the additive tag union for applying a slot to an
 //     EXISTING highlight — the highlight's existing tags keep both their
@@ -21,10 +19,16 @@
 //     dedupe); the slot's tags join the end. Applying a slot never removes
 //     a tag the reader added by hand.
 //
+//   - Issue #41 (ADR 0012) — the ordered-list operations behind the
+//     settings editor (addSlot / removeSlot / moveSlot), the identity →
+//     position lookup (defaultSlotIndex), and the ONE label an unnamed slot
+//     reads by (slotDisplayName — "Slot 6 · Neutral").
+//
 // Pure data + pure functions — no DOM, no React, no persistence. jsdom-safe.
-import { HIGHLIGHT_SLOT_COUNT } from "../content/schema";
+import { MAX_HIGHLIGHT_SLOTS, MIN_HIGHLIGHT_SLOTS } from "../content/schema";
 import type { HighlightSlot } from "../content/schema";
 import { normalizeTags } from "../ingestion/library/tagText";
+import { highlightStateLabel } from "./highlightColors";
 
 /** The creation payload copied onto a new highlight record (issue #195;
  * issue #196 adds the optional custom-color snapshot). */
@@ -67,27 +71,94 @@ export function slotPreset(slot: HighlightSlot): HighlightSlotPreset {
   };
 }
 
-/** Defensive clamp: an index outside the five-slot band reads slot 1. The
- * schema already bounds defaultHighlightSlot (int 0..4); this only covers
- * in-memory objects a parse has not seen. */
-function clampSlotIndex(index: number): number {
-  if (!Number.isInteger(index) || index < 0 || index >= HIGHLIGHT_SLOT_COUNT) {
-    return 0;
-  }
-  return index;
+/**
+ * Issue #41 — the position of the slot the default identity names; an
+ * identity that names no slot (defence in depth — the schema already
+ * requires it to exist) reads slot 1.
+ */
+export function defaultSlotIndex(
+  slots: readonly HighlightSlot[],
+  defaultHighlightSlotId: string,
+): number {
+  const index = slots.findIndex((slot) => slot.id === defaultHighlightSlotId);
+  return index === -1 ? 0 : index;
 }
 
 /**
- * The settings' explicit default-slot choice → the ordinary-creation
- * payload. `slots` is the settings record's five-slot array; an
- * out-of-band index (defence in depth) falls back to slot 1.
+ * Issue #41 — the ONE label a slot reads by: its name, or — for an unnamed
+ * slot — its number and ACTIVE color ("Slot 6 · Neutral", "Slot 3 ·
+ * Custom"). `index` is the slot's 0-based position (its number is index+1).
  */
-export function defaultSlotPreset(
-  slots: readonly HighlightSlot[],
-  defaultHighlightSlot: number,
-): HighlightSlotPreset {
-  const slot = slots[clampSlotIndex(defaultHighlightSlot)] ?? slots[0];
-  return slot ? slotPreset(slot) : { color: "default", tags: [] };
+export function slotDisplayName(slot: HighlightSlot, index: number): string {
+  if (slot.name.trim().length > 0) return slot.name;
+  return `Slot ${index + 1} · ${highlightStateLabel(slot.color, activeCustomColor(slot))}`;
+}
+
+/** Issue #41 — the "Slot N: name" control label, folded to the bare
+ * display name for an unnamed slot (whose display name already carries its
+ * number — never "Slot 6: Slot 6 · Neutral"). */
+export function slotLabel(slot: HighlightSlot, index: number): string {
+  const display = slotDisplayName(slot, index);
+  return display === slot.name ? `Slot ${index + 1}: ${display}` : display;
+}
+
+/** Issue #41 — a fresh identity for a slot the reader adds. A different
+ * spelling from the legacy positional ids (`slot-N`), so the two never
+ * collide. getRandomValues (not randomUUID) — it works outside secure
+ * contexts too. */
+export function newSlotId(): string {
+  const bytes = new Uint8Array(8);
+  crypto.getRandomValues(bytes);
+  return `s-${Array.from(bytes, (b) => b.toString(16).padStart(2, "0")).join("")}`;
+}
+
+/** Issue #41 — append an unnamed Neutral slot with no tags. At the
+ * ten-slot bound the SAME list returns (nothing to add). */
+export function addSlot(slots: HighlightSlot[]): HighlightSlot[] {
+  if (slots.length >= MAX_HIGHLIGHT_SLOTS) return slots;
+  const taken = new Set(slots.map((s) => s.id));
+  let id = newSlotId();
+  while (taken.has(id)) id = newSlotId();
+  return [...slots, { id, name: "", color: "default", customColorActive: false, tags: [] }];
+}
+
+/**
+ * Issue #41 — remove one slot. Removing the default makes (the new) slot 1
+ * the default and reports `defaultFellBack` so the editor can say so. The
+ * last slot is never removed (the SAME list returns).
+ */
+export function removeSlot(
+  slots: HighlightSlot[],
+  id: string,
+  defaultHighlightSlotId: string,
+): {
+  slots: HighlightSlot[];
+  defaultHighlightSlotId: string;
+  defaultFellBack: boolean;
+} {
+  const next = slots.filter((s) => s.id !== id);
+  if (next.length < MIN_HIGHLIGHT_SLOTS || next.length === slots.length) {
+    return { slots, defaultHighlightSlotId, defaultFellBack: false };
+  }
+  const fellBack = id === defaultHighlightSlotId;
+  return {
+    slots: next,
+    defaultHighlightSlotId: fellBack ? next[0]!.id : defaultHighlightSlotId,
+    defaultFellBack: fellBack,
+  };
+}
+
+/** Issue #41 — move one slot by `delta` positions (−1 up, +1 down). A move
+ * past either end returns the SAME list. The default needs no rewrite: it
+ * names the identity, which travels with the slot. */
+export function moveSlot(slots: HighlightSlot[], id: string, delta: number): HighlightSlot[] {
+  const from = slots.findIndex((s) => s.id === id);
+  const to = from + delta;
+  if (from === -1 || to < 0 || to >= slots.length || delta === 0) return slots;
+  const next = [...slots];
+  const [moved] = next.splice(from, 1);
+  next.splice(to, 0, moved!);
+  return next;
 }
 
 /**

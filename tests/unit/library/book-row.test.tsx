@@ -396,3 +396,55 @@ describe("BookRow — chapter sub-rows + tags (D12-01 + D12-04)", () => {
     ]);
   });
 });
+
+describe("BookRow — the estimated reading time (issue #40)", () => {
+  /** Each chapter's grapheme total = 4 minutes at the fixed 1428/min pace. */
+  function snapshotWithFourMinuteChapters(chapters: CanonicalArticle[]): LibrarySnapshot {
+    return {
+      ...snapshotFor(chapters, []),
+      totalsByArticleId: new Map(chapters.map((c) => [c.id, 1428 * 4])),
+    };
+  }
+
+  it("shows ONE total across the chapters on the book row", () => {
+    const chapters = sampleChapters();
+    render(
+      <BookRow
+        book={makeBook()}
+        chapters={chapters}
+        snapshot={snapshotWithFourMinuteChapters(chapters)}
+        onRemove={() => {}}
+      />,
+    );
+    const estimate = screen.getByText("about 12 min read");
+    expect(estimate).toHaveClass("meta", "library-row-estimate");
+  });
+
+  it("chapter sub-rows show no estimate of their own", () => {
+    const chapters = sampleChapters();
+    const { container } = render(
+      <BookRow
+        book={makeBook()}
+        chapters={chapters}
+        snapshot={snapshotWithFourMinuteChapters(chapters)}
+        onRemove={() => {}}
+      />,
+    );
+    const region = container.querySelector(".book-chapters")!;
+    expect(region.querySelectorAll(".library-row-estimate")).toHaveLength(0);
+    expect(container.querySelectorAll(".library-row-estimate")).toHaveLength(1);
+  });
+
+  it("totals only the live chapters (a missing chapter adds nothing)", () => {
+    const chapters = sampleChapters().slice(0, 2);
+    render(
+      <BookRow
+        book={makeBook()}
+        chapters={chapters}
+        snapshot={snapshotWithFourMinuteChapters(chapters)}
+        onRemove={() => {}}
+      />,
+    );
+    expect(screen.getByText("about 8 min read")).toBeInTheDocument();
+  });
+});

@@ -152,6 +152,7 @@ import { AnnotationsDrawer } from "../reader/annotations/AnnotationsDrawer";
 // drawer's Delete button) reads note presence + resolves the post-delete
 // focus target through the ONE shared helpers.
 import { hasNoteContent } from "../annotations/noteText";
+import { defaultSlotIndex } from "../annotations/highlightSlots";
 import { deleteHighlightNearPassage } from "../reader/annotations/highlightMarks";
 // Plan 08-04 (LIB-04 + D8-05) — TagEntry edits tags WHILE reading. Plan
 // 13-10 (G5) mounts it inside the top-bar tag popover (see the .tag-popover
@@ -944,7 +945,7 @@ export function ArticleView({
   // Issue #195 — the highlight slots + explicit default-slot choice ride the
   // settings record; the selection toolbar reads them per creation/activation
   // event, so ordinary routes follow the saved default and the visible slot
-  // row offers the five numbered presets. (Hoisted above the selection-
+  // row offers the numbered presets. (Hoisted above the selection-
   // toolbar controller so the hook args can read them.)
   const { settings, update } = useSettings();
 
@@ -953,6 +954,12 @@ export function ArticleView({
   // toolbar so every custom-color paint site derives against the SAME bases
   // the settings editor's preview derives against (preview = render).
   const highlightBasesMemo = useMemo(() => highlightBases(settings), [settings]);
+  // Issue #41 — the default slot is stored as an IDENTITY; the toolbar and
+  // the creation routes speak positions, resolved here per render.
+  const defaultSlotPosition = defaultSlotIndex(
+    settings.highlightSlots,
+    settings.defaultHighlightSlotId,
+  );
 
   // Issue #9 — the selection-toolbar controller. The hook owns the entire
   // selection lifecycle (selectionchange tracking, focus-containment hold,
@@ -973,7 +980,7 @@ export function ArticleView({
     highlightApiRef,
     surfaceKey: pageState ? `${pageState.windowStart ?? 0}:${pageState.page}` : "scrolling",
     highlightSlots: settings.highlightSlots,
-    defaultHighlightSlotIndex: settings.defaultHighlightSlot,
+    defaultHighlightSlotIndex: defaultSlotPosition,
     highlightBases: highlightBasesMemo,
   });
 
@@ -3266,11 +3273,11 @@ export function ArticleView({
         <p className="visually-hidden">
           Keyboard shortcuts: M switches reading mode. PageUp and PageDown, ArrowLeft and
           ArrowRight, and Space and Shift+Space turn pages. To highlight selected text, keyboard
-          users can press H, or N to highlight and open a note. Hold a slot number (1–5) while
-          selecting with the pointer to save a highlight; use Undo or Escape to remove the new
-          highlight. Screen-reader users: after selecting text, Tab to the "Highlight" toolbar
-          button and press Enter — screen readers reserve single-letter keys like H and N for their
-          own navigation.
+          users can press H, or N to highlight and open a note. Hold a slot number (1–9, or 0 for
+          slot 10) while selecting with the pointer to save a highlight; use Undo or Escape to
+          remove the new highlight. Screen-reader users: after selecting text, Tab to the
+          "Highlight" toolbar button and press Enter — screen readers reserve single-letter keys
+          like H and N for their own navigation.
         </p>
         {/* Phase 5 Plan 05-02 (D5-12, A11Y-08): polite live region for
             annotation announces. Concise copy ("Highlight saved." / "Highlight
@@ -3862,7 +3869,7 @@ export function ArticleView({
             captureResult={captureResult}
             onHighlightAndNote={handleHighlightAndNote}
             slots={settings.highlightSlots}
-            defaultSlotIndex={settings.defaultHighlightSlot}
+            defaultSlotIndex={defaultSlotPosition}
             bases={highlightBasesMemo}
             onActivateSlot={handleActivateSlot}
             onFocusExit={dismissToolbarFromFocusExit}

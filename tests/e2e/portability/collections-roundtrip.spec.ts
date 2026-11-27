@@ -269,7 +269,7 @@ test.describe("Collections round trip (issue #248)", () => {
 
       // ── Node side: the envelope carries the collection blocks ───────────
       const { bundle: bundleJson } = readBundleJson(bundlePath!);
-      expect(bundleJson.schemaVersion).toBe(10); // #248 moved the writer version
+      expect(bundleJson.schemaVersion).toBe(11); // #41 moved the writer version
       expect(bundleJson.collections).toEqual([COLLECTION, EMPTY_COLLECTION]);
       expect(bundleJson.completions).toEqual([COMPLETION]);
       expect(bundleJson.collectionActiveEntries).toEqual([ACTIVE_ENTRY]);

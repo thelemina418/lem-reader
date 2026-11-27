@@ -701,16 +701,28 @@ export const HIGHLIGHT_COLOR_NAMES = ["default", "yellow", "green", "blue", "pin
 export type HighlightColor = (typeof HIGHLIGHT_COLOR_NAMES)[number];
 export const HighlightColorSchema = z.enum(HIGHLIGHT_COLOR_NAMES);
 
-// Issue #195 — the FIVE numbered highlight slots. Declared beside the color
+// Issue #195 — the numbered highlight slots. Declared beside the color
 // vocabulary they compose (see above) and before the settings object that
 // stores them: each slot is a reusable PRESET — an editable short name, ONE
 // existing color choice, and zero or more highlight tags. Creation copies
 // the chosen slot's color + tags onto the new record; later slot edits never
 // touch historical highlights (a slot is configuration, not a live relation).
-/** The exact number of highlight slots (issue #195): the schema's `.length`
- * contract, the picker's row count, and the editor's loop bound all read
- * this ONE constant. */
-export const HIGHLIGHT_SLOT_COUNT = 5;
+/** Issue #41 (ADR 0012) — the slot list's bounds: an ordered list of one to
+ * ten slots. The schema's `.min/.max` contract, the editor's Add/Remove
+ * availability, and the digit vocabulary (1–9, then 0 for slot 10) all read
+ * these ONE constants. */
+export const MIN_HIGHLIGHT_SLOTS = 1;
+export const MAX_HIGHLIGHT_SLOTS = 10;
+
+/** Issue #41 — the identities the shipped five slots carry, and the
+ * identities the pre-parse migration gives a legacy (id-less) row's slots,
+ * by position. Deterministic so a migrated row is byte-stable across every
+ * settings-entry seam (store, mirror, import); slots the reader ADDS mint
+ * random identities (newSlotId in src/annotations/highlightSlots.ts) in a
+ * different spelling, so the two can never collide. */
+export function legacySlotId(index: number): string {
+  return `slot-${index + 1}`;
+}
 
 /** One numbered highlight slot: an editable short name, ONE existing color
  * choice, and zero or more highlight tags. Stored on ReaderSettings — a
@@ -735,7 +747,19 @@ export const HIGHLIGHT_SLOT_COUNT = 5;
  * migrateReaderSettings (existing customColor ⇒ true, else false). */
 export const HighlightSlotSchema = z
   .object({
-    name: z.string().min(1).max(40),
+    // Issue #41 — the slot's STABLE identity: the default slot refers to it
+    // (never to a position), so a move never silently changes which slot
+    // plain creation uses. Required (the dormancy-key discipline): a legacy
+    // row gains identities pre-parse in migrateReaderSettings.
+    id: z
+      .string()
+      .min(1)
+      .max(64)
+      .regex(/^[A-Za-z0-9_-]+$/),
+    // Issue #41 — an EMPTY name is an unnamed slot (a freshly added one); it
+    // reads by its number and color everywhere ("Slot 6 · Neutral" —
+    // slotDisplayName).
+    name: z.string().max(40),
     color: HighlightColorSchema,
     customColor: z
       .string()
@@ -763,13 +787,14 @@ export type HighlightSlot = z.infer<typeof HighlightSlotSchema>;
  * an array or slot object with another settings record.
  */
 export function defaultHighlightSlots(): HighlightSlot[] {
-  return [
+  const shipped: Array<Omit<HighlightSlot, "id">> = [
     { name: "Default", color: "default", customColorActive: false, tags: [] },
     { name: "Yellow", color: "yellow", customColorActive: false, tags: [] },
     { name: "Green", color: "green", customColorActive: false, tags: [] },
     { name: "Blue", color: "blue", customColorActive: false, tags: [] },
     { name: "Pink", color: "pink", customColorActive: false, tags: [] },
   ];
+  return shipped.map((slot, i) => ({ id: legacySlotId(i), ...slot }));
 }
 
 const ReaderSettingsObjectSchema = z.object({
@@ -792,14 +817,19 @@ const ReaderSettingsObjectSchema = z.object({
   // hex became a DORMANT memory (customColorActive on every slot — see
   // HighlightSlotSchema; the pre-#222 shape migrates pre-parse at every
   // settings-entry seam — src/settings/settingsMigration.ts).
-  // The union accepts ALL EIGHT literals so that an existing v1 row (no
+  // Issue #41 bumps the canonical write version 8 → 9 when the slots became
+  // an ordered 1..10 list with stable identities and the default became an
+  // identity (defaultHighlightSlotId) instead of a position index (the
+  // pre-#41 shape migrates pre-parse — src/settings/settingsMigration.ts).
+  // The union accepts ALL NINE literals so that an existing v1 row (no
   // readingMode field), a v2 row (no voice/rate fields), a v3 row (no
   // librarySort field), a v4 row (the pre-#120 custom-theme shape), a
   // v5 row (no openAfterAdd field), a v6 row (no highlightSlots /
   // defaultHighlightSlot fields), and a v7 row (slots without
-  // customColorActive — migrated pre-parse) hydrate on read — Pitfall 9 (NO
+  // customColorActive — migrated pre-parse), and a v8 row (id-less slots +
+  // a default index — migrated pre-parse) hydrate on read — Pitfall 9 (NO
   // Dexie store change; the settings store is key-value, Dexie is opaque to
-  // the value shape). v9 and above forward-reject (V5 boundary discipline
+  // the value shape). v10 and above forward-reject (V5 boundary discipline
   // preserved).
   schemaVersion: z.union([
     z.literal(1),
@@ -810,6 +840,7 @@ const ReaderSettingsObjectSchema = z.object({
     z.literal(6),
     z.literal(7),
     z.literal(8),
+    z.literal(9),
   ]),
   font: z.enum(["serif", "sans", "dyslexic"]),
   size: z.union([z.literal(16), z.literal(18), z.literal(20), z.literal(22), z.literal(24)]),
@@ -929,30 +960,34 @@ const ReaderSettingsObjectSchema = z.object({
   // choice, and zero or more highlight tags. Creation copies the chosen
   // slot's color + tags onto the new record; later slot edits never touch
   // historical highlights (a slot is configuration, not a live relation).
-  // Exactly five slots (the `.length(5)` contract — an added/dropped slot is
-  // malformed data and fails parse → the honest corrupt routing, never a
-  // silent reshape). `.default(...)` (factory — a FRESH deep copy per parse)
+  // `.default(...)` (factory — a FRESH deep copy per parse)
   // hydrates v1..v6 rows (Pitfall 9) from Default/Yellow/Green/Blue/Pink
   // with empty tags, so upgrading requires no setup and existing libraries
   // and annotations stay byte-unchanged. Slot tags are plain strings here —
   // they run through the ONE tag normalization (normalizeTags) at every use
   // seam, exactly like record tags.
+  // Issue #41 (ADR 0012) — the slots become an ORDERED list of one to ten
+  // (the v8 → v9 bump): the reader adds, removes, and reorders them; a
+  // slot's number is its position. Out-of-band counts are malformed data
+  // and fail parse → the honest corrupt routing, never a silent reshape.
   highlightSlots: z
     .array(HighlightSlotSchema)
-    .length(HIGHLIGHT_SLOT_COUNT)
+    .min(MIN_HIGHLIGHT_SLOTS)
+    .max(MAX_HIGHLIGHT_SLOTS)
     .default(() => defaultHighlightSlots()),
-  // Issue #195 — the EXPLICIT default-slot choice (index into
-  // highlightSlots). Ordinary creation routes (H/N shortcuts, the toolbar's
-  // Highlight button, the completed pointer gesture) read it at creation
-  // time; applying another slot never rewrites it — a one-off choice is
-  // never silently promoted to the default. `.default(0)` hydrates v1..v6
-  // rows to slot 1 ("Default") — the color creation already used.
-  defaultHighlightSlot: z
-    .number()
-    .int()
-    .min(0)
-    .max(HIGHLIGHT_SLOT_COUNT - 1)
-    .default(0),
+  // Issue #195 — the EXPLICIT default-slot choice. Ordinary creation routes
+  // (H/N shortcuts, the toolbar's Enter, the completed pointer gesture) read
+  // it at creation time; applying another slot never rewrites it — a
+  // one-off choice is never silently promoted to the default.
+  // Issue #41 — the choice names a slot's IDENTITY (it replaces the v7/v8
+  // position index `defaultHighlightSlot`, mapped pre-parse by
+  // migrateReaderSettings): it follows its slot when the slot moves, and
+  // the superRefine below requires it to name an existing slot.
+  // `.default(...)` hydrates v1..v6 rows to slot 1 ("Default").
+  defaultHighlightSlotId: z
+    .string()
+    .min(1)
+    .default(() => legacySlotId(0)),
 });
 
 // Issue #86 (decision #73), extended by issue #120 — the cross-field rules:
@@ -965,6 +1000,23 @@ const ReaderSettingsObjectSchema = z.object({
 // safeParses THIS name (the object schema stays module-private — unexported
 // until a real shape consumer appears; speculative exports are not kept).
 export const ReaderSettingsSchema = ReaderSettingsObjectSchema.superRefine((s, ctx) => {
+  // Issue #41 — slot identities are unique, and the default names one of
+  // them (a dangling default is corrupt data, never silently re-pointed).
+  const ids = s.highlightSlots.map((slot) => slot.id);
+  if (new Set(ids).size !== ids.length) {
+    ctx.addIssue({
+      code: "custom",
+      path: ["highlightSlots"],
+      message: "highlight slot identities must be unique",
+    });
+  }
+  if (!ids.includes(s.defaultHighlightSlotId)) {
+    ctx.addIssue({
+      code: "custom",
+      path: ["defaultHighlightSlotId"],
+      message: "defaultHighlightSlotId must name an existing highlight slot",
+    });
+  }
   if (s.theme === "custom-light" && s.customLightTheme === undefined) {
     ctx.addIssue({
       code: "custom",

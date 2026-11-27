@@ -168,3 +168,27 @@ describe("LibraryRow — the reading-state action (issue #17)", () => {
     expect(onReadingStateChange).toHaveBeenCalledWith(true);
   });
 });
+
+describe("LibraryRow — the estimated reading time line (issue #40)", () => {
+  it("renders the estimate as a quiet .meta line, worded apart from 'read here'", () => {
+    render(
+      <LibraryRow
+        article={makeArticle()}
+        total={100}
+        estimatedReadingTime="about 12 min read"
+        timeReadLabel="3 min read here"
+      />,
+    );
+    const estimate = screen.getByText("about 12 min read");
+    expect(estimate).toHaveClass("meta", "library-row-estimate");
+    expect(
+      estimate.querySelectorAll("a, button, input, select, textarea, [tabindex]"),
+    ).toHaveLength(0);
+    expect(screen.getByText("3 min read here")).not.toBe(estimate);
+  });
+
+  it("renders nothing when no estimate is given (chapter sub-rows)", () => {
+    const { container } = renderRow(undefined);
+    expect(container.querySelector(".library-row-estimate")).toBeNull();
+  });
+});

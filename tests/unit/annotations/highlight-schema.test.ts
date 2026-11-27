@@ -257,6 +257,7 @@ describe("NoteRecordSchema rejects invalid records", () => {
 describe("HighlightSlotSchema (issues #195/#196)", () => {
   it("parses a named-color slot (inactive — the #222 dormancy key is required)", () => {
     const parsed = HighlightSlotSchema.parse({
+      id: "s-key",
       name: "Key ideas",
       color: "blue",
       customColorActive: false,
@@ -268,6 +269,7 @@ describe("HighlightSlotSchema (issues #195/#196)", () => {
 
   it("parses a custom-color slot beside the named fallback (strict hex; #222 — active)", () => {
     const parsed = HighlightSlotSchema.parse({
+      id: "s-key",
       name: "Key ideas",
       color: "blue",
       customColor: "#e9c46a",

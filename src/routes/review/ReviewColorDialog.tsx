@@ -2,7 +2,7 @@
 // Issue #119 — the review panel's in-place highlight-color editor. Issue #222
 // — the dialog hosts the SAME slot-pills entry the annotation panel hosts
 // (src/reader/annotations/HighlightSlotEntry.tsx): ONE vocabulary across
-// surfaces — the five slots are THE color controls everywhere a highlight's
+// surfaces — the slots are THE color controls everywhere a highlight's
 // color is chosen. Activating a pill applies the slot through the review
 // seam: the slot's ACTIVE color + its tags JOIN the existing ones (the
 // additive union — never a replace).
@@ -61,7 +61,7 @@ interface ReviewColorDialogProps {
    * fresh HighlightSlotEntry per highlight keeps one row's failure copy or
    * late completion from appearing on another row). */
   highlightId: string;
-  /** The settings' five numbered slots (issue #195) — the ONE color
+  /** The settings' ordered slots (issue #195; #41 — 1..10) — the ONE color
    * vocabulary (issue #222). */
   slots: HighlightSlot[];
   /**

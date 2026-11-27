@@ -6551,6 +6551,9 @@ dialog.highlight-popover .tag-entry legend {
   inline-size: 100%;
   min-height: var(--touch);
   padding: var(--space-xs) var(--space-sm);
+  /* Issue #39 — the caret leads flush at the inline start, where the
+     Highlights summary's own marker sits. */
+  padding-inline-start: 0;
   background: transparent;
   border: 0;
   font-family: var(--font-ui);
@@ -6567,6 +6570,29 @@ dialog.highlight-popover .tag-entry legend {
 .highlight-slot-row-toggle:focus-visible {
   outline: 2px solid var(--focus-ring);
   outline-offset: -2px;
+}
+/* Issue #39 — the row's disclosure caret IS the native <details> marker:
+   an empty list-item whose inside marker is the UA's own disclosure-closed /
+   disclosure-open glyph (RTL flips it exactly as a summary's does). The
+   reference is .settings-group > summary — the Highlights disclosure these
+   rows sit in (.theme-shelf > summary is a nested 13px caps label; the two
+   summaries already differ in size and ink). Same size: the summary
+   inherits the body's reader font size, so the caret resolves that same
+   expression, not the row's 14px. Same colour: currentColor, the row's
+   --ink at rest (it follows the row's hover accent the way a summary's
+   marker follows its summary), so every theme and forced colors come free.
+   Same position: flush at the row's inline start (the toggle drops its
+   start padding, below). It swaps glyphs, never rotates — no transition or
+   animation exists to reduce (A11Y-06). */
+.highlight-slot-row-caret {
+  display: list-item;
+  list-style: disclosure-closed inside;
+  flex-shrink: 0;
+  font-size: var(--font-size, 18px);
+  line-height: 1;
+}
+.highlight-slot-row-toggle[aria-expanded="true"] > .highlight-slot-row-caret {
+  list-style-type: disclosure-open;
 }
 .highlight-slot-row-toggle .highlight-color-swatch {
   inline-size: 14px;
@@ -6638,6 +6664,41 @@ dialog.highlight-popover .tag-entry legend {
   /* The default radio row is the block's closing control; keep it visually
      calm (the shared .settings-row anatomy). */
   margin-block-start: var(--space-xs);
+}
+
+/* Issue #41 (ADR 0012) — the slot's place in the list: Move up / Move down /
+   Remove sit together at the editor's foot and wrap at narrow widths. A
+   bound-limited control is aria-disabled (still focusable, so focus never
+   drops off it at an end) and reads quieter. The inline remove confirmation
+   is a calm boxed question inside the editor — no nested modal. */
+.highlight-slot-order-actions,
+.highlight-slot-add-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-sm);
+}
+.highlight-slot-add-row {
+  margin-block-start: var(--space-sm);
+}
+.highlight-slot-order-actions [aria-disabled="true"],
+.highlight-slot-add-row [aria-disabled="true"] {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+.highlight-slot-remove-confirm {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-sm);
+  padding: var(--space-sm) var(--space-md);
+  border: 1px solid var(--hairline);
+  border-radius: var(--radius-sm);
+  font-family: var(--font-ui);
+  font-size: 14px;
+  color: var(--ink);
+}
+.highlight-slot-remove-confirm p {
+  margin: 0;
 }
 
 /* Issue #196 — the slot editor's custom color row + live preview. The row

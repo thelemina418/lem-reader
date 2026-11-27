@@ -153,7 +153,7 @@ describe("bundle v9 — structural snapshots (issue #236)", () => {
     await db.articles.put(chapteredArticle());
     const entries = unzipSync((await buildBundle()).bytes);
     const bundleJson = JSON.parse(strFromU8(entries["bundle.json"]!)) as { schemaVersion: number };
-    expect(bundleJson.schemaVersion).toBe(10);
+    expect(bundleJson.schemaVersion).toBe(11);
   });
 
   it("round-trips a structural snapshot through export → wipe → import", async () => {
@@ -226,11 +226,11 @@ describe("bundle v9 — structural snapshots (issue #236)", () => {
     expect(stored?.structure).toBeUndefined(); // derived locally on open — never invented
   });
 
-  it("forward-refuses a v11 bundle at the peek", async () => {
+  it("forward-refuses a v12 bundle at the peek", async () => {
     const { validateBundle } = await loadService();
     const entries = {
       "bundle.json": new TextEncoder().encode(
-        JSON.stringify({ schemaVersion: 11, exportedAt: "x", appVersion: "x" }),
+        JSON.stringify({ schemaVersion: 12, exportedAt: "x", appVersion: "x" }),
       ),
       "manifest.json": new TextEncoder().encode(JSON.stringify({})),
     };

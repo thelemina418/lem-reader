@@ -135,9 +135,16 @@ if (typeof HTMLDialogElement !== "undefined") {
 // ── Test harness ─────────────────────────────────────────────────────────────
 
 const SLOTS: HighlightSlot[] = [
-  { name: "Reading list", color: "default", customColorActive: false, tags: ["to-read"] },
-  { name: "Yellow", color: "yellow", customColorActive: false, tags: [] },
   {
+    id: "t-1",
+    name: "Reading list",
+    color: "default",
+    customColorActive: false,
+    tags: ["to-read"],
+  },
+  { id: "t-2", name: "Yellow", color: "yellow", customColorActive: false, tags: [] },
+  {
+    id: "t-4",
     name: "Key ideas",
     color: "blue",
     customColor: "#1234ab",
@@ -145,13 +152,14 @@ const SLOTS: HighlightSlot[] = [
     tags: ["key-idea"],
   },
   {
+    id: "t-5",
     name: "Dormant amber",
     color: "green",
     customColor: "#e9c46a",
     customColorActive: false,
     tags: [],
   },
-  { name: "Pink", color: "pink", customColorActive: false, tags: [] },
+  { id: "t-3", name: "Pink", color: "pink", customColorActive: false, tags: [] },
 ];
 
 function ControlsOpener({ highlightId }: { highlightId: string }) {

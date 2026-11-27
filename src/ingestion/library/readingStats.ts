@@ -130,3 +130,49 @@ export function timeReadLabels(stats: ReadingStats): Map<string, string> {
   }
   return labels;
 }
+
+// ── Estimated reading time (issue #40; CONTEXT.md "Estimated reading time") ──
+// THE one home of the fixed pace and its conversion. The estimate describes
+// the article, never the reader: it is a pure function of the article's
+// grapheme total (the snapshot's ONE `totalsByArticleId` fold — no new
+// library read), so it never moves as the reader progresses and is never
+// learned from reading sessions.
+//
+// Pace: ~238 words per minute (Brysbaert 2019, silent reading of English
+// non-fiction). Words are not countable in languages written without spaces
+// (Chinese, Japanese, Thai…), so the pace is converted ONCE into graphemes:
+// an English word averages ~4.7 letters plus its trailing space and a share
+// of punctuation, rounded to 6 graphemes per word. 238 × 6 = 1428 graphemes
+// per minute, applied to every language and source alike (YouTube
+// transcripts included — no special case).
+//
+// What counts is the D-05 normalized text the totals fold segments: prose,
+// headings, quotes, lists, captions, footnotes and code (verbatim). Images
+// add no per-image time allowance. The stream also carries a few short
+// incidental strings — image alt text, footnote markers like "[1]", and
+// the plain description of an unsupported block — which are too small to
+// move a minute-rounded estimate, so they are left in rather than forking
+// the one fold.
+
+/** Typical silent-reading pace, in words per minute. */
+const READING_PACE_WORDS_PER_MINUTE = 238;
+/** Graphemes per average word (≈ 4.7 letters + space + punctuation). */
+const GRAPHEMES_PER_WORD = 6;
+/** The fixed pace the estimate uses, in graphemes per minute (1428). */
+export const READING_PACE_GRAPHEMES_PER_MINUTE = READING_PACE_WORDS_PER_MINUTE * GRAPHEMES_PER_WORD;
+
+/**
+ * estimatedReadingTimeLabel — the row meta line "about {duration} read"
+ * (formatDuration's rounding and wording), "under a minute read" for short
+ * pieces, or undefined when there is no reading text at all (silence is the
+ * empty state). Worded apart from the accrued "{duration} read here" line.
+ *
+ * @param graphemeTotal The article's (or a book's summed) normalized-text
+ *                      grapheme total from `snapshot.totalsByArticleId`.
+ */
+export function estimatedReadingTimeLabel(graphemeTotal: number): string | undefined {
+  if (graphemeTotal <= 0) return undefined;
+  const seconds = (graphemeTotal * 60) / READING_PACE_GRAPHEMES_PER_MINUTE;
+  if (seconds < 60) return "under a minute read";
+  return `about ${formatDuration(seconds)} read`;
+}

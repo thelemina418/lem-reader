@@ -62,7 +62,11 @@ import { RowTagsPopover, type RowTagsTarget } from "./RowTagsPopover";
 import { ContinueReadingStrip } from "./ContinueReadingStrip";
 // Issue #38 — the ambient reading-stats strip + its pure derivations.
 import { ReadingStatsStrip } from "./ReadingStatsStrip";
-import { deriveLibraryReadingStats, timeReadLabels } from "./readingStats";
+import {
+  deriveLibraryReadingStats,
+  estimatedReadingTimeLabel,
+  timeReadLabels,
+} from "./readingStats";
 import { filterLibrary, filterBooks } from "./libraryFilter";
 // Issue #114/#115 — the ONE merged library order over articles + books,
 // dispatched on the reader's persisted LibrarySortKind.
@@ -899,6 +903,9 @@ export function LibraryView({
                     )}
                     total={totalsById.get(entry.article.id) ?? 0}
                     timeReadLabel={timeReadByArticleId.get(entry.article.id)}
+                    estimatedReadingTime={estimatedReadingTimeLabel(
+                      totalsById.get(entry.article.id) ?? 0,
+                    )}
                     highlightCount={snapshot.highlightCountByArticleId.get(entry.article.id)}
                     onReadingStateChange={async (read) => {
                       await recordCompletion(
