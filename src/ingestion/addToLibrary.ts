@@ -51,6 +51,7 @@ import { bytesToBase64 } from "./ingestCopy";
 import { normalizeTags } from "./library/tagText";
 import type { IngestionFailureReason } from "./types";
 import type { Block } from "../content/types";
+import { referencedAssetIds } from "../content/assets/referencedAssets";
 // Issue #112 — the saved-result screen's "ingestion limits" copy is the ONE
 // extraction-note derivation set (the same sentences ArticleView renders):
 // this module derives them once at save time so the dialog never re-reads
@@ -160,37 +161,6 @@ export type AddToLibraryOutcome =
     };
 
 /**
- * assetRefBodiesInBlocks — collect the `asset:img-<12hex>` reference BODIES
- * (the scheme-stripped assetIds) from every figure in a block tree,
- * recursing through containers (blockquote children + list item content —
- * figures nest per the assetStage rewrite recursion). Phase 20 (20-04
- * Task 1): the book arm attributes envelope assets to their OWNING chapter
- * articles by walking each chapter's blocks — the envelope itself carries
- * no articleId, so the model's refs are the only attribution source
- * (D20-15 article-owned rows).
- */
-export function assetRefBodiesInBlocks(blocks: readonly Block[]): string[] {
-  const ids: string[] = [];
-  const visit = (nodes: readonly Block[]) => {
-    for (const block of nodes) {
-      if (block.kind === "figure") {
-        if (block.src !== undefined && block.src.startsWith("asset:")) {
-          ids.push(block.src.slice("asset:".length));
-        }
-      } else if (block.kind === "blockquote") {
-        visit(block.children);
-      } else if (block.kind === "bulleted-list" || block.kind === "numbered-list") {
-        for (const item of block.items) {
-          visit(item.content);
-        }
-      }
-    }
-  };
-  visit(blocks);
-  return ids;
-}
-
-/**
  * bookAssetsForChapters — attribute validated envelope assets to chapter
  * articles, producing the flat BookAsset list saveBook persists (the
  * 20-03 contract). An asset referenced by TWO chapters produces TWO rows
@@ -205,7 +175,7 @@ export function bookAssetsForChapters(
   const byId = new Map(assets.map((asset) => [asset.assetId, asset]));
   const out: BookAsset[] = [];
   for (const chapter of chapters) {
-    for (const assetId of new Set(assetRefBodiesInBlocks(chapter.blocks))) {
+    for (const assetId of referencedAssetIds(chapter.blocks)) {
       const asset = byId.get(assetId);
       if (asset) {
         out.push({ articleId: chapter.id, ...asset });

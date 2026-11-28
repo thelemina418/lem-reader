@@ -26,47 +26,16 @@
 // reserved geometry the visible page will).
 import { createContext, useContext, useEffect, useState } from "react";
 import type { CanonicalArticle } from "../types";
-import type { Block } from "../types";
 import { fixtureAssetRegistry } from "../../fixtures/figure-assets";
 import { bulkGetAssets } from "../../persistence/assetsStore";
 import type { AssetRecordRow } from "../../persistence/db";
+import { referencedAssetIds } from "./referencedAssets";
 
 /** The stable empty map for articles with no figure assets (zero
  * allocations across renders — the EMPTY_HIGHLIGHTS discipline). */
 const EMPTY_URLS: ReadonlyMap<string, string> = new Map();
 
 const AssetUrlContext = createContext<ReadonlyMap<string, string> | null>(null);
-
-/**
- * figureAssetIds — walk a block tree collecting the `asset:img-<12hex>`
- * reference BODIES (scheme-stripped assetIds) in document order, recursing
- * through containers (blockquote children + list item content — figures
- * nest per the assetStage rewrite recursion). Dedupes byte-identical twins
- * (same assetId from different figures resolves once — D7-07 self-identify
- * composed with the per-article map). The renderer-side twin of AddDialog's
- * book-arm attribution walk.
- */
-export function figureAssetIds(article: CanonicalArticle): string[] {
-  const ids: string[] = [];
-  const visit = (blocks: readonly Block[]) => {
-    for (const block of blocks) {
-      if (block.kind === "figure") {
-        if (block.src !== undefined && block.src.startsWith("asset:")) {
-          const id = block.src.slice("asset:".length);
-          if (!ids.includes(id)) ids.push(id);
-        }
-      } else if (block.kind === "blockquote") {
-        visit(block.children);
-      } else if (block.kind === "bulleted-list" || block.kind === "numbered-list") {
-        for (const item of block.items) {
-          visit(item.content);
-        }
-      }
-    }
-  };
-  visit(article.blocks);
-  return ids;
-}
 
 /**
  * AssetProvider — resolves every figure asset ref of `article` into a
@@ -90,7 +59,7 @@ export function AssetProvider({
     let revoked = false;
     const created: string[] = [];
     const resolve = async () => {
-      const ids = figureAssetIds(article);
+      const ids = referencedAssetIds(article.blocks);
       if (ids.length === 0) return;
       let rows: readonly AssetRecordRow[];
       const fixtureRows = fixtureAssetRegistry.get(article.id);

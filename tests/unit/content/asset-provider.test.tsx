@@ -28,11 +28,7 @@ vi.mock("../../../src/persistence/assetsStore", () => ({
 }));
 
 import { bulkGetAssets } from "../../../src/persistence/assetsStore";
-import {
-  AssetProvider,
-  useAssetUrl,
-  figureAssetIds,
-} from "../../../src/content/assets/AssetProvider";
+import { AssetProvider, useAssetUrl } from "../../../src/content/assets/AssetProvider";
 import { fixtureAssetRegistry } from "../../../src/fixtures/figure-assets";
 import type { AssetRecordRow } from "../../../src/persistence/db";
 import type { Block, CanonicalArticle } from "../../../src/content/types";
@@ -266,51 +262,6 @@ describe("AssetProvider — object-URL lifecycle (Pitfall 9)", () => {
     expect(active).not.toBe("none");
     expect(revoked).toEqual(created.filter((u) => u !== active));
     expect(created.filter((u) => u === active)).toHaveLength(1);
-  });
-});
-
-describe("figureAssetIds — the block walk (renderer-side twin of the AddDialog attribution)", () => {
-  it("collects asset ref bodies in document order, recursing containers", () => {
-    const art = article("walk", [
-      paragraph("p"),
-      figure("top", "asset:img-aaaaaaaaaaaa"),
-      {
-        kind: "blockquote",
-        children: [figure("in-quote", "asset:img-bbbbbbbbbbbb")],
-      },
-      {
-        kind: "bulleted-list",
-        items: [
-          {
-            content: [
-              paragraph("li"),
-              figure("in-list", "asset:img-cccccccccccc"),
-              {
-                kind: "numbered-list",
-                start: 1,
-                items: [{ content: [figure("nested", "asset:img-dddddddddddd")] }],
-              },
-            ],
-          },
-        ],
-      },
-      figure("legacy is skipped", "https://upload.wikimedia.org/x.png"),
-      figure("refused has no src at all"),
-    ]);
-    expect(figureAssetIds(art)).toEqual([
-      "img-aaaaaaaaaaaa",
-      "img-bbbbbbbbbbbb",
-      "img-cccccccccccc",
-      "img-dddddddddddd",
-    ]);
-  });
-
-  it("dedupes repeated refs (byte-identical twins resolve once)", () => {
-    const art = article("dupe", [
-      figure("a", "asset:img-aaaaaaaaaaaa"),
-      figure("b", "asset:img-aaaaaaaaaaaa"),
-    ]);
-    expect(figureAssetIds(art)).toEqual(["img-aaaaaaaaaaaa"]);
   });
 });
 
