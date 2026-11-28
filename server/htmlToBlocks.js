@@ -1,0 +1,1090 @@
+// server/htmlToBlocks.ts
+// Plan 07-04 Task 1 — the extract → sanitize → DOM-walk stage of the ingestion
+// pipeline. This is the production-grade promotion of the v1.0 D-09 throwaway
+// (`scripts/normalize-source.ts`): Readability extracts the article body,
+// DOMPurify sanitizes with a strict allowlist (the structural XSS defense,
+// ING-07), and an exhaustive DOM walk maps the result onto the 9-kind Block
+// tree (the exact shape from `src/content/schema.ts`).
+//
+// DOM substrate — Option A (jsdom-primary). The 07-01 jsdom-on-Workers spike
+// returned a HYBRID CONTINGENCY verdict (human-approved 2026-08-11): jsdom AND
+// linkedom both fail the mXSS gate on Workers, so extraction+sanitize run in a
+// NODE-runtime function (07-06 routes the adapter). In Node, jsdom is the
+// native pair for isomorphic-dompurify and works exactly as it did for the
+// v1.0 `scripts/normalize-source.ts` ancestor. The `/server` adapter boundary
+// (CONTEXT.md D7-05) keeps this logic runtime-agnostic.
+//
+// Security boundary (RESEARCH.md §Pattern 2 + §DOMPurify Strict Config): the
+// doc model IS the security boundary. DOMPurify runs ONCE here at ingest; the
+// resulting Block tree is pure JSON — never HTML — so React renders Block JSON
+// and `dangerouslySetInnerHTML` exists nowhere (repo-wide eslint gate, 07-07).
+//
+// Pitfall 4 defenses baked into SANITIZE_CONFIG:
+//   - USE_PROFILES:{html:true} — no SVG/MathML (the mXSS attack surface)
+//   - explicit ALLOWED_TAGS — no ADD_TAGS widening
+//   - ALLOW_DATA_ATTR:false — no data-* clobbering surface
+//   - default ALLOWED_URI_REGEXP kept (blocks javascript:)
+//   - NEVER re-parse sanitized HTML to string then back to DOM then render
+import { JSDOM } from "jsdom";
+import DOMPurify, { clearWindow } from "isomorphic-dompurify";
+import { Readability, isProbablyReaderable } from "@mozilla/readability";
+import { footnoteBodyFromParagraphs, } from "../src/content/footnoteBody";
+import { normalizeRunText } from "../src/content/normalizeText";
+import { publisherEntryMatchesHeading } from "../src/content/structure";
+import { attachAdjacentCaptions, withCaption } from "./figureCaptions";
+import { detectLinkedFootnotes, footnoteNumberFromHref } from "./footnoteLinks";
+/** `noteNumbers`: the N of every note `fn-N` the article keeps. */
+function newFootnoteRefWalk(noteNumbers) {
+    return { isNote: (n) => noteNumbers.has(n), occurrences: new Map() };
+}
+// ── DOM node helpers (jsdom provides the DOM lib types) ─────────────────────
+function isText(n) {
+    return typeof n === "object" && n !== null && n.nodeType === 3;
+}
+function isEl(n) {
+    return typeof n === "object" && n !== null && n.nodeType === 1;
+}
+// ── SANITIZE_CONFIG — the locked DOMPurify strict allowlist (Pitfall 4) ──────
+// RESEARCH.md §DOMPurify Strict Config L680-697 verbatim. ALLOWED_TAGS covers
+// exactly the 9 block-kind tags + the 4 inline-mark tags + structural (br/hr)
+// + sup (footnote-reference marker). Anything else is dropped by DOMPurify or
+// becomes UnsupportedBlock in the DOM walk.
+export const SANITIZE_CONFIG = {
+    // No svg, no mathml (Pitfall 4 — the mXSS attack surface).
+    USE_PROFILES: { html: true },
+    // Exactly the tags that map to a v1.0 Block kind + the D-04 inline marks.
+    ALLOWED_TAGS: [
+        "p",
+        "h1",
+        "h2",
+        "h3",
+        "h4",
+        "h5",
+        "h6", // HeadingBlock
+        "ul",
+        "ol",
+        "li", // BulletedListBlock / NumberedListBlock
+        "blockquote", // BlockquoteBlock
+        "pre",
+        "code", // CodeBlock
+        "a", // LinkMark
+        "strong",
+        "em", // StrongMark / EmMark
+        "img",
+        "figure",
+        "figcaption", // FigureBlock (src httpUrl only)
+        "br",
+        "hr", // structural
+        "sup", // FootnoteReferenceBlock (marker)
+    ],
+    // 260908-ef5 — srcset admitted for the best-candidate selection below.
+    // Injection-surface analysis (T-EF5-03): the attribute is consumed ONLY
+    // by selectSrcsetCandidate's parser and is never re-serialized into DOM
+    // output; every chosen candidate must resolve to an absolute http(s) URL
+    // via the URL constructor before entering the model and is re-validated
+    // by the ArticleSchema httpUrl refinement at parse time; non-http
+    // (script-scheme) candidates are skipped by the resolver. data-* stays
+    // stripped — ALLOW_DATA_ATTR:false is the load-bearing Pitfall 4 defense
+    // and data-srcset is deliberately NOT rescued (Readability's pre-sanitize
+    // lazy-load swap already handles the common data-src case).
+    ALLOWED_ATTR: ["href", "title", "alt", "src", "cite", "srcset"],
+    // Explicitly forbid the dangerous tags even if a profile would allow them.
+    FORBID_TAGS: [
+        "script",
+        "style",
+        "iframe",
+        "object",
+        "embed",
+        "form",
+        "input",
+        "link",
+        "meta",
+        "base",
+        "svg",
+        "math",
+    ],
+    // No data-* attributes — eliminates the DOM-clobbering surface (Pitfall 4).
+    // Do NOT set ALLOW_UNKNOWN_PROTOCOLS (preserves the default URI regex that
+    // blocks javascript:).
+    ALLOW_DATA_ATTR: false,
+};
+// ── Reverse-tabnabbing guard (T-7-18) ───────────────────────────────────────
+// Defense-in-depth: add rel="noopener noreferrer" to every surviving
+// <a target="_blank">. NOTE: target is not in ALLOWED_ATTR so target=_blank is
+// stripped by DOMPurify before this hook fires — this hook is belt-and-
+// suspenders for the day target is re-allowed. Registered once at module load.
+DOMPurify.addHook("afterSanitizeAttributes", (node) => {
+    if (node && node.nodeName === "A" && node.getAttribute("target") === "_blank") {
+        node.setAttribute("rel", "noopener noreferrer");
+    }
+});
+/**
+ * sanitizeExtractedHtml — DOMPurify.sanitize under SANITIZE_CONFIG, then
+ * clearWindow() to release the jsdom window state isomorphic-dompurify holds
+ * internally. CRITICAL for long-running Node functions (isomorphic-dompurify
+ * README): without clearWindow, the jsdom window leaks across requests.
+ */
+export function sanitizeExtractedHtml(html) {
+    return sanitizeExtractedHtmlEach([html])[0];
+}
+/** sanitizeExtractedHtml over several fragments with ONE clearWindow() at
+ * the end (issue #60: an article may carry ~1,000 notes, and releasing the
+ * window per note rebuilds a jsdom window per note). Same config, same
+ * per-fragment output. */
+function sanitizeExtractedHtmlEach(htmls) {
+    const clean = htmls.map((html) => DOMPurify.sanitize(html, SANITIZE_CONFIG));
+    clearWindow();
+    return clean;
+}
+// ── Inline-run extraction (D-04 mark set — copy of normalize-source.ts L39-95) ──
+/** Recursively extract inline runs from a node list, accumulating D-04 marks.
+ * The node-list form is the byte-faithful core; `extractInline` delegates to
+ * it (and the issue #19 paragraph segmentation reuses it directly so caption
+ * runs flow through the IDENTICAL mark logic — no drift, Pitfall 8-1
+ * discipline). */
+function extractInlineNodes(nodes, marks, refs) {
+    const runs = [];
+    for (const child of nodes) {
+        if (isText(child)) {
+            const text = (child.textContent ?? "").replace(/\s+/g, " ");
+            if (text.trim().length > 0)
+                runs.push({ text, marks });
+            else if (text.length > 0)
+                runs.push({ text: " ", marks });
+        }
+        else if (isEl(child)) {
+            const tag = child.tagName.toLowerCase();
+            if (tag === "br") {
+                runs.push({ text: " ", marks });
+                continue;
+            }
+            const next = [...marks];
+            // D-04 mark set. sub/sup/del/strike/s are intentionally NOT carried.
+            if (tag === "a") {
+                const href = child.getAttribute("href") ?? "";
+                // Issue #55 — a controlled reference (rewritten by
+                // detectLinkedFootnotes) naming a detected note becomes the inline
+                // footnote-ref mark; its text is the publisher's marker.
+                const noteNumber = refs ? footnoteNumberFromHref(href) : null;
+                if (refs && noteNumber !== null && refs.isNote(noteNumber)) {
+                    const footnoteId = `fn-${noteNumber}`;
+                    const occurrence = (refs.occurrences.get(footnoteId) ?? 0) + 1;
+                    refs.occurrences.set(footnoteId, occurrence);
+                    const text = normalizeRunText(child.textContent ?? "");
+                    if (text.length > 0) {
+                        runs.push({
+                            text,
+                            marks: [...marks, { type: "footnote-ref", footnoteId, occurrence }],
+                        });
+                    }
+                    continue;
+                }
+                // T-7-17: only http(s)/mailto hrefs become LinkMark; others are demoted
+                // to plain text (the run recurses without a link mark). The schema's
+                // linkableUrl refinement re-validates at ArticleSchema.parse time.
+                if (/^(https?:|mailto:)/i.test(href)) {
+                    const title = child.getAttribute("title") ?? undefined;
+                    next.push(title ? { type: "link", href, title } : { type: "link", href });
+                }
+            }
+            else if (tag === "code" || tag === "kbd" || tag === "samp") {
+                next.push({ type: "code" });
+            }
+            else if (tag === "strong" || tag === "b") {
+                next.push({ type: "strong" });
+            }
+            else if (tag === "em" || tag === "i") {
+                next.push({ type: "em" });
+            }
+            runs.push(...extractInlineNodes(Array.from(child.childNodes ?? []), next, refs));
+        }
+    }
+    return runs;
+}
+/** Extract inline runs from one node's children (the historical shape). */
+function extractInline(node, marks, refs) {
+    return extractInlineNodes(Array.from(node.childNodes ?? []), marks, refs);
+}
+/** Collapse leading/trailing whitespace-only runs; merge adjacent identical-mark runs. */
+function tidyRuns(runs) {
+    const out = [];
+    for (const r of runs) {
+        if (r.text.trim().length === 0 && out.length === 0)
+            continue; // drop leading ws
+        const last = out[out.length - 1];
+        const sameMarks = last !== undefined &&
+            last.marks.length === r.marks.length &&
+            last.marks.every((m, i) => JSON.stringify(m) === JSON.stringify(r.marks[i]));
+        if (sameMarks && last !== undefined) {
+            last.text += r.text;
+        }
+        else {
+            out.push({ ...r });
+        }
+    }
+    while (out.length) {
+        const last = out[out.length - 1];
+        if (last && last.text.trim().length === 0)
+            out.pop();
+        else
+            break;
+    }
+    for (const r of out)
+        r.text = r.text.replace(/[ \t]{2,}/g, " ");
+    return out;
+}
+// ── Block-kind mapping (exhaustive — Pattern F; no default clause) ──────────
+const BLOCK_TAGS = new Set([
+    "p",
+    "h1",
+    "h2",
+    "h3",
+    "h4",
+    "h5",
+    "h6",
+    "ul",
+    "ol",
+    "blockquote",
+    "figure",
+    "pre",
+    "table",
+    "hr",
+]);
+const UNSUPPORTED_TAGS = new Set([
+    "table",
+    "iframe",
+    "video",
+    "audio",
+    "embed",
+    "object",
+    "canvas",
+    "svg",
+    "form",
+    "input",
+    "button",
+    "select",
+    "textarea",
+    "math",
+]);
+function headingLevel(tag) {
+    const m = /^h([1-6])$/.exec(tag);
+    return m ? Number(m[1]) : null;
+}
+// ── srcset best-candidate selection (quick task 260908-ef5) ──────────────────
+// A srcset-carrying img imports its best real candidate instead of the tiny
+// fallback src publishers put in the attribute for no-JS browsers. The
+// selector is PURE and never throws: malformed parts are skipped calmly,
+// unresolvable or non-http(s) candidates (any script-scheme payload) are
+// skipped by the URL-constructor resolver, and a nothing-parseable result
+// returns null so plain src stays in force — byte-stable for every document
+// that carries no usable srcset.
+//
+// Selection precedence (the repro's planner decision): width descriptors
+// take precedence when width and density candidates are mixed — widths are
+// the physical cap the 1600px display budget reasons about; among widths,
+// the largest up to and including 1600, else the largest overall; among
+// density-only candidates, the smallest density at or above 1 (a 1x-equiv
+// pick), else the largest below 1 (best available below parity).
+/** The display-budget ceiling for srcset width selection. */
+const SRCSET_MAX_WIDTH = 1600;
+/** Width descriptor: an integer immediately followed by "w" (case-insensitive). */
+const WIDTH_DESCRIPTOR = /^\d+w$/i;
+/** Density descriptor: a decimal number immediately followed by "x". */
+const DENSITY_DESCRIPTOR = /^(?:\d+\.?\d*|\.\d+)x$/i;
+/** Resolve a candidate URL against the document base; null when the URL
+ * constructor throws or the result is not http(s) — the script-scheme skip
+ * lives here, before anything enters the model (T-EF5-03). */
+function resolveHttpCandidate(candidate, baseUri) {
+    try {
+        const resolved = new URL(candidate, baseUri);
+        if (resolved.protocol !== "http:" && resolved.protocol !== "https:") {
+            return null;
+        }
+        return resolved.toString();
+    }
+    catch {
+        return null; // unresolvable — skipped calmly (the helper never throws)
+    }
+}
+/** Width preference: the largest width up to and including the cap beats any
+ * over-cap width; among equals-to-the-cap-class the larger wins; when every
+ * candidate is over the cap, the largest available wins. */
+function preferWidth(candidate, best) {
+    if (candidate === best)
+        return false;
+    if (candidate <= SRCSET_MAX_WIDTH && best <= SRCSET_MAX_WIDTH) {
+        return candidate > best; // both within cap — larger
+    }
+    if (candidate <= SRCSET_MAX_WIDTH)
+        return true; // within-cap beats over-cap
+    if (best <= SRCSET_MAX_WIDTH)
+        return false;
+    return candidate > best; // both over cap — largest available
+}
+/** Density preference: the smallest density at or above 1 wins; a below-1
+ * candidate only wins when every candidate is below 1 (then the largest). */
+function preferDensity(candidate, best) {
+    if (candidate === best)
+        return false;
+    if (candidate >= 1 && best >= 1)
+        return candidate < best; // both ≥1 — smallest
+    if (candidate >= 1)
+        return true; // at-or-above-1 beats below-1
+    if (best >= 1)
+        return false;
+    return candidate > best; // both below 1 — largest below
+}
+/** selectSrcsetCandidate — parse a srcset attribute and return the resolved
+ * absolute http(s) URL of the best candidate, or null when nothing usable
+ * parses. Grammar per candidate part (comma-separated): exactly one
+ * whitespace token is a bare URL (density 1); exactly two tokens whose
+ * second matches a width or density descriptor is a described candidate;
+ * anything else — empty part, a lone descriptor (missing URL), extra
+ * tokens, an unparseable descriptor — is malformed and skipped calmly. */
+function selectSrcsetCandidate(attr, baseUri) {
+    const widths = [];
+    const densities = [];
+    for (const part of attr.split(",")) {
+        const tokens = part
+            .trim()
+            .split(/\s+/)
+            .filter((t) => t.length > 0);
+        if (tokens.length === 1) {
+            // A lone descriptor token is a missing-URL malformed part, never a
+            // relative URL we should admit.
+            if (WIDTH_DESCRIPTOR.test(tokens[0]) || DENSITY_DESCRIPTOR.test(tokens[0])) {
+                continue;
+            }
+            const resolved = resolveHttpCandidate(tokens[0], baseUri);
+            if (resolved !== null)
+                densities.push({ url: resolved, density: 1 });
+            continue;
+        }
+        if (tokens.length === 2) {
+            const [url, descriptor] = tokens;
+            const widthMatch = WIDTH_DESCRIPTOR.exec(descriptor);
+            if (widthMatch) {
+                const resolved = resolveHttpCandidate(url, baseUri);
+                if (resolved !== null) {
+                    widths.push({ url: resolved, width: Number.parseInt(widthMatch[0], 10) });
+                }
+                continue;
+            }
+            const densityMatch = DENSITY_DESCRIPTOR.exec(descriptor);
+            if (densityMatch) {
+                const resolved = resolveHttpCandidate(url, baseUri);
+                if (resolved !== null) {
+                    densities.push({ url: resolved, density: Number.parseFloat(densityMatch[0]) });
+                }
+                continue;
+            }
+            // Unparseable descriptor — malformed, skipped calmly.
+            continue;
+        }
+        // Empty or 3+-token part — malformed, skipped calmly.
+    }
+    // Width descriptors take precedence when both kinds are present.
+    if (widths.length > 0) {
+        let best = widths[0];
+        for (const c of widths) {
+            if (preferWidth(c.width, best.width))
+                best = c;
+        }
+        return best.url;
+    }
+    if (densities.length > 0) {
+        let best = densities[0];
+        for (const c of densities) {
+            if (preferDensity(c.density, best.density))
+                best = c;
+        }
+        return best.url;
+    }
+    return null;
+}
+/** Build a FigureBlock from a <figure> or bare <img>; UnsupportedBlock if src
+ * is not a valid http(s) URL (T-7-17 — ArticleSchema.httpUrl re-validates). */
+function figureBlock(el, figureSrcResolver, refs) {
+    const tag = el.tagName.toLowerCase();
+    const img = tag === "img" ? el : el.querySelector("img");
+    const figcaption = tag === "figure" ? el.querySelector("figcaption") : null;
+    if (!img) {
+        return [
+            {
+                kind: "unsupported",
+                originalKind: tag,
+                plainDescription: "An image element from the original article that the reader could not load.",
+            },
+        ];
+    }
+    const alt = img.getAttribute("alt") ?? "";
+    // img.src (IDL) returns the absolute URL (resolved by jsdom against baseURI).
+    // Fall back to the raw attribute for environments where IDL resolution is off.
+    const rawSrc = img.getAttribute("src") ?? "";
+    let src = rawSrc;
+    try {
+        const idl = img.src;
+        if (idl)
+            src = idl;
+    }
+    catch {
+        /* keep rawSrc */
+    }
+    // 260908-ef5 — srcset selection: when the img carries a non-empty srcset,
+    // the chosen best candidate overrides src BEFORE the http(s) test and the
+    // figureSrcResolver logic below — both stay unchanged and simply see the
+    // chosen candidate (re-validated by ArticleSchema.httpUrl at parse). A
+    // null result (absent/empty/nothing-parseable srcset — the EPUB case,
+    // where relative candidates cannot resolve against about:blank) leaves
+    // plain src in force, byte-stable.
+    const srcset = img.getAttribute("srcset") ?? "";
+    if (srcset.trim().length > 0) {
+        const chosen = selectSrcsetCandidate(srcset, img.baseURI);
+        if (chosen !== null)
+            src = chosen;
+    }
+    if (/^https?:/i.test(src)) {
+        // Review S4 — caption markers are linked references like body markers.
+        const caption = figcaption ? tidyRuns(extractInline(figcaption, [], refs)) : [];
+        return [{ kind: "figure", alt: alt || "", src, caption }];
+    }
+    // 20-02 Task 2 — a non-http src CLAIMED by the resolver (the EPUB
+    // container-marker path, wired by 20-06) becomes a FigureBlock carrying
+    // the raw src for container resolution downstream. Never consulted for
+    // http(s) srcs, and absent by default (byte-stable url/paste path).
+    if (figureSrcResolver !== undefined && figureSrcResolver(src)) {
+        // Review S4 — caption markers are linked references like body markers.
+        const caption = figcaption ? tidyRuns(extractInline(figcaption, [], refs)) : [];
+        return [{ kind: "figure", alt: alt || "", src, caption }];
+    }
+    return [
+        {
+            kind: "unsupported",
+            originalKind: "figure",
+            plainDescription: "An image whose source could not be normalized to a valid URL.",
+        },
+    ];
+}
+/** Heuristically find the main article content container in a document. */
+function findContentRoot(document) {
+    const candidates = [
+        "article",
+        "main",
+        "#readability-page-1", // Readability wraps output in this
+        "#mw-content-text",
+        ".mw-parser-output",
+        "#content",
+        "[role='main']",
+    ];
+    for (const sel of candidates) {
+        const el = document.querySelector(sel);
+        if (el && el.textContent && el.textContent.trim().length > 0)
+            return el;
+    }
+    return document.body ?? document.documentElement;
+}
+/** Issue #19 — split a paragraph's DIRECT child nodes into caption segments:
+ * segments[0] holds the nodes before the first img, then one segment per img
+ * holds the nodes between it and the next img (or the paragraph end). Each
+ * segment's runs feed the caption channel through the shared extractor, so
+ * marks and whitespace behave byte-identically to paragraph runs. */
+function splitDirectChildSegments(el) {
+    const segments = [[]];
+    for (const child of Array.from(el.childNodes)) {
+        if (isEl(child) && child.tagName.toLowerCase() === "img") {
+            segments.push([]);
+            continue;
+        }
+        segments[segments.length - 1].push(child);
+    }
+    return segments;
+}
+/**
+ * visitChildren — walk one container's element children through `visit`,
+ * then run the issue #19 adjacent-caption pass over the flattened result so
+ * caption-looking paragraphs attach to caption-empty figures at every
+ * container level (root, blockquote children, list items, recursed
+ * containers) — not just at the article root.
+ */
+function visitChildren(el, refs, figureSrcResolver) {
+    return attachAdjacentCaptions(Array.from(el.children).flatMap((c) => visit(c, refs, figureSrcResolver)));
+}
+/**
+ * visit — map a single DOM element to 0..N Block nodes (Pattern F).
+ *
+ * Exhaustive if-chain over the block-level tags: h1-h6, p, blockquote, ul, ol,
+ * figure, img, pre, sup (footnote-ref), + an UnsupportedBlock fallback that IS
+ * the catch-all (no `default` clause; any unmappable tag becomes an honest
+ * DOC-06 disclosure). Container-ish elements (div, section, aside, main,
+ * article) recurse into children via flatMap to find nested block content.
+ *
+ * Returns Block[] (rather than pushing into a shared closure) so nested
+ * containers (blockquote children, list-item content) compose cleanly.
+ */
+function visit(el, refs, figureSrcResolver) {
+    const tag = el.tagName.toLowerCase();
+    // Skip obvious chrome / non-content decoration.
+    if (el.classList?.contains("mw-editsection") ||
+        el.getAttribute?.("role") === "navigation") {
+        return [];
+    }
+    // Issue #55: in-text footnote references are INLINE marks now (the
+    // footnote-ref arm of extractInlineNodes). New ingests never produce the
+    // legacy block-level footnote-reference kind; stored rows keep parsing.
+    const level = headingLevel(tag);
+    if (level !== null) {
+        const content = tidyRuns(extractInline(el, [], refs));
+        return content.length ? [{ kind: "heading", level, content }] : [];
+    }
+    if (tag === "p") {
+        // Extracted lazily: the image-first caption branch never uses the
+        // paragraph channel, and must not advance the reference occurrences.
+        const paragraphContent = () => tidyRuns(extractInline(el, [], refs));
+        // 260908-ef5 — inline-image hoisting (Honesty: no silent garbage). An
+        // img inside a paragraph used to be silently dropped by the inline-run
+        // extractor; now each el.querySelectorAll("img") match becomes its own
+        // FigureBlock AFTER the paragraph (paragraph-first ordering — calm
+        // reading flow). An img-only paragraph emits its figures with the empty
+        // paragraph omitted. Non-resolvable inline imgs produce the same honest
+        // UnsupportedBlock a bare top-level img produces — one admission code
+        // path (figureBlock), no fork, no silent drop; volume stays bounded by
+        // the stage's existing count/budget/deadline caps (T-EF5-04). Scope:
+        // headings are NOT hoisted — heading-with-image is pathological layout
+        // abuse and the heading arm stays byte-stable. Recursion already reaches
+        // paragraphs inside blockquote children and list items, so those hoist
+        // via this same arm. EPUB compatibility: epubToBooks reuses
+        // sanitizeExtractedHtml + htmlToBlocks with a JSDOM that carries no
+        // document URL, so relative srcset candidates fail URL resolution
+        // against about:blank and calmly fall back to the src/container-marker
+        // path — srcset inside EPUBs is rare; acceptable and stated.
+        //
+        // Issue #19 — image-first caption attachment. When the paragraph's
+        // meaningful content BEGINS at its first img (image-first), the text
+        // following each img is caption text: each hoisted figure carries its
+        // trailing segment as caption runs and renders them as a real
+        // <figcaption> BELOW the image. The per-segment runs flow through the
+        // SAME extractInlineNodes/tidyRuns pair as the paragraph channel
+        // (D-05/Pitfall 8-1 discipline), so caption offsets anchor exactly like
+        // a true figcaption's do (capture.ts figure alignment). Text-first
+        // paragraphs keep the pinned paragraph-first ordering above with empty
+        // captions, and paragraphs whose imgs sit inside inline wrappers
+        // (span/a/…) keep the calm legacy fallback — segmentation needs direct
+        // img children; a heuristic miss degrades to a body paragraph, never to
+        // lost text.
+        const allImgs = Array.from(el.querySelectorAll("img"));
+        if (allImgs.length === 0) {
+            const content = paragraphContent();
+            return content.length ? [{ kind: "paragraph", content }] : [];
+        }
+        const directOnly = allImgs.every((img) => img.parentElement === el);
+        const segments = directOnly ? splitDirectChildSegments(el) : null;
+        if (segments && tidyRuns(extractInlineNodes(segments[0], [])).length === 0) {
+            return allImgs.flatMap((img, k) => withCaption(figureBlock(img, figureSrcResolver), tidyRuns(extractInlineNodes(segments[k + 1] ?? [], [], refs))));
+        }
+        const hoistedFigures = allImgs.flatMap((img) => figureBlock(img, figureSrcResolver));
+        const content = paragraphContent();
+        if (content.length) {
+            return hoistedFigures.length
+                ? [{ kind: "paragraph", content }, ...hoistedFigures]
+                : [{ kind: "paragraph", content }];
+        }
+        return hoistedFigures;
+    }
+    if (tag === "blockquote") {
+        const children = visitChildren(el, refs, figureSrcResolver);
+        if (children.length)
+            return [{ kind: "blockquote", children }];
+        // Fallback: capture the blockquote's own inline text as a paragraph.
+        const content = tidyRuns(extractInline(el, [], refs));
+        return content.length ? [{ kind: "paragraph", content }] : [];
+    }
+    if (tag === "ul" || tag === "ol") {
+        const items = [];
+        for (const li of Array.from(el.children)) {
+            if (li.tagName.toLowerCase() !== "li")
+                continue;
+            const liContent = visitChildren(li, refs, figureSrcResolver);
+            if (liContent.length)
+                items.push({ content: liContent });
+        }
+        if (!items.length)
+            return [];
+        if (tag === "ul")
+            return [{ kind: "bulleted-list", items }];
+        const start = Number(el.getAttribute("start") ?? 1);
+        return [{ kind: "numbered-list", items, start }];
+    }
+    if (tag === "figure" || tag === "img") {
+        return figureBlock(el, figureSrcResolver, refs);
+    }
+    if (tag === "pre") {
+        const codeEl = el.querySelector("code");
+        const source = (codeEl ?? el).textContent ?? "";
+        if (!source.trim().length)
+            return [];
+        const cls = codeEl?.getAttribute("class") ?? el.getAttribute("class") ?? "";
+        const lang = /(?:language|lang)-(\w+)/.exec(cls)?.[1];
+        return [lang ? { kind: "code-block", source, language: lang } : { kind: "code-block", source }];
+    }
+    if (tag === "hr")
+        return []; // decorative thematic break — no Block kind
+    if (UNSUPPORTED_TAGS.has(tag)) {
+        return [
+            {
+                kind: "unsupported",
+                originalKind: tag,
+                plainDescription: `An embedded ${tag} element from the original article that the reader could not render.`,
+            },
+        ];
+    }
+    // Container-ish elements (div, section, aside, main, article, span, dl):
+    // recurse into children to find nested block content.
+    if (!BLOCK_TAGS.has(tag)) {
+        return visitChildren(el, refs, figureSrcResolver);
+    }
+    // Catch-all (no `default:` clause — the unsupported branch IS the default).
+    return [
+        {
+            kind: "unsupported",
+            originalKind: tag,
+            plainDescription: `A ${tag} element from the original article that the reader could not render.`,
+        },
+    ];
+}
+/**
+ * htmlToBlocks — walk a sanitized DOM and emit a 9-kind Block tree.
+ *
+ * Delegates to `visit` for the exhaustive block-kind mapping (Pattern F).
+ * Returns blocks, footnotes, lang, and a partial Provenance extracted from the
+ * given DOM. (When called from extractAndNormalize on the sanitized Readability
+ * content fragment, lang/provenance are thin — extractAndNormalize overrides
+ * them with the richer original-document values.)
+ */
+export function htmlToBlocks(sanitizedDom, sourceUrl, figureSrcResolver, noteNumbers = new Set()) {
+    const root = findContentRoot(sanitizedDom);
+    const blocks = visitChildren(root, newFootnoteRefWalk(noteNumbers), figureSrcResolver);
+    return {
+        blocks,
+        // Footnote bodies come from link-graph detection on the ORIGINAL DOM
+        // (extractAndNormalize); a sanitized DOM carries no ids to detect with.
+        footnotes: [],
+        lang: detectLang(sanitizedDom),
+        provenancePartial: buildProvenance(sanitizedDom, sourceUrl),
+        // The sanitized content fragment has no original nav — outline evidence
+        // is captured from the ORIGINAL document at extractAndNormalize only.
+        outlineEvidence: [],
+    };
+}
+// ── Footnote bodies (issue #55) ──────────────────────────────────────────────
+/** Return glyphs publishers leave beside (not inside) a back-link. */
+const TRAILING_RETURN_GLYPHS = /(?:\s|[\u21A9\u21AA]|\uFE0E|\uFE0F)+$/u;
+/** Return glyphs and carets left at a note's start once its back-links are
+ * gone (Wikipedia's "^ a b": the letters were the links, the caret is text). */
+const LEADING_RETURN_GLYPHS = /^(?:\s|\^|[\u21A9\u21AA\u2191]|\uFE0E|\uFE0F)+/u;
+/** Elements that open a new paragraph inside a note (issue #59). Quotations,
+ * lists and any other block structure inside a note flatten into
+ * paragraphs: each block-level descendant's own inline content is one
+ * paragraph, its text intact. */
+const NOTE_PARAGRAPH_BREAK_TAGS = new Set([
+    ...BLOCK_TAGS,
+    "li",
+    "div",
+    "section",
+    "article",
+    "aside",
+    "header",
+    "footer",
+    "dl",
+    "dt",
+    "dd",
+]);
+/** Flatten a note's DOM into paragraphs of raw inline nodes. */
+function noteParagraphNodes(root) {
+    const paragraphs = [];
+    let current = [];
+    const flush = () => {
+        if (current.length > 0)
+            paragraphs.push(current);
+        current = [];
+    };
+    const walk = (parent) => {
+        for (const child of Array.from(parent.childNodes ?? [])) {
+            if (isEl(child) && NOTE_PARAGRAPH_BREAK_TAGS.has(child.tagName.toLowerCase())) {
+                flush();
+                walk(child);
+                flush();
+            }
+            else {
+                current.push(child);
+            }
+        }
+    };
+    walk(root);
+    flush();
+    return paragraphs;
+}
+/** The detected notes' raw HTML → each note's paragraphs of inline runs,
+ * through the SHARED sanitizer and inline walk (the mXSS-suite surface — no
+ * fork). One document parses every note in turn (its body is reset per
+ * note), so a heavily annotated work (issue #60: up to ~1,000 notes) does
+ * not build a jsdom per note. */
+export function footnoteBodiesParagraphs(noteHtml, url) {
+    const sanitized = sanitizeExtractedHtmlEach(noteHtml);
+    const body = new JSDOM("<body></body>", { url: url ?? undefined }).window.document.body;
+    return sanitized.map((html) => {
+        body.innerHTML = html;
+        return footnoteBodyParagraphs(body);
+    });
+}
+/** One note's parsed body → its paragraphs of inline runs. References
+ * inside a note are never live (note-to-note citations read as text). Empty
+ * paragraphs are dropped, and publisher return glyphs and carets are
+ * stripped from the note's start and end. */
+function footnoteBodyParagraphs(body) {
+    const paragraphs = noteParagraphNodes(body)
+        .map((nodes) => tidyRuns(extractInlineNodes(nodes, [])))
+        .filter((runs) => runs.length > 0);
+    // The note's start: carets and return glyphs left once back-links are gone.
+    while (paragraphs.length > 0) {
+        const runs = paragraphs[0];
+        while (runs[0] !== undefined) {
+            runs[0].text = runs[0].text.replace(LEADING_RETURN_GLYPHS, "");
+            if (runs[0].text.length > 0)
+                break;
+            runs.shift();
+        }
+        if (runs.length > 0)
+            break;
+        paragraphs.shift();
+    }
+    // The note's end: return glyphs publishers leave beside a back-link.
+    while (paragraphs.length > 0) {
+        const runs = paragraphs[paragraphs.length - 1];
+        const last = runs[runs.length - 1];
+        last.text = last.text.replace(TRAILING_RETURN_GLYPHS, "");
+        if (last.text.length === 0)
+            runs.pop();
+        if (runs.length > 0)
+            break;
+        paragraphs.pop();
+    }
+    return paragraphs;
+}
+// ── Publisher outline evidence (issue #236) ─────────────────────────────────
+/** Bounds for the captured evidence: a real publisher index is tens of
+ * chapters; these caps keep a hostile page from smuggling unbounded rows
+ * into the ingest envelope (the feed-preview bound discipline). */
+export const MAX_OUTLINE_ENTRIES = 200;
+export const MAX_OUTLINE_TITLE_CHARS = 300;
+/** Collapse whitespace with the substrate's OWN rule (normalizeRunText —
+ * the exact collapse canonical heading text carries), so captured titles
+ * compare equal to canonical heading text for the same source heading;
+ * then the evidence-size cap. */
+function outlineTitle(text) {
+    const collapsed = normalizeRunText(text);
+    return collapsed.length > MAX_OUTLINE_TITLE_CHARS ? "" : collapsed;
+}
+/** The heading levels an outline target may carry (h1–h6 — the source's own
+ * hierarchy decides which levels are chapters). */
+function isHeadingElement(el) {
+    return /^h[1-6]$/.test(el.tagName.toLowerCase());
+}
+/** The heading words under which a publisher declares a chapter index. The
+ * reference source's index is an h3 "Index" card (the marxist.com
+ * all-pages shape); "Contents"/"Table of contents" are the same publisher
+ * declaration in common typography. Anything else is not an index. */
+const INDEX_HEADING_PATTERN = /^(?:index|contents|table of contents)$/;
+function isIndexHeading(el) {
+    return (isHeadingElement(el) &&
+        INDEX_HEADING_PATTERN.test(normalizeRunText(el.textContent ?? "").toLowerCase()));
+}
+/** An index list item's label, EXCLUDING nested lists (a sub-index inside an
+ * entry is not part of that entry's title). */
+function indexEntryText(li) {
+    let text = "";
+    const walk = (node) => {
+        for (const child of Array.from(node.childNodes)) {
+            if (child.nodeType === 3) {
+                text += child.textContent ?? "";
+            }
+            else if (child.nodeType === 1) {
+                const el = child;
+                if (!/^(ul|ol)$/i.test(el.tagName))
+                    walk(el);
+            }
+        }
+    };
+    walk(li);
+    return text;
+}
+/** The imported document's own absolute URL (self-reference anchor), or null
+ * when the request carries no URL (paste path). */
+function absoluteSelfUrl(finalUrl) {
+    if (finalUrl === undefined)
+        return null;
+    try {
+        return new URL(finalUrl).href;
+    }
+    catch {
+        return null;
+    }
+}
+/** The first ordered list following `heading` among its siblings, stopping
+ * at the next heading (the index card's own scope). */
+function indexListAfter(heading) {
+    let sib = heading.nextElementSibling;
+    while (sib !== null) {
+        if (isHeadingElement(sib))
+            return null;
+        if (/^(ul|ol)$/i.test(sib.tagName))
+            return sib;
+        sib = sib.nextElementSibling;
+    }
+    return null;
+}
+/** The publisher index region's ordered entry titles: the first heading-
+ * declared index card's top-level list items, minus entries whose link
+ * resolves to the imported document itself (a self-reference — "All Pages"
+ * on the all-pages shape — is a link to what the reader is already reading,
+ * never a chapter destination). Hrefs are NEVER fetched: chapter-page
+ * links stay untouched, and importing one URL cannot crawl linked pages. */
+function collectIndexRegionEvidence(document, selfUrl) {
+    const entries = [];
+    for (const heading of Array.from(document.querySelectorAll("h1, h2, h3, h4, h5, h6"))) {
+        if (!isIndexHeading(heading))
+            continue;
+        const list = indexListAfter(heading);
+        if (list === null)
+            continue;
+        let previousTarget = null;
+        for (const li of Array.from(list.children)) {
+            if (li.tagName.toLowerCase() !== "li")
+                continue;
+            // A nested sub-index link belongs to its own entry, not this label.
+            const links = Array.from(li.querySelectorAll("a[href]")).filter((link) => link.closest("li") === li);
+            if (links.length > 1)
+                return []; // One entry cannot claim several destinations.
+            const href = links[0]?.getAttribute("href");
+            let resolved;
+            if (href !== undefined && href !== null) {
+                try {
+                    resolved = new URL(href, document.baseURI);
+                }
+                catch {
+                    // Relative chapter-page links on the paste path have no base;
+                    // their labels remain evidence, but broken local fragments do not.
+                    if (href.startsWith("#"))
+                        return [];
+                }
+            }
+            if (resolved !== undefined && resolved.href === selfUrl)
+                continue;
+            const title = outlineTitle(indexEntryText(li));
+            // Reject the set, never silently drop a claim and validate its prefix.
+            if (!title || entries.length >= MAX_OUTLINE_ENTRIES)
+                return [];
+            if (resolved !== undefined &&
+                resolved.href.includes("#") &&
+                resolved.href.split("#")[0] === document.URL.split("#")[0]) {
+                let fragment;
+                try {
+                    fragment = decodeURIComponent(resolved.hash.slice(1));
+                }
+                catch {
+                    return [];
+                }
+                const target = document.getElementById(fragment);
+                if (target === null ||
+                    !isHeadingElement(target) ||
+                    !publisherEntryMatchesHeading(title, target.textContent ?? "") ||
+                    (previousTarget !== null &&
+                        !(previousTarget.compareDocumentPosition(target) & target.DOCUMENT_POSITION_FOLLOWING))) {
+                    return [];
+                }
+                previousTarget = target;
+            }
+            entries.push(title);
+        }
+        // The first declared index region wins; a second card is a different
+        // publisher surface, not a continuation of this one.
+        break;
+    }
+    return entries;
+}
+/**
+ * collectOutlineEvidence — the source's own table of contents, read from the
+ * ORIGINAL source DOM while it is available (sanitization discards ids, so
+ * the fragment→heading resolution must happen here; the captured titles are
+ * plain validated strings — they are only ever COMPARED against canonical
+ * heading text downstream, never rendered or trusted as markup).
+ *
+ * Evidence = the ordered (document order of the TARGET headings) titles of
+ * same-page nav links (nav / [role="navigation"]) whose fragment resolves to
+ * a heading element. Reliability gates:
+ *   - only nav containers count — a stray same-page link list is not a
+ *     publisher index;
+ *   - targets must exist and be h1–h6; unresolvable/external/non-heading
+ *     links are ignored;
+ *   - repeated links to the same heading collapse to one entry;
+ *   - at least TWO entries (one chapter divides nothing).
+ * When no nav-channel evidence exists, the publisher's own index region — a
+ * heading-declared "Index"/"Contents" card's list (issue #237, the
+ * reference source's all-pages shape) — supplies the ordered entry titles
+ * under the same caps and honesty rules.
+ * Matching against canonical positions happens ONLY at derivation
+ * (structure.ts), strictly and in source order — unreliable evidence simply
+ * never reaches a chapter, it never invents one.
+ */
+export function collectOutlineEvidence(document, finalUrl) {
+    const selfUrl = absoluteSelfUrl(finalUrl);
+    const targets = new Map();
+    const containers = document.querySelectorAll("nav, [role='navigation']");
+    for (const container of Array.from(containers)) {
+        for (const link of Array.from(container.querySelectorAll("a[href^='#']"))) {
+            const href = link.getAttribute("href") ?? "";
+            if (!href.startsWith("#") || href.length < 2)
+                continue;
+            const fragment = href.slice(1);
+            let target = document.getElementById(fragment);
+            if (target === null) {
+                try {
+                    target = document.getElementById(decodeURIComponent(fragment));
+                }
+                catch {
+                    target = null; // malformed escape — never evidence
+                }
+            }
+            if (target === null || !isHeadingElement(target))
+                continue;
+            const title = outlineTitle(target.textContent ?? "");
+            if (!title)
+                continue;
+            if (!targets.has(target))
+                targets.set(target, title);
+        }
+    }
+    if (targets.size >= 2) {
+        // Document order of the targets (a publisher index lists chapters in
+        // reading order; the DOM order of the headings is the source of truth).
+        const ordered = Array.from(targets.keys()).sort((a, b) => a.compareDocumentPosition(b) & a.DOCUMENT_POSITION_FOLLOWING ? -1 : 1);
+        return ordered.map((el) => targets.get(el)).slice(0, MAX_OUTLINE_ENTRIES);
+    }
+    // Nav evidence below two entries (or absent): the publisher's declared
+    // index region is the second, independent channel.
+    const indexRegion = collectIndexRegionEvidence(document, selfUrl);
+    return indexRegion.length >= 2 ? indexRegion : [];
+}
+// ── Provenance + lang extraction ────────────────────────────────────────────
+function metaContent(document, selector) {
+    const el = document.querySelector(selector);
+    const v = el?.getAttribute("content") ?? undefined;
+    return v && v.trim() ? v.trim() : undefined;
+}
+function linkHref(document, selector) {
+    const el = document.querySelector(selector);
+    const v = el?.getAttribute("href") ?? undefined;
+    return v && v.trim() ? v.trim() : undefined;
+}
+/** Build a Partial<Provenance> from the document's meta/link tags. The
+ * orchestrator (07-05) merges this with id/revision/retrievedAt/originalHtmlHash. */
+function buildProvenance(document, sourceUrl) {
+    const ogTitle = metaContent(document, "meta[property='og:title']");
+    const docTitle = document.querySelector("title")?.textContent?.trim();
+    const h1Title = document.querySelector("h1")?.textContent?.trim();
+    const title = ogTitle ?? docTitle ?? h1Title ?? undefined;
+    const author = metaContent(document, "meta[name='author']") ??
+        metaContent(document, "meta[property='article:author']") ??
+        undefined;
+    const publishedAt = metaContent(document, "meta[property='article:published_time']") ?? undefined;
+    const canonical = linkHref(document, "link[rel='canonical']") ??
+        metaContent(document, "meta[property='og:url']") ??
+        sourceUrl;
+    const partial = {};
+    if (title)
+        partial.title = title;
+    if (author)
+        partial.author = author;
+    if (publishedAt)
+        partial.publishedAt = publishedAt;
+    if (canonical && /^https?:/i.test(canonical))
+        partial.sourceUrl = canonical;
+    return partial;
+}
+/** Read <html lang="...">; default "en" if absent. */
+function detectLang(document) {
+    const lang = document.documentElement?.getAttribute("lang") ?? "";
+    return lang.trim() || "en";
+}
+/**
+ * extractAndNormalize — the full pipeline stage.
+ *
+ * 1. Construct the original jsdom document (url passed so Readability resolves
+ *    relative links AND img.src resolves against the document base).
+ * 2. isProbablyReaderable — the cheap pre-check feeding deriveConfidence (07-03).
+ * 3. Extract provenance + lang from the ORIGINAL document head (richer than the
+ *    Readability content fragment, which has no <head>).
+ * 4. Readability.parse on a CLONE (Readability mutates its input — RESEARCH L106).
+ * 5. null extraction → empty blocks (orchestrator + confidence decide refusal).
+ * 6. Else: sanitize article.content (DOMPurify + clearWindow), re-parse into a
+ *    clean DOM, walk to Block tree.
+ */
+export async function extractAndNormalize(html, finalUrl) {
+    // 1. Original document — url enables relative-link + img.src resolution.
+    const url = finalUrl && /^https?:/i.test(finalUrl) ? finalUrl : undefined;
+    const dom = new JSDOM(html, { url: url ?? undefined });
+    const document = dom.window.document;
+    // 2. Readability pre-check (feeds deriveConfidence in 07-05).
+    const isReaderable = isProbablyReaderable(document);
+    // 3. Provenance + lang from the ORIGINAL document head (richer than the
+    // Readability content fragment).
+    const provenancePartial = buildProvenance(document, url);
+    const lang = detectLang(document);
+    // Issue #236 — the source's own chapter index, read from the ORIGINAL DOM
+    // BEFORE Readability (which may strip navs from the content fragment).
+    // Pure DOM reading: no additional network requests, no block reordering.
+    // Issue #237 — finalUrl anchors the self-reference exclusion (an index
+    // entry linking back to the imported document itself is not a chapter).
+    const outlineEvidence = collectOutlineEvidence(document, finalUrl);
+    // Issue #55 — link-graph footnote detection on the ORIGINAL DOM (ids are
+    // still present; sanitization discards them). Rewrites references into
+    // controlled marker links and lifts matched notes out of the body flow,
+    // BEFORE Readability sees the document.
+    const linked = detectLinkedFootnotes(document);
+    const footnotes = footnoteBodiesParagraphs(linked.noteHtml, url)
+        .map((paragraphs, i) => footnoteBodyFromParagraphs(`fn-${i + 1}`, paragraphs))
+        .filter((fn) => fn.content.length > 0);
+    // Issue #60: a reference to a note that came out empty would lead nowhere —
+    // only the notes kept are live reference targets.
+    const keptNotes = new Set(footnotes.map((fn) => Number(fn.id.slice("fn-".length))));
+    // 4. Readability on a clone (Readability MUTATES its input). cloneNode
+    // returns Node per the DOM lib types; Readability expects a Document.
+    const reader = new Readability(document.cloneNode(true));
+    const article = reader.parse();
+    // 5. null extraction → orchestrator handles via deriveConfidence.
+    if (article === null || !article.content) {
+        return {
+            blocks: [],
+            footnotes: [],
+            lang,
+            provenancePartial,
+            outlineEvidence,
+            isReaderable,
+            ...(linked.omittedCount > 0 ? { omittedFootnoteCount: linked.omittedCount } : {}),
+        };
+    }
+    // 6. Sanitize the extracted content, re-parse, walk to Block tree.
+    const sanitized = sanitizeExtractedHtml(article.content);
+    const cleanDom = new JSDOM(sanitized, { url: url ?? undefined });
+    const walked = htmlToBlocks(cleanDom.window.document, url, undefined, keptNotes);
+    // The original-document lang + provenance are richer than what htmlToBlocks
+    // can extract from the sanitized content fragment — prefer them.
+    return {
+        blocks: walked.blocks,
+        footnotes,
+        lang,
+        provenancePartial,
+        outlineEvidence,
+        isReaderable,
+        ...(linked.omittedCount > 0 ? { omittedFootnoteCount: linked.omittedCount } : {}),
+    };
+}

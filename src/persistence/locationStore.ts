@@ -137,6 +137,9 @@ export async function saveLocation(
     revision: loc.revision,
     graphemeOffset: loc.graphemeOffset,
     savedAt: loc.savedAt,
+    // Spec #68 / #71 — the substrate stamp rides along only when corrected,
+    // so an uncorrected article's row stays byte-identical.
+    ...(loc.corrections !== undefined ? { corrections: loc.corrections } : {}),
   };
   const mainEnd = options.mainTextEnd;
   if (mainEnd === undefined || !inNotesOffset(loc.graphemeOffset, mainEnd)) {
