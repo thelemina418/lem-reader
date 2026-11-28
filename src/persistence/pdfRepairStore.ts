@@ -13,7 +13,6 @@ import {
   CollectionSchema,
   CollectionActiveEntrySchema,
   CompletionRecordSchema,
-  LocationRecordSchema,
   type CanonicalArticle,
   type LocationRecord,
 } from "../content/schema";
@@ -26,6 +25,7 @@ import type { Correction } from "../content/schema";
 import { db } from "./db";
 import { chapterConsequences, type ChapterConsequence } from "./chapterConsequences";
 import { loadCorrections } from "./correctionsStore";
+import { ACCEPTANCE_REQUIRED, everyRevision, latestLocation, STALE_PREVIEW } from "./readerRows";
 
 export class PdfRepairRefusal extends Error {}
 
@@ -72,16 +72,10 @@ const structureOf = (article: CanonicalArticle) =>
   article.structure ??
   deriveWorkStructure({ ...article, provenanceTitle: article.provenance.title });
 
-function everyLocation(articleId: string) {
-  return db.location
-    .where("[articleId+revision]")
-    .between([articleId, 0], [articleId, Number.MAX_SAFE_INTEGER]);
-}
-
 async function readerDataOf(articleId: string): Promise<string> {
   return JSON.stringify({
     corrections: await db.corrections.get(articleId),
-    locations: await everyLocation(articleId).toArray(),
+    locations: await everyRevision(db.location, articleId).toArray(),
   });
 }
 
@@ -96,18 +90,12 @@ async function restampLocation(
   before: CanonicalArticle,
   after: CanonicalArticle,
 ): Promise<void> {
-  const rows = (await everyLocation(articleId).toArray()).flatMap((row) => {
-    const parsed = LocationRecordSchema.safeParse(row);
-    return parsed.success ? [parsed.data] : [];
-  });
-  const latest = rows.sort((x, y) =>
-    x.savedAt < y.savedAt ? 1 : x.savedAt > y.savedAt ? -1 : 0,
-  )[0];
+  const latest = await latestLocation(articleId);
   if (!latest) return;
   const offset = carriedOffset(latest, original, before, after);
   if (offset === null) return;
   const stamp: TextStamp = textStamp(after);
-  await everyLocation(articleId).delete();
+  await everyRevision(db.location, articleId).delete();
   const record: LocationRecord = {
     schemaVersion: 1,
     articleId,
@@ -242,9 +230,7 @@ export async function applyPdfRepair(
         JSON.stringify(row) !== preview.original ||
         (await readerDataOf(preview.articleId)) !== preview.readerData
       )
-        throw new PdfRepairRefusal(
-          "This work changed after the preview. Preview it again before applying.",
-        );
+        throw new PdfRepairRefusal(STALE_PREVIEW);
       if (await db.pdfRepairs.get(preview.articleId))
         throw new PdfRepairRefusal(
           "A recovery version already exists. Recover it before applying another repair.",
@@ -257,9 +243,7 @@ export async function applyPdfRepair(
           "Reader data changed after this preview. Preview again before accepting any consequences.",
         );
       if (fresh.consequences.length > 0 && options.acceptConsequences !== true)
-        throw new PdfRepairRefusal(
-          "Explicit acceptance is required for the disclosed chapter consequences; nothing was changed.",
-        );
+        throw new PdfRepairRefusal(ACCEPTANCE_REQUIRED);
       if (fresh.changes.length === 0)
         throw new PdfRepairRefusal("No heading changes were found; nothing was changed.");
       const repaired = {

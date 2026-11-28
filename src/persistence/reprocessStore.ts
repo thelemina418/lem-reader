@@ -41,7 +41,6 @@
 //   - Chapter-targeted completions and collection entries whose chapter no
 //     longer corresponds are disclosed and need explicit acceptance.
 //   - Image assets are replaced together with the article.
-import type { Collection, Table } from "dexie";
 import {
   ArticleSchema,
   BookSchema,
@@ -51,7 +50,6 @@ import {
   type CollectionEntryTarget,
   type Correction,
   type LocationRecord,
-  LocationRecordSchema,
   HighlightRecordSchema,
 } from "../content/schema";
 import { BLOCK_SEPARATOR, normalizeText, resolveQuoteSelector } from "../content/normalizeText";
@@ -81,6 +79,13 @@ import {
 } from "./chapterConsequences";
 import { isSameText, textStamp, type TextStamp } from "../content/sameText";
 import { loadCorrections } from "./correctionsStore";
+import {
+  ACCEPTANCE_REQUIRED,
+  everyRevision,
+  latestLocation,
+  readerRowsSnapshot,
+  STALE_PREVIEW,
+} from "./readerRows";
 
 /** A calm, reader-facing refusal. Nothing was changed when one is thrown. */
 export class ReprocessRefusal extends Error {}
@@ -160,27 +165,6 @@ async function loadSaved(articleId: string): Promise<CanonicalArticle> {
   if (!parsed.success)
     throw new ReprocessRefusal("This article is no longer in your library; nothing was changed.");
   return parsed.data;
-}
-
-/** Every revision's rows of one article, by the [articleId+revision] key. */
-function everyRevision<T, K>(table: Table<T, K>, articleId: string): Collection<T, K> {
-  return table
-    .where("[articleId+revision]")
-    .between([articleId, 0], [articleId, Number.MAX_SAFE_INTEGER]);
-}
-
-/** Everything apply reads, serialized in a stable order. */
-async function snapshotOf(articleId: string): Promise<string> {
-  const [row, highlights, locations, completions, collections, corrections] = await Promise.all([
-    db.articles.get(articleId),
-    everyRevision(db.highlights, articleId).toArray(),
-    everyRevision(db.location, articleId).toArray(),
-    db.completions.toArray(),
-    db.collections.toArray(),
-    // Spec #68 / #71 — a correction made between preview and apply is a change.
-    db.corrections.get(articleId),
-  ]);
-  return JSON.stringify({ row, highlights, locations, completions, collections, corrections });
 }
 
 function adoptCandidate(saved: CanonicalArticle, fresh: CanonicalArticle): CanonicalArticle {
@@ -263,17 +247,6 @@ export function passageChanges(before: string[], after: string[]): PassageChange
   return out;
 }
 
-/** The latest saved position across revisions (the library's own fold). */
-async function latestLocation(articleId: string): Promise<LocationRecord | undefined> {
-  const rows = await everyRevision(db.location, articleId).toArray();
-  return rows
-    .flatMap((row) => {
-      const parsed = LocationRecordSchema.safeParse(row);
-      return parsed.success ? [parsed.data] : [];
-    })
-    .sort((x, y) => (x.savedAt < y.savedAt ? 1 : x.savedAt > y.savedAt ? -1 : 0))[0];
-}
-
 /** Re-anchor a reading position by the text that follows it: from what
  * the reader sees now (or the uncorrected original it was saved against)
  * into what they will see. Finished stays finished (carried to the
@@ -310,7 +283,7 @@ export async function previewReprocess(
   candidate: IngestionSuccess,
   options: PreviewOptions = {},
 ): Promise<ReprocessPreview> {
-  const snapshot = await snapshotOf(articleId);
+  const snapshot = await readerRowsSnapshot(articleId);
   const saved = await loadSaved(articleId);
   const fresh = ArticleSchema.parse(candidate.article);
   const sourceChanged = saved.provenance.originalHtmlHash !== fresh.provenance.originalHtmlHash;
@@ -450,11 +423,6 @@ export async function previewUploadReprocess(
   });
 }
 
-const STALE_PREVIEW =
-  "This article or its reader data changed after the preview. Preview again before applying; nothing was changed.";
-const ACCEPTANCE_REQUIRED =
-  "Explicit acceptance is required for the disclosed chapter consequences; nothing was changed.";
-
 function assetRowsOf(
   assets: readonly (ValidatedAsset & { articleId?: string })[],
   articleId: string,
@@ -520,7 +488,7 @@ export async function applyReprocess(
       db.corrections,
     ],
     async () => {
-      if ((await snapshotOf(preview.articleId)) !== preview.snapshot)
+      if ((await readerRowsSnapshot(preview.articleId)) !== preview.snapshot)
         throw new ReprocessRefusal(STALE_PREVIEW);
       if (preview.consequences.length > 0 && options.acceptConsequences !== true)
         throw new ReprocessRefusal(ACCEPTANCE_REQUIRED);
@@ -788,10 +756,7 @@ export async function applyBookReprocess(
       let stale = (await bookSnapshotOf(preview.bookId)) !== preview.snapshot;
       for (const { articleId } of preview.added)
         stale ||= (await db.articles.get(articleId)) !== undefined;
-      if (stale)
-        throw new ReprocessRefusal(
-          "This book or its reader data changed after the preview. Preview again before applying; nothing was changed.",
-        );
+      if (stale) throw new ReprocessRefusal(STALE_PREVIEW);
       if (preview.consequences.length > 0 && options.acceptConsequences !== true)
         throw new ReprocessRefusal(ACCEPTANCE_REQUIRED);
       await writeChapterConsequences(
