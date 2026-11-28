@@ -180,6 +180,7 @@ export function resolveQuoteSelectorInText(
   selector: TextQuoteSelector,
   lang: string,
   positionHint?: TextPositionSelector,
+  options: { readonly exactOnly?: boolean } = {},
 ): TextPositionSelector | "ambiguous" | "orphan" {
   const exactClusters = graphemeClusters(selector.exact, lang);
 
@@ -209,6 +210,8 @@ export function resolveQuoteSelectorInText(
   }
 
   // Step 4: zero exact → prefix+suffix-only fallback. D5-02 step 4.
+  // Skipped for an exact-only resolution (`resolveQuoteSelectorExact`).
+  if (options.exactOnly) return "orphan";
   const candidates = findPrefixSuffixCandidates(clusters, selector, lang, exactClusters.length);
   if (candidates.length === 0) return "orphan";
   if (candidates.length === 1) return candidates[0]!;
@@ -243,4 +246,23 @@ export function resolveQuoteSelector(
   // on open used to re-run normalizeText + graphemeClusters per highlight.
   const clusters = articleGraphemeIndex(article).clusters;
   return resolveQuoteSelectorInText(clusters, selector, article.lang, positionHint);
+}
+
+/**
+ * Spec #68 / issue #75 — the CONFIDENT-only resolution: steps 1–3 (unique
+ * exact, or exact narrowed by context) and never the step-4 prefix/suffix
+ * fallback, which returns a low-certainty position indistinguishable from
+ * an exact one. Used where "only a confident match applies": carrying a
+ * highlight across a correction, whose words never change — a quote that
+ * no longer matches exactly (its words now span a merged or split block
+ * boundary) is reported, never quietly re-attached.
+ */
+export function resolveQuoteSelectorExact(
+  article: CanonicalArticle,
+  selector: TextQuoteSelector,
+): TextPositionSelector | "ambiguous" | "orphan" {
+  const clusters = articleGraphemeIndex(article).clusters;
+  return resolveQuoteSelectorInText(clusters, selector, article.lang, undefined, {
+    exactOnly: true,
+  });
 }

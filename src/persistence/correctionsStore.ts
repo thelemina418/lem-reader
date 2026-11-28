@@ -58,6 +58,7 @@ import {
 } from "../content/corrections/engine";
 import { carryOffset } from "../content/corrections/positions";
 import { graphemeLength, mainTextLength, resolveQuoteSelector } from "../content/normalizeText";
+import { resolveQuoteSelectorExact } from "../annotations/resolution";
 import { fromLegacyEndPin, inNotesOffset, isFinishedOffset } from "../reader/readingPosition";
 import { resolveWorkStructure } from "../content/chapterTargets";
 import { isSameText, textStamp } from "../content/sameText";
@@ -254,7 +255,16 @@ async function plan(
     const now = resolveQuoteSelector(before.article, record.quote, record.position);
     if (typeof now === "string") continue; // not shown confidently today — untouched
     let outcome: CorrectionHighlightOutcome;
-    const then = resolveQuoteSelector(after.article, record.quote, now);
+    // Corrections never change words, so a highlight whose text matches
+    // exactly today must match exactly after; one whose words now span a
+    // merged or split boundary is reported, never re-attached by the loose
+    // prefix/suffix fallback (#75). A highlight already shown only by that
+    // fallback (its words changed in an earlier revision) keeps the rule
+    // it is shown by.
+    const then =
+      typeof resolveQuoteSelectorExact(before.article, record.quote) === "string"
+        ? resolveQuoteSelector(after.article, record.quote, now)
+        : resolveQuoteSelectorExact(after.article, record.quote);
     if (typeof then !== "string") {
       outcome = "confident";
       positions.set(record.id, then);

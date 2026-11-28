@@ -7827,6 +7827,19 @@ dialog.reprocess-book {
 :root:has(.correction-commands) {
   scroll-padding-block-end: 10rem;
 }
+/* #75 — several block commands share the bar, so it docks ABOVE the
+   read-aloud bar (paused in the view, still reachable) instead of under it:
+   the idle entry's band, or the live pill height a session publishes as
+   --readaloud-h. The view's end padding grows by the same band. */
+:root:has(.readaloud-bar) .correction-commands {
+  bottom: calc(var(--readaloud-h, 54px) + 2 * var(--space-xs));
+}
+:root:has(.readaloud-bar) .correction-view:has(.correction-commands) {
+  padding-block-end: calc(10rem + var(--readaloud-h, 54px));
+}
+:root:has(.readaloud-bar):has(.correction-commands) {
+  scroll-padding-block-end: calc(10rem + var(--readaloud-h, 54px));
+}
 .correction-commands-current {
   overflow-wrap: anywhere;
 }
