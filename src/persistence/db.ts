@@ -213,6 +213,9 @@ export class LemReaderDB extends Dexie {
       // declaration), no query keys on it. Validated through
       // ArticleSchema/WorkStructureSchema at every read seam.
       structure?: unknown;
+      // Spec #68 / #78 — a PDF-repaired original's text identity (plain
+      // non-indexed field, NO version bump; see ArticleSchema).
+      repairStamp?: string;
     },
     string
   >;

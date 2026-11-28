@@ -357,7 +357,12 @@ describe("explicit PDF structural repair", () => {
     const repaired = ArticleSchema.parse(await db.articles.get(original.id));
     expect(repaired.id).toBe(original.id);
     expect(repaired.blocks[0]!.kind).toBe("paragraph");
-    expect(await db.location.get([original.id, 1])).toEqual(location);
+    // Same offset and savedAt, stamped with the repaired original's own text
+    // identity (#78: a repair changes structure without a revision bump).
+    expect(await db.location.get([original.id, 1])).toEqual({
+      ...location,
+      corrections: repaired.repairStamp,
+    });
     expect(await db.highlights.get(highlight.id)).toEqual(highlight);
     expect((await db.notes.get("saved-note"))!.text).toBe("Keep this note");
     await recoverPdfRepair(original.id);
