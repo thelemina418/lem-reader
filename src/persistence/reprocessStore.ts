@@ -68,6 +68,7 @@ import { bookAssetsForChapters } from "../ingestion/addToLibrary";
 import type { BookAsset } from "./booksStore";
 import { db, type AssetRecordRow } from "./db";
 import { chapterConsequences, type ChapterConsequence } from "./chapterConsequences";
+import { isSameText } from "../content/sameText";
 
 /** A calm, reader-facing refusal. Nothing was changed when one is thrown. */
 export class ReprocessRefusal extends Error {}
@@ -251,7 +252,7 @@ function carryPosition(
   location: LocationRecord | undefined,
 ): PositionConsequence {
   if (!location) return { kind: "none" };
-  if (location.revision !== saved.revision) return { kind: "unmatched" };
+  if (!isSameText(location, saved)) return { kind: "unmatched" };
   const total = graphemeLength(saved);
   // Spec #66 — finished is reaching the end of the MAIN text; a finish
   // carries to the proposed article's main-text end (its end-pin), never to

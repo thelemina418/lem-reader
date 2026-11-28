@@ -63,6 +63,7 @@ import type {
   SubscriptionRecord,
 } from "../content/schema";
 import type { AssetExportMeta, ExportBundle } from "./bundle";
+import { isSameText } from "../content/sameText";
 
 // ── Phase 20 (Plan 20-05) — validated import assets + the no-broken-refs
 //    gate (IMG-04). Assets ride their article's D9-14 resolution; there is
@@ -717,7 +718,7 @@ export async function detectImportPreview(
     const local = localArticleById.get(a.id);
     if (!local) {
       added.articles++;
-    } else if (a.revision !== local.revision) {
+    } else if (!isSameText(a, local)) {
       revisionConflicts.push(a.id);
     } else if (a.provenance.originalHtmlHash !== local.provenance.originalHtmlHash) {
       divergenceConflicts.push(a.id);
@@ -1224,7 +1225,7 @@ export async function resolveImportPlan(
     const local = localArticleById.get(a.id);
     if (!local) {
       plan.articlesToWrite.push(a); // new — always written (overrides ride)
-    } else if (a.revision !== local.revision) {
+    } else if (!isSameText(a, local)) {
       // D-06 monotonic: only a STRICTLY higher incoming revision may replace
       // the local row (an explicit reader choice under Overwrite-all). The
       // LOCAL-wins path (equal-or-lower) stays untouched — no write, the
@@ -1442,7 +1443,7 @@ export async function resolveImportPlan(
     const local = localArticleById.get(a.id);
     if (
       local?.structure !== undefined &&
-      local.revision === a.revision &&
+      isSameText(a, local) &&
       local.provenance.originalHtmlHash === a.provenance.originalHtmlHash
     ) {
       const frozen = validateWorkStructure(a, local.structure);

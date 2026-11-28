@@ -232,6 +232,7 @@ import { useReadAloudFollow } from "../reader/useReadAloudFollow";
 import { ReadAloudBar } from "../reader/ReadAloudBar";
 import { formatIsoDate } from "../ingestion/library/formatDate";
 import type { GraphemeRange } from "../annotations/unifiedHighlightSlicer";
+import { textStamp } from "../content/sameText";
 
 /** The D4-10 mode-toggle handler signature (App threads a ref of this shape). */
 type ModeToggleHandler = () => void;
@@ -2848,7 +2849,7 @@ export function ArticleView({
     // it (the landing is created inside the async .then — after this effect
     // function has returned — so the holder pattern bridges the two).
     let cancelOpeningLanding: (() => void) | null = null;
-    loadLocation(article.id, article.revision)
+    loadLocation(article.id, textStamp(article).revision)
       .then((result) => {
         if (cancelled) return;
         // Fall-through cases (reading continues from the top in all of

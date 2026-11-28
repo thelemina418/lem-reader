@@ -41,6 +41,7 @@ import { classifyStorageError } from "../persistence/errors";
 // seam can fire the ONE invalidation without importing the snapshot graph
 // (the stores, the folds, the grapheme pass) onto the reader's import chain.
 import { invalidateLibrarySnapshot } from "../ingestion/library/librarySnapshotBus";
+import { isSameText, textStamp } from "../content/sameText";
 
 /** Debounce window for location writes (02-RESEARCH Open Question #2). */
 const SAVE_DEBOUNCE_MS = 1200;
@@ -185,7 +186,7 @@ export function useScrollSave(
     // (a notes position is not itself a completion signal).
     const current = articleRef.current;
     const sameArticle =
-      current !== null && current.id === loc.articleId && current.revision === loc.revision;
+      current !== null && current.id === loc.articleId && isSameText(loc, current);
     const mainTextEnd = sameArticle ? endPinOffset(current) : undefined;
     // …and the whole length lets it read a pre-#66 finish (the legacy end
     // pin, fromLegacyEndPin) as the finish it was.
@@ -241,7 +242,7 @@ export function useScrollSave(
       scheduleSave({
         schemaVersion: 1,
         articleId: currentArticle.id,
-        revision: currentArticle.revision,
+        ...textStamp(currentArticle),
         graphemeOffset: held ?? graphemeOffset,
         savedAt: new Date().toISOString(),
       });
@@ -273,7 +274,7 @@ export function useScrollSave(
     pendingRef.current = {
       schemaVersion: 1,
       articleId: currentArticle.id,
-      revision: currentArticle.revision,
+      ...textStamp(currentArticle),
       graphemeOffset: held ?? graphemeOffset,
       savedAt: new Date().toISOString(),
     };
