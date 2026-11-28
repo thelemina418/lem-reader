@@ -43,7 +43,7 @@ import {
   STARTER_ARTICLE_ID,
   isStarterRemovedAfterImport,
 } from "../persistence/starterArticleStore";
-import { figureAssetIds } from "../content/assets/AssetProvider";
+import { referencedAssetIds } from "../content/assets/referencedAssets";
 import { graphemeClusters, normalizeText } from "../content/normalizeText";
 import { validateWorkStructure } from "../content/structure";
 import { resolveQuoteSelectorInText } from "../annotations/resolution";
@@ -94,9 +94,8 @@ export interface ValidatedImportAsset {
  * VALIDATED asset rows (no meta entry, or the zip entry was missing or
  * bomb-filtered). Such articles skip import with the explicit preview
  * warning — never a silent placeholder rewrite (honesty constraint, the
- * D12-11 chapter-skip mirror). The block walk reuses AssetProvider's
- * exported figureAssetIds exactly (the one container-recursing walk shape
- * — the AddDialog attribution twin discipline, no fork).
+ * D12-11 chapter-skip mirror). The block walk is referencedAssetIds — the
+ * one walker every asset consumer shares (issue #82), no fork.
  */
 function danglingAssetArticleIds(
   bundle: ExportBundle,
@@ -105,7 +104,7 @@ function danglingAssetArticleIds(
   const available = new Set(importAssets.map((row) => `${row.articleId}\u0000${row.assetId}`));
   const dangling = new Set<string>();
   for (const article of bundle.articles) {
-    for (const assetId of figureAssetIds(article)) {
+    for (const assetId of referencedAssetIds(article.blocks)) {
       if (!available.has(`${article.id}\u0000${assetId}`)) {
         dangling.add(article.id);
         break;
