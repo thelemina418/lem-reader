@@ -7903,3 +7903,56 @@ dialog.reprocess-book {
     gap: 0;
   }
 }
+
+/* Spec #68 / issue #73 — the in-view shortcut list and the selection
+   command surface. The list is real text (kbd + words), wrapping at 320px.
+   The selection commands join the fixed command bar (out of flow, so a
+   selection never shifts the column); the view reserves more room while a
+   selection is up. */
+.correction-shortcuts-title {
+  margin: var(--space-sm) 0 0;
+  font-size: 0.875rem;
+}
+.correction-shortcuts {
+  display: grid;
+  grid-template-columns: minmax(0, max-content) minmax(0, 1fr);
+  gap: 0.125rem var(--space-sm);
+  margin: var(--space-xs) 0 0;
+  font-size: 0.8125rem;
+  color: var(--ink-soft);
+}
+.correction-shortcut {
+  display: contents;
+}
+.correction-shortcuts dt,
+.correction-shortcuts dd {
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+.correction-shortcuts kbd {
+  font: inherit;
+  padding-inline: 0.25em;
+  border: 1px solid var(--hairline);
+  border-radius: 3px;
+  color: var(--ink);
+}
+.correction-selection-commands {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: center;
+  gap: var(--space-xs) var(--space-sm);
+  flex-basis: 100%;
+  min-width: 0;
+}
+.correction-view:has(.correction-selection-commands) {
+  padding-block-end: 16rem;
+}
+:root:has(.correction-selection-commands) {
+  scroll-padding-block-end: 16rem;
+}
+@media (forced-colors: active) {
+  .correction-shortcuts kbd {
+    border-color: CanvasText;
+  }
+}

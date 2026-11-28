@@ -49,7 +49,12 @@ import {
   type CorrectionOutcome,
 } from "../content/corrections/engine";
 import { carryOffset } from "../content/corrections/positions";
-import { graphemeLength, mainTextLength, resolveQuoteSelector } from "../content/normalizeText";
+import {
+  articleGraphemeIndex,
+  graphemeLength,
+  mainTextLength,
+  resolveQuoteSelector,
+} from "../content/normalizeText";
 import { fromLegacyEndPin, inNotesOffset, isFinishedOffset } from "../reader/readingPosition";
 import { resolveWorkStructure } from "../content/chapterTargets";
 import { isSameText, textStamp } from "../content/sameText";
@@ -111,7 +116,12 @@ export async function loadAllCorrectionRecords(): Promise<CorrectionsRecord[]> {
   }
 }
 
-export type CorrectionHighlightOutcome = "confident" | "ambiguous" | "orphan" | "hidden";
+/** "crosses" (#73): the highlight's words are all still there, but a block
+ * boundary inside or at its edge moved, so its exact quote no longer
+ * matches — found only by its surrounding context. Reported, never
+ * re-anchored. */
+export type CorrectionHighlightOutcome =
+  "confident" | "ambiguous" | "orphan" | "hidden" | "crosses";
 
 export interface CorrectionHighlightConsequence {
   readonly highlightId: string;
@@ -199,6 +209,16 @@ function carryBetween(
   return carryOffset(before.article, after.article, offset);
 }
 
+/** Do the words at `at` read exactly `exact`? (Phase-1 corrections never
+ * change words, so anything less is a match by surrounding context alone.) */
+function matchesExactly(
+  article: CanonicalArticle,
+  at: { start: number; end: number },
+  exact: string,
+): boolean {
+  return articleGraphemeIndex(article).clusters.slice(at.start, at.end).join("") === exact;
+}
+
 /** Corrections keep an unchanged chapter's id; its range may move. */
 const sameChapter: SameChapter = (was, now) =>
   was.kind === now.kind && was.title === now.title && was.titleSource === now.titleSource;
@@ -228,7 +248,10 @@ async function plan(articleId: string, next: readonly Correction[]): Promise<Pla
     if (typeof now === "string") continue; // not shown confidently today — untouched
     let outcome: CorrectionHighlightOutcome;
     const then = resolveQuoteSelector(after.article, record.quote, now);
-    if (typeof then !== "string") {
+    if (typeof then !== "string" && !matchesExactly(after.article, then, record.quote.exact)) {
+      // Found by context only: a moved separator changed its text (#73).
+      outcome = "crosses";
+    } else if (typeof then !== "string") {
       outcome = "confident";
       positions.set(record.id, then);
     } else {

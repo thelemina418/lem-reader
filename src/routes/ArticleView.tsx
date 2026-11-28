@@ -160,6 +160,12 @@ import {
   unhideAvailability,
   REASONS as CORRECTION_REASONS,
 } from "../content/corrections/engine";
+import {
+  selectionCommands,
+  type SelectionCommand,
+  type SelectionCommands,
+} from "../content/corrections/moveWords";
+import type { TextPositionSelector } from "../content/normalizeText";
 import { storedOffsetInShown } from "../content/corrections/positions";
 import type { Correction } from "../content/schema";
 import {
@@ -173,6 +179,7 @@ import { CorrectionConsequencesDialog } from "../reader/CorrectionConsequencesDi
 import {
   CorrectionView,
   type BlockCommand,
+  type CorrectionLanding,
   type CorrectionViewHandle,
 } from "../reader/CorrectionView";
 import { SelectionToolbar } from "../reader/annotations/SelectionToolbar";
@@ -1792,6 +1799,8 @@ export function ArticleView({
   // engine's view model (every block, hidden ones marked), whose offset maps
   // translate reading ↔ view coordinates.
   const correctionModel = correctionsResult?.view ?? null;
+  // Where the view lands after a selection command (#73): the moved words.
+  const [correctionLanding, setCorrectionLanding] = useState<CorrectionLanding | null>(null);
   // Enter / leave — ONE path shared by the header button and the C shortcut.
   // Entry carries the reading position in (the mode-switch anchor capture);
   // leaving captures the focused or top-visible passage in the view and
@@ -1811,12 +1820,13 @@ export function ArticleView({
       // flush any pending save now, against the text as it reads now, so a
       // late debounced save can never land after a correction (#71).
       saveLocationNow(offset);
+      setCorrectionLanding(null);
       setCorrectionEntry({
         from: effectiveMode,
         offset,
         viewOffset: correctionModel.viewOffsetFor(offset),
       });
-      setCorrectionAnnouncement("Correction view. Every block shows its outline and type.");
+      setCorrectionAnnouncement("Correction view. Selecting text offers corrections.");
       return;
     }
     const viewOffset = correctionViewRef.current?.captureOffset() ?? correctionEntry.viewOffset;
@@ -1869,31 +1879,28 @@ export function ArticleView({
     },
     [correctionsResult],
   );
-  const [pendingCorrection, setPendingCorrection] = useState<{
+  // One pending/commit path for every command (block and selection): the
+  // dialog's words and the announcement travel with the preview.
+  interface PendingCorrection {
     preview: CorrectionsPreview;
-    block: CorrectionViewBlock;
-    action: BlockCommand["action"];
-  } | null>(null);
+    title: string;
+    confirmLabel: string;
+    announcement: string;
+    landing: CorrectionLanding | null;
+  }
+  const [pendingCorrection, setPendingCorrection] = useState<PendingCorrection | null>(null);
   const [pendingCorrectionError, setPendingCorrectionError] = useState("");
   const commitCorrection = useCallback(
-    async (
-      preview: CorrectionsPreview,
-      block: CorrectionViewBlock,
-      action: BlockCommand["action"],
-      acceptConsequences: boolean,
-    ) => {
-      await applyCorrectionsChange(preview, { acceptConsequences });
+    async (pending: PendingCorrection, acceptConsequences: boolean) => {
+      await applyCorrectionsChange(pending.preview, { acceptConsequences });
       // A paused read-aloud holds chunks in the old text's coordinates:
       // end it, so the reader's next Play speaks the corrected article
       // from their place (spec #68 story 9).
       stopReadAloud();
-      setCorrections(preview.corrections);
+      setCorrections(pending.preview.corrections);
+      if (pending.landing) setCorrectionLanding({ ...pending.landing });
       invalidateLibrarySnapshot();
-      setCorrectionAnnouncement(
-        action === "hide"
-          ? `${block.label} hidden. It stays here, dimmed; press X to unhide it.`
-          : `${block.label} unhidden.`,
-      );
+      setCorrectionAnnouncement(pending.announcement);
     },
     [stopReadAloud],
   );
@@ -1901,6 +1908,27 @@ export function ArticleView({
     error instanceof CorrectionsRefusal
       ? error.message
       : "The correction couldn't be saved. Nothing was changed.";
+  /** Preview a correction; apply at once when clean, else ask first. */
+  const proposeCorrection = useCallback(
+    async (correction: Correction, pending: Omit<PendingCorrection, "preview">) => {
+      if (!originalArticle) return;
+      setCorrectionBusy(true);
+      try {
+        const preview = await previewAddCorrection(originalArticle.id, correction);
+        if (!preview.clean) {
+          setPendingCorrectionError("");
+          setPendingCorrection({ ...pending, preview });
+          return;
+        }
+        await commitCorrection({ ...pending, preview }, false);
+      } catch (error) {
+        setCorrectionAnnouncement(correctionFailure(error));
+      } finally {
+        setCorrectionBusy(false);
+      }
+    },
+    [originalArticle, commitCorrection],
+  );
   const handleCorrectionCommand = useCallback(
     async (block: CorrectionViewBlock, command: BlockCommand) => {
       if (!command.available) {
@@ -1916,29 +1944,66 @@ export function ArticleView({
         setCorrectionAnnouncement(CORRECTION_REASONS.noText);
         return;
       }
-      setCorrectionBusy(true);
-      try {
-        const preview = await previewAddCorrection(originalArticle.id, correction);
-        if (!preview.clean) {
-          setPendingCorrectionError("");
-          setPendingCorrection({ preview, block, action: command.action });
-          return;
-        }
-        await commitCorrection(preview, block, command.action, false);
-      } catch (error) {
-        setCorrectionAnnouncement(correctionFailure(error));
-      } finally {
-        setCorrectionBusy(false);
-      }
+      const hide = command.action === "hide";
+      await proposeCorrection(correction, {
+        title: hide ? "Hide this block?" : "Unhide this block?",
+        confirmLabel: hide ? "Hide block" : "Unhide block",
+        announcement: hide
+          ? `${block.label} hidden. It stays here, dimmed; press X to unhide it.`
+          : `${block.label} unhidden.`,
+        landing: null,
+      });
     },
-    [originalArticle, correctionsResult, commitCorrection],
+    [originalArticle, correctionsResult, proposeCorrection],
+  );
+  // Spec #68 / issue #73 — the selection commands. Availability and the
+  // correction itself come from the engine (src/content/corrections/
+  // moveWords.ts); applying shares the preview → consequences → apply path.
+  const correctionSelectionCommands = useCallback(
+    (range: TextPositionSelector): SelectionCommands =>
+      selectionCommands(correctionsResult!, range, {
+        id: crypto.randomUUID(),
+        createdAt: new Date().toISOString(),
+      }),
+    [correctionsResult],
+  );
+  const handleSelectionCommand = useCallback(
+    async (command: SelectionCommand, words: string) => {
+      if (!command.available || !command.correction) {
+        setCorrectionAnnouncement(command.reason ?? "That isn't available here.");
+        return;
+      }
+      const list = words.split(/\s+/);
+      const quoted = `“${list.length > 8 ? `${list.slice(0, 6).join(" ")}…` : words}”`;
+      const copy = {
+        "move-next": {
+          title: "Move these words to the next block?",
+          confirmLabel: "Move words",
+          announcement: `Moved ${quoted} to the next block.`,
+        },
+        "move-previous": {
+          title: "Move these words to the previous block?",
+          confirmLabel: "Move words",
+          announcement: `Moved ${quoted} to the previous block.`,
+        },
+        "own-paragraph": {
+          title: "Make these words their own paragraph?",
+          confirmLabel: "Make paragraph",
+          announcement: `Made ${quoted} its own paragraph.`,
+        },
+      }[command.kind];
+      await proposeCorrection(command.correction, {
+        ...copy,
+        landing: command.landing ?? null,
+      });
+    },
+    [proposeCorrection],
   );
   const handleConfirmPendingCorrection = useCallback(async () => {
     if (!pendingCorrection) return;
-    const { preview, block, action } = pendingCorrection;
     setCorrectionBusy(true);
     try {
-      await commitCorrection(preview, block, action, true);
+      await commitCorrection(pendingCorrection, true);
       setPendingCorrection(null);
     } catch (error) {
       setPendingCorrectionError(correctionFailure(error));
@@ -3872,16 +3937,15 @@ export function ArticleView({
                 entryOffset={correctionEntry.viewOffset}
                 commandFor={correctionCommandFor}
                 onCommand={handleCorrectionCommand}
+                selectionCommandsFor={correctionsResult ? correctionSelectionCommands : undefined}
+                onSelectionCommand={(command, words) => void handleSelectionCommand(command, words)}
+                landing={correctionLanding}
                 busy={correctionBusy || pendingCorrection !== null}
               />
               <CorrectionConsequencesDialog
                 preview={pendingCorrection?.preview ?? null}
-                title={
-                  pendingCorrection?.action === "unhide" ? "Unhide this block?" : "Hide this block?"
-                }
-                confirmLabel={
-                  pendingCorrection?.action === "unhide" ? "Unhide block" : "Hide block"
-                }
+                title={pendingCorrection?.title ?? ""}
+                confirmLabel={pendingCorrection?.confirmLabel ?? ""}
                 busy={correctionBusy}
                 error={pendingCorrectionError}
                 onConfirm={() => void handleConfirmPendingCorrection()}

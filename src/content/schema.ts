@@ -1211,9 +1211,32 @@ export const UnhideCorrectionSchema = z.object({
   target: BlockTargetSchema,
 });
 
+/** Issue #73 — move words across ONE block boundary. `words` is the moved
+ * words' quote over the view article it was made against; they sit at the
+ * END of the target block ("next") or its START ("previous"). Only the block
+ * separator moves; the words never change. */
+export const MoveWordsCorrectionSchema = z.object({
+  kind: z.literal("move-words"),
+  ...correctionBase,
+  target: BlockTargetSchema,
+  words: TextQuoteSelectorSchema,
+  direction: z.enum(["next", "previous"]),
+});
+
+/** Issue #73 — make the selected words their own paragraph (the words
+ * before and after keep the block's type). */
+export const OwnParagraphCorrectionSchema = z.object({
+  kind: z.literal("own-paragraph"),
+  ...correctionBase,
+  target: BlockTargetSchema,
+  words: TextQuoteSelectorSchema,
+});
+
 export const CorrectionSchema = z.discriminatedUnion("kind", [
   HideCorrectionSchema,
   UnhideCorrectionSchema,
+  MoveWordsCorrectionSchema,
+  OwnParagraphCorrectionSchema,
 ]);
 export type Correction = z.infer<typeof CorrectionSchema>;
 

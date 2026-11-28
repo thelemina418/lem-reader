@@ -45,6 +45,7 @@ import type { TextQuoteSelector } from "../normalizeText";
 import { registerCorrectionsFingerprint } from "../sameText";
 import { correctedStructure } from "./structure";
 import type { Block, CanonicalArticle, InlineRun } from "../types";
+import { moveWords, ownParagraph } from "./moveWords";
 import {
   blockPathKey,
   buildCorrectionView,
@@ -70,7 +71,7 @@ export interface CorrectionsResult {
 
 // ── Engine state ────────────────────────────────────────────────────────────
 
-interface EngineState {
+export interface EngineState {
   /** The view article: every block, hidden ones included. Hide/unhide never
    * change it; later kinds (split, merge, move words…) do. */
   readonly article: CanonicalArticle;
@@ -78,7 +79,7 @@ interface EngineState {
   readonly hidden: ReadonlySet<string>;
 }
 
-type Step = { ok: true; state: EngineState } | { ok: false; reason: string };
+export type Step = { ok: true; state: EngineState } | { ok: false; reason: string };
 
 // ── Calm reasons (shared by availability and re-application) ───────────────
 
@@ -96,7 +97,7 @@ export const REASONS = {
 
 // ── Block layout of the view article (memoized per article object) ─────────
 
-interface LaidBlock {
+export interface LaidBlock {
   readonly block: Block;
   readonly path: readonly number[];
   readonly key: string;
@@ -107,7 +108,7 @@ interface LaidBlock {
 
 const layouts = new WeakMap<CanonicalArticle, readonly LaidBlock[]>();
 
-function layoutOf(article: CanonicalArticle): readonly LaidBlock[] {
+export function layoutOf(article: CanonicalArticle): readonly LaidBlock[] {
   let laid = layouts.get(article);
   if (laid) return laid;
   // The pass-through view model already walks every block with D-05 offsets.
@@ -133,7 +134,7 @@ function layoutOf(article: CanonicalArticle): readonly LaidBlock[] {
 }
 
 /** Find a block target in `article` by text. */
-function resolveBlockTarget(
+export function resolveBlockTarget(
   article: CanonicalArticle,
   target: BlockTarget,
 ): LaidBlock | "orphan" | "ambiguous" {
@@ -201,7 +202,7 @@ function holdsFootnoteReference(block: Block): boolean {
   }
 }
 
-function isHiddenUnder(hidden: ReadonlySet<string>, path: readonly number[]): boolean {
+export function isHiddenUnder(hidden: ReadonlySet<string>, path: readonly number[]): boolean {
   for (let n = 1; n < path.length; n++) {
     if (hidden.has(blockPathKey(path.slice(0, n)))) return true;
   }
@@ -245,6 +246,9 @@ const KINDS: { [K in Correction["kind"]]: Handler<K> } = {
     hidden.delete(found.key);
     return { ok: true, state: { article: state.article, hidden } };
   },
+  // Issue #73 (./moveWords.ts). Called lazily: the module cycle is safe.
+  "move-words": (state, correction) => moveWords(state, correction),
+  "own-paragraph": (state, correction) => ownParagraph(state, correction),
 };
 
 /** Engine-level validity of hiding `block` (holds for re-application too). */
@@ -422,13 +426,16 @@ export function correctedArticle(
 export type Availability =
   { readonly available: true } | { readonly available: false; readonly reason: string };
 
-function engineStateOf(result: CorrectionsResult): EngineState {
+export function engineStateOf(result: CorrectionsResult): EngineState {
   const hidden = new Set<string>();
   for (const b of result.view.allBlocks) if (b.hiddenDirectly) hidden.add(blockPathKey(b.path));
   return { article: result.view.article, hidden };
 }
 
-function laidFor(result: CorrectionsResult, block: CorrectionViewBlock): LaidBlock | undefined {
+export function laidFor(
+  result: CorrectionsResult,
+  block: CorrectionViewBlock,
+): LaidBlock | undefined {
   const key = blockPathKey(block.path);
   return layoutOf(result.view.article).find((b) => b.key === key);
 }
