@@ -44,7 +44,7 @@ import {
 import type { BlockTarget, Correction } from "../schema";
 import type { TextQuoteSelector } from "../normalizeText";
 import { fingerprintText, registerCorrectionsFingerprint } from "../sameText";
-import { correctedStructure } from "./structure";
+import { correctedStructure } from "./correctedStructure";
 import { setTypeHandler } from "./setType";
 import type { Block, CanonicalArticle, InlineRun } from "../types";
 import { moveWords, ownParagraph } from "./moveWords";
@@ -106,7 +106,7 @@ export type Step =
 
 // ── Calm reasons (shared by availability and re-application) ───────────────
 
-export const REASONS = {
+export const HIDE_REASONS = {
   notFound: "Its text is no longer in this article.",
   ambiguous: "Its text now appears in more than one place, so it can't be placed with confidence.",
   noText: "This block has no text to find it by, so the change couldn't be kept reliably.",
@@ -247,8 +247,8 @@ type Handler<K extends Correction["kind"]> = (
 const KINDS: { [K in Correction["kind"]]: Handler<K> } = {
   hide(state, correction) {
     const found = resolveBlockTarget(state.article, correction.target);
-    if (found === "orphan") return { ok: false, reason: REASONS.notFound };
-    if (found === "ambiguous") return { ok: false, reason: REASONS.ambiguous };
+    if (found === "orphan") return { ok: false, reason: HIDE_REASONS.notFound };
+    if (found === "ambiguous") return { ok: false, reason: HIDE_REASONS.ambiguous };
     const reason = hideRefusal(state, found);
     if (reason) return { ok: false, reason };
     const hidden = new Set(state.hidden);
@@ -257,12 +257,12 @@ const KINDS: { [K in Correction["kind"]]: Handler<K> } = {
   },
   unhide(state, correction) {
     const found = resolveBlockTarget(state.article, correction.target);
-    if (found === "orphan") return { ok: false, reason: REASONS.notFound };
-    if (found === "ambiguous") return { ok: false, reason: REASONS.ambiguous };
+    if (found === "orphan") return { ok: false, reason: HIDE_REASONS.notFound };
+    if (found === "ambiguous") return { ok: false, reason: HIDE_REASONS.ambiguous };
     if (!state.hidden.has(found.key)) {
       return {
         ok: false,
-        reason: isHiddenUnder(state.hidden, found.path) ? REASONS.insideHidden : REASONS.notHidden,
+        reason: isHiddenUnder(state.hidden, found.path) ? HIDE_REASONS.insideHidden : HIDE_REASONS.notHidden,
       };
     }
     const hidden = new Set(state.hidden);
@@ -272,8 +272,8 @@ const KINDS: { [K in Correction["kind"]]: Handler<K> } = {
   // #75 — split at a separator inside the block (./splitMerge.ts).
   split(state, correction) {
     const found = resolveBlockTarget(state.article, correction.target);
-    if (found === "orphan") return { ok: false, reason: REASONS.notFound };
-    if (found === "ambiguous") return { ok: false, reason: REASONS.ambiguous };
+    if (found === "orphan") return { ok: false, reason: HIDE_REASONS.notFound };
+    if (found === "ambiguous") return { ok: false, reason: HIDE_REASONS.ambiguous };
     if (isHiddenAt(state.hidden, found.path)) {
       return { ok: false, reason: SPLIT_MERGE_REASONS.hiddenBlock };
     }
@@ -292,8 +292,8 @@ const KINDS: { [K in Correction["kind"]]: Handler<K> } = {
   // #75 — merge with the next block, which must still be the one merged.
   merge(state, correction) {
     const found = resolveBlockTarget(state.article, correction.target);
-    if (found === "orphan") return { ok: false, reason: REASONS.notFound };
-    if (found === "ambiguous") return { ok: false, reason: REASONS.ambiguous };
+    if (found === "orphan") return { ok: false, reason: HIDE_REASONS.notFound };
+    if (found === "ambiguous") return { ok: false, reason: HIDE_REASONS.ambiguous };
     if (isHiddenAt(state.hidden, found.path)) {
       return { ok: false, reason: SPLIT_MERGE_REASONS.hiddenBlock };
     }
@@ -333,12 +333,12 @@ function isHiddenAt(hidden: ReadonlySet<string>, path: readonly number[]): boole
 /** Engine-level validity of hiding `block` (holds for re-application too). */
 function hideRefusal(state: EngineState, block: LaidBlock): string | null {
   if (state.hidden.has(block.key) || isHiddenUnder(state.hidden, block.path)) {
-    return REASONS.alreadyHidden;
+    return HIDE_REASONS.alreadyHidden;
   }
-  if (holdsFootnoteReference(block.block)) return REASONS.footnoteReference;
+  if (holdsFootnoteReference(block.block)) return HIDE_REASONS.footnoteReference;
   const hidden = new Set(state.hidden);
   hidden.add(block.key);
-  if (!anythingLeftToRead(state.article, hidden)) return REASONS.lastBlock;
+  if (!anythingLeftToRead(state.article, hidden)) return HIDE_REASONS.lastBlock;
   return null;
 }
 
@@ -384,7 +384,7 @@ function finish(
   const blocks = buildCorrectedBlocks(state.article.blocks, [], state.hidden);
   // The corrected article never carries the original's frozen structure
   // snapshot: its chapters are derived from the corrected blocks, keeping
-  // unchanged chapters' ids and titles (./structure.ts, #72) — and nothing
+  // unchanged chapters' ids and titles (./correctedStructure.ts, #72) — and nothing
   // is ever written back onto the original row (ADR 0014).
   const { structure: _frozen, ...rest } = state.article;
   void _frozen;
@@ -520,15 +520,15 @@ export function hideAvailability(
   block: CorrectionViewBlock,
 ): Availability {
   const laid = laidFor(result, block);
-  if (!laid) return { available: false, reason: REASONS.notFound };
-  if (laid.end <= laid.start) return { available: false, reason: REASONS.noText };
+  if (!laid) return { available: false, reason: HIDE_REASONS.notFound };
+  if (laid.end <= laid.start) return { available: false, reason: HIDE_REASONS.noText };
   const state = engineStateOf(result);
   const refusal = hideRefusal(state, laid);
   if (refusal) return { available: false, reason: refusal };
   // The target must be findable again: unique by text in this article.
   const target = blockTargetFor(result.view.article, block.path);
   if (!target || resolveBlockTarget(result.view.article, target) !== laid) {
-    return { available: false, reason: REASONS.ambiguous };
+    return { available: false, reason: HIDE_REASONS.ambiguous };
   }
   return { available: true };
 }
@@ -536,19 +536,19 @@ export function hideAvailability(
 /** Can the reader unhide this block now? */
 export function unhideAvailability(block: CorrectionViewBlock): Availability {
   if (block.hiddenDirectly) return { available: true };
-  if (block.hidden) return { available: false, reason: REASONS.insideHidden };
-  return { available: false, reason: REASONS.notHidden };
+  if (block.hidden) return { available: false, reason: HIDE_REASONS.insideHidden };
+  return { available: false, reason: HIDE_REASONS.notHidden };
 }
 
 /** The view block's laid entry when it is targetable: present, with text,
  * and found again uniquely by that text. A string is the reason not. */
 function targetableLaid(result: CorrectionsResult, block: CorrectionViewBlock): LaidBlock | string {
   const laid = laidFor(result, block);
-  if (!laid) return REASONS.notFound;
-  if (laid.end <= laid.start) return REASONS.noText;
+  if (!laid) return HIDE_REASONS.notFound;
+  if (laid.end <= laid.start) return HIDE_REASONS.noText;
   const target = blockTargetFor(result.view.article, block.path);
   if (!target || resolveBlockTarget(result.view.article, target) !== laid) {
-    return REASONS.ambiguous;
+    return HIDE_REASONS.ambiguous;
   }
   return laid;
 }

@@ -24,7 +24,7 @@ import {
 import {
   applyCorrections,
   blockCorrection,
-  REASONS,
+  HIDE_REASONS,
   splitCorrection,
 } from "../../../src/content/corrections/engine";
 import { setTypeCorrection } from "../../../src/content/corrections/setType";
@@ -191,7 +191,7 @@ describe("reprocessing a corrected URL article", () => {
 
     expect(preview.corrections.reapplied.map((c) => c.id)).toEqual([hideShare.id]);
     expect(preview.corrections.notApplied).toEqual([
-      { correction: hideNewsletter, reason: REASONS.notFound },
+      { correction: hideNewsletter, reason: HIDE_REASONS.notFound },
     ]);
     // Changed passages are what the reader reads: the hidden sign-up was
     // never read, so its disappearance is not a change.
@@ -219,7 +219,7 @@ describe("reprocessing a corrected URL article", () => {
     expect(await loadCorrections(saved.id)).toEqual(corrections);
     expect(result.outcomes).toEqual([
       { status: "applied" },
-      { status: "not-applied", reason: REASONS.notFound },
+      { status: "not-applied", reason: HIDE_REASONS.notFound },
     ]);
     expect(normalizeText(result.article)).not.toContain(SHARE);
 
@@ -510,7 +510,7 @@ describe("reprocessing a book with corrected chapters", () => {
     );
     expect(
       preview.correctionsNotApplied.map((n) => [n.chapter, n.correction.id, n.reason]),
-    ).toEqual([["One", chapterCorrections[1]!.id, REASONS.notFound]]);
+    ).toEqual([["One", chapterCorrections[1]!.id, HIDE_REASONS.notFound]]);
     expect(preview.correctionsReapplied).toBe(1);
     expect(preview.positionsUnmatched).toEqual([]);
 

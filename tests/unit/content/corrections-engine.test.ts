@@ -18,7 +18,7 @@ import {
   blockTargetFor,
   hideAvailability,
   unhideAvailability,
-  REASONS,
+  HIDE_REASONS,
 } from "../../../src/content/corrections/engine";
 import {
   articleGraphemeIndex,
@@ -95,7 +95,7 @@ describe("pass-through — an article with no corrections", () => {
     const stray = hide(makeArticle([paragraph("Other text"), paragraph("More")]), [0]);
     const result = applyCorrections(article, [stray]);
     expect(result.article).toBe(article);
-    expect(result.outcomes[0]).toEqual({ status: "not-applied", reason: REASONS.notFound });
+    expect(result.outcomes[0]).toEqual({ status: "not-applied", reason: HIDE_REASONS.notFound });
   });
 
   it("returns the same result for the same inputs (runs once per corrections change)", () => {
@@ -207,7 +207,7 @@ describe("unhide", () => {
     const hid = hide(article, [2]);
     const un = unhide(article, [2], [hid]);
     const result = applyCorrections(article, [un]);
-    expect(result.outcomes[0]).toEqual({ status: "not-applied", reason: REASONS.notHidden });
+    expect(result.outcomes[0]).toEqual({ status: "not-applied", reason: HIDE_REASONS.notHidden });
   });
 
   it("is unavailable inside a hidden quotation, with a reason", () => {
@@ -220,7 +220,7 @@ describe("unhide", () => {
     expect(child.hidden).toBe(true);
     expect(unhideAvailability(child)).toEqual({
       available: false,
-      reason: REASONS.insideHidden,
+      reason: HIDE_REASONS.insideHidden,
     });
     expect(unhideAvailability(result.view.blocks[1]!)).toEqual({ available: true });
   });
@@ -250,7 +250,7 @@ describe("targets are found by text, in order", () => {
     const changed = makeArticle([paragraph("The ferry leaves at dawn."), paragraph("Gulls.")]);
     expect(applyCorrections(changed, [hid]).outcomes[0]).toEqual({
       status: "not-applied",
-      reason: REASONS.notFound,
+      reason: HIDE_REASONS.notFound,
     });
   });
 
@@ -285,7 +285,7 @@ describe("targets are found by text, in order", () => {
     ]);
     expect(applyCorrections(changed, [second]).outcomes[0]).toEqual({
       status: "not-applied",
-      reason: REASONS.ambiguous,
+      reason: HIDE_REASONS.ambiguous,
     });
   });
 
@@ -297,7 +297,7 @@ describe("targets are found by text, in order", () => {
     expect(result.outcomes).toEqual([{ status: "applied" }, { status: "applied" }]);
     // The same hide twice: the second finds the block already hidden.
     const twice = applyCorrections(article, [a, { ...a, id: "again" }]);
-    expect(twice.outcomes[1]).toEqual({ status: "not-applied", reason: REASONS.alreadyHidden });
+    expect(twice.outcomes[1]).toEqual({ status: "not-applied", reason: HIDE_REASONS.alreadyHidden });
   });
 
   it("records the block's text, kind and depth — never only an index", () => {
@@ -320,7 +320,7 @@ describe("validity rules", () => {
     const first = hide(article, [0]);
     const result = applyCorrections(article, [first]);
     const last = result.view.blocks[1]!;
-    expect(hideAvailability(result, last)).toEqual({ available: false, reason: REASONS.lastBlock });
+    expect(hideAvailability(result, last)).toEqual({ available: false, reason: HIDE_REASONS.lastBlock });
   });
 
   it("refuses to hide a block holding a footnote reference", () => {
@@ -340,7 +340,7 @@ describe("validity rules", () => {
     const result = applyCorrections(article, []);
     expect(hideAvailability(result, result.view.blocks[1]!)).toEqual({
       available: false,
-      reason: REASONS.footnoteReference,
+      reason: HIDE_REASONS.footnoteReference,
     });
   });
 
@@ -356,7 +356,7 @@ describe("validity rules", () => {
     const result = applyCorrections(article, []);
     expect(hideAvailability(result, result.view.blocks[1]!)).toEqual({
       available: false,
-      reason: REASONS.noText,
+      reason: HIDE_REASONS.noText,
     });
   });
 });

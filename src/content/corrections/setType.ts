@@ -31,7 +31,7 @@ import { blockPathKey, type CorrectionViewBlock } from "../correctionView";
 import type { Block, InlineRun } from "../types";
 import type { BlockTypeChoice, Correction } from "../schema";
 import {
-  REASONS,
+  HIDE_REASONS,
   blockTargetFor,
   engineStateOf,
   isHiddenUnder,
@@ -335,8 +335,8 @@ export function setTypeHandler(
   correction: Extract<Correction, { kind: "set-type" }>,
 ): Step {
   const found = resolveBlockTarget(state.article, correction.target);
-  if (found === "orphan") return { ok: false, reason: REASONS.notFound };
-  if (found === "ambiguous") return { ok: false, reason: REASONS.ambiguous };
+  if (found === "orphan") return { ok: false, reason: HIDE_REASONS.notFound };
+  if (found === "ambiguous") return { ok: false, reason: HIDE_REASONS.ambiguous };
   if (state.hidden.has(found.key) || isHiddenUnder(state.hidden, found.path)) {
     return { ok: false, reason: SET_TYPE_REASONS.hidden };
   }
@@ -365,12 +365,12 @@ export function setTypeAvailability(
     id: "availability",
     createdAt: new Date(0).toISOString(),
   });
-  if (!correction) return { available: false, reason: REASONS.noText };
+  if (!correction) return { available: false, reason: HIDE_REASONS.noText };
   const state = engineStateOf(result);
   const found = resolveBlockTarget(state.article, correction.target);
-  if (found === "orphan") return { available: false, reason: REASONS.notFound };
+  if (found === "orphan") return { available: false, reason: HIDE_REASONS.notFound };
   if (found === "ambiguous" || found.key !== blockPathKey(block.path)) {
-    return { available: false, reason: REASONS.ambiguous };
+    return { available: false, reason: HIDE_REASONS.ambiguous };
   }
   const step = setTypeHandler(state, correction);
   return step.ok ? { available: true } : { available: false, reason: step.reason };

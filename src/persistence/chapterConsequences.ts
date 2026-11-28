@@ -28,7 +28,7 @@ const identical: SameChapter = (was, now) => JSON.stringify(was) === JSON.string
 /** No writes. A chapter target keeps its meaning only when a destination
  * with its id exists in both structures and `sameChapter` holds (by default:
  * identical). Corrections carry unchanged chapters' ids over by heading text
- * (src/content/corrections/structure.ts), so for them the same id with the
+ * (src/content/corrections/correctedStructure.ts), so for them the same id with the
  * same title is the same chapter even though its range moved. */
 export async function chapterConsequences(
   articleId: string,

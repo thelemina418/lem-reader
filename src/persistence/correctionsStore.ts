@@ -31,7 +31,7 @@
 // the chapter back puts them back, named in the preview's `restored`.
 //
 // Chapters: a chapter the correction leaves in place keeps its id and
-// title in the corrected structure (src/content/corrections/structure.ts),
+// title in the corrected structure (src/content/corrections/correctedStructure.ts),
 // so its completions and collection entries carry over untouched; only a
 // chapter that is genuinely removed (its heading hidden) — or whose title
 // changed — is a consequence.
@@ -146,7 +146,7 @@ export interface ContentsChange {
 }
 
 /** Chapters in one structure and not the other (ids carry over for
- * chapters a correction leaves in place — corrections/structure.ts). */
+ * chapters a correction leaves in place — corrections/correctedStructure.ts). */
 function contentsChanges(
   before: WorkStructure | null,
   after: WorkStructure | null,

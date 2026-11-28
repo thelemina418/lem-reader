@@ -162,7 +162,7 @@ import {
   splitAvailability,
   splitCorrection,
   unhideAvailability,
-  REASONS as CORRECTION_REASONS,
+  HIDE_REASONS as CORRECTION_REASONS,
   type Availability,
 } from "../content/corrections/engine";
 import {
