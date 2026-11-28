@@ -308,12 +308,17 @@ function ReviewRow({
   // D10-07 badge vocabulary — calm, distinct copy announced as row content.
   // Section rows whose article exists but whose quote no longer resolves
   // share the orphan vocabulary (status-driven, never silent).
+  // Spec #68 — a highlight inside a block the reader's corrections hide is
+  // "hidden while its block is hidden" (the reader's own rule): never an
+  // orphan, and it opens where it belongs again once the block is unhidden.
   const badgeText =
     entry.status === "ambiguous"
       ? "Uncertain anchor"
       : entry.status === "orphan"
         ? "Article missing"
-        : null;
+        : entry.status === "hidden"
+          ? "Hidden while its block is hidden"
+          : null;
 
   const content = (
     <div className="review-row">
@@ -349,7 +354,11 @@ function ReviewRow({
       type="button"
       className="btn btn-icon review-jump"
       disabled
-      aria-label={`Go to highlight: ${ariaExcerpt}. This highlight can't be located, so jumping is disabled.`}
+      aria-label={
+        entry.status === "hidden"
+          ? `Go to highlight: ${ariaExcerpt}. Its block is hidden by your corrections, so jumping is disabled until you unhide it.`
+          : `Go to highlight: ${ariaExcerpt}. This highlight can't be located, so jumping is disabled.`
+      }
     >
       <JumpToArticleIcon className="review-jump-glyph" />
     </button>
@@ -1167,6 +1176,7 @@ export function ReviewView({
             <option value="confident">Confident</option>
             <option value="ambiguous">Ambiguous</option>
             <option value="orphan">Orphan</option>
+            <option value="hidden">Hidden by corrections</option>
           </select>
         </div>
         <div className="review-filter-group">

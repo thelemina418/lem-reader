@@ -64,6 +64,7 @@
 //     rendering plans (10-02) render it as React text children — never raw
 //     HTML (react/no-danger + lint:no-danger enforced repo-wide).
 import { resolveQuoteSelectorInText } from "../../annotations/resolution";
+import { isHiddenByCorrections } from "../../content/corrections/engine";
 import { MemoizedArticleText } from "../../portability/conflicts";
 import { effectiveTitle } from "../../ingestion/library/effectiveMetadata";
 // Issue #117 — the ONE case-insensitive tag comparison (tagText.sameTag —
@@ -81,7 +82,10 @@ import type { CanonicalArticle, HighlightRecord, NoteRecord } from "../../conten
 export type ReviewSort = "date" | "article" | "position";
 
 /** The honest tri-state vocabulary (D5-02/ANNO-07 — reused, not redefined). */
-export type ConfidenceValue = "confident" | "ambiguous" | "orphan";
+/** Spec #68 — "hidden": the highlight sits inside a block the reader's
+ * corrections hide; it is neither shown nor orphaned, and matches again
+ * once the block is unhidden (the reader's own rule, isHiddenByCorrections). */
+export type ConfidenceValue = "confident" | "ambiguous" | "orphan" | "hidden";
 
 /** Confidence filter value; "all" passes every status (D10-08). */
 export type ConfidenceFilter = "all" | ConfidenceValue;
@@ -270,7 +274,14 @@ export function deriveReviewSections(
         highlight.position,
       );
       if (typeof resolved !== "string") resolvedPosition = resolved;
-      status = resolved === "ambiguous" || resolved === "orphan" ? resolved : "confident";
+      status =
+        resolved === "orphan"
+          ? isHiddenByCorrections(article, highlight.quote)
+            ? "hidden"
+            : "orphan"
+          : resolved === "ambiguous"
+            ? resolved
+            : "confident";
     }
     const entry: HighlightReviewEntry = article
       ? { kind: "highlight", highlight, status, article }
