@@ -14,7 +14,7 @@
 // Nothing here writes: the parent applies on confirm. Cancel leaves
 // everything untouched.
 import { useEffect, useRef, useState } from "react";
-import { ConsequenceChecklist } from "../ingestion/library/reprocessParts";
+import { ConsequenceChecklist } from "../ui/ConsequenceChecklist";
 import { describeCorrection } from "../content/corrections/describe";
 import type { DroppedMark } from "../content/corrections/engine";
 import type {
