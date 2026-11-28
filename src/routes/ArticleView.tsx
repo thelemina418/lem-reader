@@ -162,14 +162,11 @@ import {
 } from "../content/corrections/engine";
 import { storedOffsetInShown } from "../content/corrections/positions";
 import type { Correction } from "../content/schema";
-import {
-  applyCorrectionsChange,
-  CorrectionsRefusal,
-  loadCorrections,
-  previewAddCorrection,
-  type CorrectionsPreview,
-} from "../persistence/correctionsStore";
+import { loadCorrections } from "../persistence/correctionsStore";
 import { CorrectionConsequencesDialog } from "../reader/CorrectionConsequencesDialog";
+import { CorrectionsList } from "../reader/CorrectionsList";
+import { useCorrectionChanges } from "../reader/useCorrectionChanges";
+import { describeCorrection } from "../content/corrections/describe";
 import {
   CorrectionView,
   type BlockCommand,
@@ -1072,7 +1069,6 @@ export function ArticleView({
      * change underneath the view — hide/unhide never move view offsets). */
     viewOffset: number;
   } | null>(null);
-  const [correctionBusy, setCorrectionBusy] = useState(false);
   const correctionActiveRef = useRef(false);
   correctionActiveRef.current = correctionEntry !== null;
   const correctionViewRef = useRef<CorrectionViewHandle | null>(null);
@@ -1869,40 +1865,29 @@ export function ArticleView({
     },
     [correctionsResult],
   );
-  const [pendingCorrection, setPendingCorrection] = useState<{
-    preview: CorrectionsPreview;
-    block: CorrectionViewBlock;
-    action: BlockCommand["action"];
-  } | null>(null);
-  const [pendingCorrectionError, setPendingCorrectionError] = useState("");
-  const commitCorrection = useCallback(
-    async (
-      preview: CorrectionsPreview,
-      block: CorrectionViewBlock,
-      action: BlockCommand["action"],
-      acceptConsequences: boolean,
-    ) => {
-      await applyCorrectionsChange(preview, { acceptConsequences });
+  // Every change to the corrections list — a new correction, Ctrl+Z /
+  // Ctrl+Shift+Z, a list undo, Restore original — takes the one preview →
+  // consequences → apply path, with the session undo history (#76).
+  const handleCorrectionsApplied = useCallback(
+    (next: readonly Correction[]) => {
       // A paused read-aloud holds chunks in the old text's coordinates:
       // end it, so the reader's next Play speaks the corrected article
       // from their place (spec #68 story 9).
       stopReadAloud();
-      setCorrections(preview.corrections);
+      setCorrections(next);
       invalidateLibrarySnapshot();
-      setCorrectionAnnouncement(
-        action === "hide"
-          ? `${block.label} hidden. It stays here, dimmed; press X to unhide it.`
-          : `${block.label} unhidden.`,
-      );
     },
     [stopReadAloud],
   );
-  const correctionFailure = (error: unknown) =>
-    error instanceof CorrectionsRefusal
-      ? error.message
-      : "The correction couldn't be saved. Nothing was changed.";
+  const correctionChanges = useCorrectionChanges({
+    articleId: originalArticle?.id ?? null,
+    corrections,
+    onApplied: handleCorrectionsApplied,
+    announce: setCorrectionAnnouncement,
+  });
+  const [correctionsListOpen, setCorrectionsListOpen] = useState(false);
   const handleCorrectionCommand = useCallback(
-    async (block: CorrectionViewBlock, command: BlockCommand) => {
+    (block: CorrectionViewBlock, command: BlockCommand) => {
       if (!command.available) {
         setCorrectionAnnouncement(command.reason ?? "That isn't available here.");
         return;
@@ -1916,40 +1901,68 @@ export function ArticleView({
         setCorrectionAnnouncement(CORRECTION_REASONS.noText);
         return;
       }
-      setCorrectionBusy(true);
-      try {
-        const preview = await previewAddCorrection(originalArticle.id, correction);
-        if (!preview.clean) {
-          setPendingCorrectionError("");
-          setPendingCorrection({ preview, block, action: command.action });
-          return;
-        }
-        await commitCorrection(preview, block, command.action, false);
-      } catch (error) {
-        setCorrectionAnnouncement(correctionFailure(error));
-      } finally {
-        setCorrectionBusy(false);
-      }
+      const hide = command.action === "hide";
+      const described = describeCorrection(correction);
+      void correctionChanges.run({
+        next: [...corrections, correction],
+        title: hide ? "Hide this block?" : "Unhide this block?",
+        confirmLabel: hide ? "Hide block" : "Unhide block",
+        announce: hide
+          ? `${block.label} hidden. It stays here, dimmed; press X to unhide it, or Ctrl+Z to undo.`
+          : `${block.label} unhidden. Press Ctrl+Z to undo.`,
+        undoAnnounce: `Undone: ${described}.`,
+        redoAnnounce: `Redone: ${described}.`,
+      });
     },
-    [originalArticle, correctionsResult, commitCorrection],
+    [originalArticle, correctionsResult, corrections, correctionChanges],
   );
-  const handleConfirmPendingCorrection = useCallback(async () => {
-    if (!pendingCorrection) return;
-    const { preview, block, action } = pendingCorrection;
-    setCorrectionBusy(true);
-    try {
-      await commitCorrection(preview, block, action, true);
-      setPendingCorrection(null);
-    } catch (error) {
-      setPendingCorrectionError(correctionFailure(error));
-    } finally {
-      setCorrectionBusy(false);
-    }
-  }, [pendingCorrection, commitCorrection]);
-  const handleCancelPendingCorrection = useCallback(() => {
-    setPendingCorrection(null);
-    setCorrectionAnnouncement("Nothing was changed.");
-  }, []);
+  const handleUndoListedCorrection = useCallback(
+    (correction: Correction, applied: boolean) => {
+      const described = describeCorrection(correction);
+      void correctionChanges.run({
+        next: corrections.filter((c) => c.id !== correction.id),
+        title: applied ? "Undo this correction?" : "Remove this correction?",
+        confirmLabel: applied ? "Undo correction" : "Remove",
+        announce: applied
+          ? `Undone: ${described}. Press Ctrl+Z to bring it back.`
+          : `Removed from the list: ${described}. Press Ctrl+Z to bring it back.`,
+        undoAnnounce: `Brought back: ${described}.`,
+        redoAnnounce: applied ? `Undone: ${described}.` : `Removed from the list: ${described}.`,
+        reinstate: true,
+      });
+    },
+    [corrections, correctionChanges],
+  );
+  const handleRestoreOriginal = useCallback(() => {
+    void correctionChanges.run({
+      next: [],
+      title: "Restore the original?",
+      confirmLabel: "Restore original",
+      announce:
+        "Original restored. The article reads exactly as it was added. Press Ctrl+Z to undo.",
+      undoAnnounce: "Undone: Restore original. Your corrections are back.",
+      redoAnnounce: "Original restored.",
+      reinstate: true,
+    });
+  }, [correctionChanges]);
+  // Ctrl+Z / Ctrl+Shift+Z (Cmd on macOS) while the view is up — never from
+  // form fields or dialogs, where they stay the field's own undo.
+  const correctionUndoRef = useRef(correctionChanges);
+  correctionUndoRef.current = correctionChanges;
+  const correctionViewUp = correctionEntry !== null;
+  useEffect(() => {
+    if (!correctionViewUp) return;
+    const onKey = (event: KeyboardEvent) => {
+      if (!(event.ctrlKey || event.metaKey) || event.altKey) return;
+      if (event.key !== "z" && event.key !== "Z") return;
+      if (isFormField(event.target)) return;
+      event.preventDefault();
+      if (event.shiftKey) correctionUndoRef.current.redo();
+      else correctionUndoRef.current.undo();
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [correctionViewUp]);
   useEffect(() => {
     if (!correctionToggleHandlerRef) return;
     correctionToggleHandlerRef.current = handleToggleCorrectionView;
@@ -3872,20 +3885,27 @@ export function ArticleView({
                 entryOffset={correctionEntry.viewOffset}
                 commandFor={correctionCommandFor}
                 onCommand={handleCorrectionCommand}
-                busy={correctionBusy || pendingCorrection !== null}
+                busy={correctionChanges.busy || correctionChanges.pending !== null}
+                headerExtras={
+                  <CorrectionsList
+                    corrections={corrections}
+                    outcomes={correctionsResult?.outcomes ?? []}
+                    open={correctionsListOpen}
+                    onOpenChange={setCorrectionsListOpen}
+                    onUndo={handleUndoListedCorrection}
+                    onRestoreOriginal={handleRestoreOriginal}
+                    busy={correctionChanges.busy || correctionChanges.pending !== null}
+                  />
+                }
               />
               <CorrectionConsequencesDialog
-                preview={pendingCorrection?.preview ?? null}
-                title={
-                  pendingCorrection?.action === "unhide" ? "Unhide this block?" : "Hide this block?"
-                }
-                confirmLabel={
-                  pendingCorrection?.action === "unhide" ? "Unhide block" : "Hide block"
-                }
-                busy={correctionBusy}
-                error={pendingCorrectionError}
-                onConfirm={() => void handleConfirmPendingCorrection()}
-                onCancel={handleCancelPendingCorrection}
+                preview={correctionChanges.pending?.preview ?? null}
+                title={correctionChanges.pending?.title ?? ""}
+                confirmLabel={correctionChanges.pending?.confirmLabel ?? ""}
+                busy={correctionChanges.busy}
+                error={correctionChanges.pendingError}
+                onConfirm={() => void correctionChanges.confirmPending()}
+                onCancel={correctionChanges.cancelPending}
               />
             </>
           ) : (

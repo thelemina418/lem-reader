@@ -74,6 +74,8 @@ interface CorrectionViewProps {
   onCommand?: (block: CorrectionViewBlock, command: BlockCommand) => void;
   /** True while a command is being applied. */
   busy?: boolean;
+  /** Rendered at the end of the view's header (the corrections list, #76). */
+  headerExtras?: React.ReactNode;
 }
 
 function frameOf(el: Element | null): HTMLElement | null {
@@ -86,7 +88,10 @@ function inViewport(el: HTMLElement): boolean {
 }
 
 export const CorrectionView = forwardRef<CorrectionViewHandle, CorrectionViewProps>(
-  function CorrectionView({ model, entryOffset, commandFor, onCommand, busy = false }, ref) {
+  function CorrectionView(
+    { model, entryOffset, commandFor, onCommand, busy = false, headerExtras },
+    ref,
+  ) {
     const headingId = useId();
     const reasonId = useId();
     const bodyRef = useRef<HTMLDivElement>(null);
@@ -256,9 +261,13 @@ export const CorrectionView = forwardRef<CorrectionViewHandle, CorrectionViewPro
           <p className="correction-view-article">{effectiveTitle(article)}</p>
           <p className="correction-view-help">
             Each block shows its outline and type. Move between blocks with Tab or the arrow keys.
-            {commandFor ? " Press X to hide or unhide the current block." : null} Press C, or the
-            Correction view button, to go back to reading.
+            {commandFor ? " Press X to hide or unhide the current block." : null}
+            {headerExtras
+              ? " Ctrl+Z undoes your last change and Ctrl+Shift+Z redoes it; L lists every correction."
+              : null}{" "}
+            Press C, or the Correction view button, to go back to reading.
           </p>
+          {headerExtras}
         </header>
         {commandFor && (
           <div className="correction-commands" role="toolbar" aria-label="Block commands">
