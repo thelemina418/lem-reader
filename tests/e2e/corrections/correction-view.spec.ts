@@ -154,9 +154,13 @@ test.describe("Correction view (#70)", () => {
     // Let the page turn's debounced position save land first.
     await waitForLocationSaved(page, FIXTURE, turned);
     const savedBefore = await readLocationOffset(page, FIXTURE);
-    const viewMarker = await locationSaveMarker(page);
 
+    // Entering flushes the entry passage as the saved position (#71); only
+    // what happens after that is "in the view".
+    const entering = await locationSaveMarker(page);
     await enterView(page);
+    await waitForLocationSaved(page, FIXTURE, entering);
+    const viewMarker = await locationSaveMarker(page);
     // Scroll back toward the start: a passage other than the entry one.
     const entered = await topVisibleBlock(page, ".correction-view");
     const target = 1;

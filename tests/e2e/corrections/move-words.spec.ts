@@ -239,7 +239,13 @@ test.describe("Move words to the next block — the caption example (#73)", () =
     await expect(
       page.locator('mark.highlight[data-highlight-id="h-inside"]').first(),
     ).toBeVisible();
-    await expect(page.locator('mark.highlight[data-highlight-id="h-across"]')).toHaveCount(0);
+    // Shown as orphaned (the dashed, unresolved mark at its stored place),
+    // never as a confident mark.
+    const across = page.locator('mark.highlight[data-highlight-id="h-across"]');
+    await expect(across.first()).toHaveClass(/\bunresolved\b/);
+    await expect(
+      page.locator('mark.highlight[data-highlight-id="h-across"]:not(.unresolved)'),
+    ).toHaveCount(0);
   });
 
   test("make the stray words their own paragraph with P", async ({ page }) => {

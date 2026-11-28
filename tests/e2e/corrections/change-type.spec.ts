@@ -198,7 +198,7 @@ test.describe("Change a block's type (#74)", () => {
     await seedStoreRows(page, "articles", [HARBOUR]);
     await openView(page, HARBOUR.id, "The Harbour at Dawn");
     await changeType(page, "def tide(hour):", "Paragraph");
-    await expect(status(page, "Code is now Paragraph.")).toHaveCount(1);
+    await expect(status(page, "Code block is now Paragraph.")).toHaveCount(1);
     const frame = frameFor(page, "def tide(hour):");
     await expect(frame).toHaveAttribute("aria-label", "Paragraph");
     await expect(frame.locator("pre")).toHaveCount(0);
