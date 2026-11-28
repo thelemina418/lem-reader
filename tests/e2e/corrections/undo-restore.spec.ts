@@ -6,11 +6,17 @@
 // and Restore original, after which the article reads exactly as it was
 // added — and which can be undone right after.
 import { test, expect, type Page } from "@playwright/test";
-import { switchMode, modeToggle, wipeDatabase } from "../annotations/_fixtures";
-import { seedStoreRows } from "../library/seedStoreRows";
-import { BASE } from "../_base";
-
-const para = (text: string) => ({ kind: "paragraph", content: [{ text, marks: [] }] });
+import { switchMode, modeToggle } from "../annotations/_fixtures";
+import {
+  frameFor,
+  freshLibrary,
+  openReader,
+  openView as openArticleView,
+  para,
+  readingText,
+  status,
+  view,
+} from "./_corrections";
 
 const SHARE = "Share this article on social media";
 const SIGNUP = "Sign up for our newsletter";
@@ -43,33 +49,11 @@ const ARTICLE = {
   addedAt: "2026-11-01T00:00:00.000Z",
 };
 
-test.beforeEach(async ({ page }) => {
-  await wipeDatabase(page);
-  await page.goto(`${BASE}/#/`);
-  await page.reload();
-  await expect(page.getByRole("heading", { level: 1, name: "Saved articles" })).toBeVisible();
-  await seedStoreRows(page, "articles", [ARTICLE]);
-});
+test.beforeEach(async ({ page }) => freshLibrary(page, [ARTICLE]));
 
-const view = (page: Page) => page.locator(".correction-view");
-const readingText = (page: Page) =>
-  page
-    .locator(".page-fragment, .article-body:not(.article-body-measurement)")
-    .filter({ hasNot: page.locator(".correction-view") })
-    .first();
-const status = (page: Page, text: string | RegExp) =>
-  page.getByRole("status").filter({ hasText: text });
-const frameFor = (page: Page, text: string) =>
-  view(page).locator(".correction-block").filter({ hasText: text }).last();
 const list = (page: Page) => page.getByRole("region", { name: "Corrections on this article" });
 
-async function openView(page: Page) {
-  await page.goto(`${BASE}/#/article/${ARTICLE.id}`);
-  await expect(page.getByRole("heading", { level: 1, name: "The Harbour at Dawn" })).toBeVisible();
-  await expect(readingText(page)).toContainText("ferry leaves at dawn");
-  await page.keyboard.press("c");
-  await expect(view(page)).toBeVisible();
-}
+const openView = (page: Page) => openArticleView(page, ARTICLE, "ferry leaves at dawn");
 
 async function hide(page: Page, text: string) {
   await frameFor(page, text).focus();
@@ -157,8 +141,7 @@ test.describe("Undo, redo, the corrections list and Restore original (#76)", () 
   test("after Restore original the article reads exactly as it was added; Ctrl+Z right after brings the corrections back", async ({
     page,
   }) => {
-    await page.goto(`${BASE}/#/article/${ARTICLE.id}`);
-    await expect(readingText(page)).toContainText("ferry leaves at dawn");
+    await openReader(page, ARTICLE, "ferry leaves at dawn");
     await switchMode(page);
     await expect(modeToggle(page)).toHaveAttribute("aria-label", "Reading mode: scrolling");
     const original = await readingText(page).innerHTML();

@@ -7,13 +7,19 @@
 // consequences dialog first, and Cancel changes nothing. An unavailable
 // command says why. Every command is announced in the status region.
 import { test, expect, type Page } from "@playwright/test";
-import { modeToggle, switchMode, wipeDatabase } from "../annotations/_fixtures";
+import { modeToggle, switchMode } from "../annotations/_fixtures";
 import { seedStoreRows } from "../library/seedStoreRows";
-import { BASE } from "../_base";
-import { ArticleSchema } from "../../../src/content/schema";
-import { deriveQuoteSelector, normalizeText } from "../../../src/content/normalizeText";
-
-const para = (text: string) => ({ kind: "paragraph", content: [{ text, marks: [] }] });
+import {
+  dialog,
+  frameFor,
+  freshLibrary,
+  highlightRow,
+  openView as openArticleView,
+  para,
+  readingText,
+  status,
+  view,
+} from "./_corrections";
 
 const FIRST = "The tide is out.";
 const SECOND = "Boats rest on the mud until the evening.";
@@ -48,54 +54,16 @@ const ARTICLE = {
   addedAt: "2026-11-01T00:00:00.000Z",
 };
 
-const canonical = ArticleSchema.parse(ARTICLE);
-
 /** A highlight whose words span the boundary a merge would join. */
-function acrossRow() {
-  const exact = "the gulls\nfollow it";
-  const text = normalizeText(canonical);
-  const start = [...text.slice(0, text.indexOf(exact))].length;
-  const position = { start, end: start + [...exact].length };
-  return {
-    schemaVersion: 1,
-    id: "h-across",
-    articleId: ARTICLE.id,
-    revision: 1,
-    position,
-    quote: deriveQuoteSelector(canonical, position),
-    createdAt: "2026-11-02T00:00:00.000Z",
-  };
-}
+const acrossRow = () => highlightRow(ARTICLE, "h-across", "the gulls\nfollow it");
 
-test.beforeEach(async ({ page }) => {
-  await wipeDatabase(page);
-  await page.goto(`${BASE}/#/`);
-  await page.reload();
-  await expect(page.getByRole("heading", { level: 1, name: "Saved articles" })).toBeVisible();
-  await seedStoreRows(page, "articles", [ARTICLE]);
-});
+test.beforeEach(async ({ page }) => freshLibrary(page, [ARTICLE]));
 
-const view = (page: Page) => page.locator(".correction-view");
-const dialog = (page: Page) => page.getByRole("alertdialog");
 const frames = (page: Page) => view(page).locator(".correction-view-body .correction-block");
-const frameFor = (page: Page, text: string) =>
-  view(page).locator(".correction-block").filter({ hasText: text }).last();
-const status = (page: Page, text: string) => page.getByRole("status").filter({ hasText: text });
-const readingText = (page: Page) =>
-  page
-    .locator(".page-fragment, .article-body:not(.article-body-measurement)")
-    .filter({ hasNot: page.locator(".correction-view") })
-    .first();
 const readingParagraph = (page: Page, text: string) =>
   readingText(page).locator("p").filter({ hasText: text });
 
-async function openView(page: Page) {
-  await page.goto(`${BASE}/#/article/${ARTICLE.id}`);
-  await expect(page.getByRole("heading", { level: 1, name: "The Harbour at Dawn" })).toBeVisible();
-  await expect(readingText(page)).toContainText("The tide is out");
-  await page.keyboard.press("c");
-  await expect(view(page)).toBeVisible();
-}
+const openView = (page: Page) => openArticleView(page, ARTICLE, "The tide is out");
 
 /** Put the caret in a block, `characters` into its text. Placed
  * programmatically — the repo's rule for selections (real-arrow selection

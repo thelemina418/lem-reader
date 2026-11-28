@@ -7,13 +7,16 @@
 // moved sentence. Unavailable commands say why; each command is announced.
 // A highlight across the moved boundary asks first (Cancel changes nothing).
 import { test, expect, type Page } from "@playwright/test";
-import { modeToggle, switchMode, wipeDatabase } from "../annotations/_fixtures";
+import { modeToggle, switchMode } from "../annotations/_fixtures";
 import { seedStoreRows } from "../library/seedStoreRows";
-import { BASE } from "../_base";
-import { ArticleSchema } from "../../../src/content/schema";
-import { deriveQuoteSelector, normalizeText } from "../../../src/content/normalizeText";
-
-const para = (text: string) => ({ kind: "paragraph", content: [{ text, marks: [] }] });
+import {
+  freshLibrary,
+  highlightRow as highlightOn,
+  openReader as openArticle,
+  para,
+  status,
+  view,
+} from "./_corrections";
 const filler = (n: number) =>
   para(
     `Paragraph ${n}. The tide turns slowly in the harbour, and the boats swing on their moorings ` +
@@ -70,43 +73,11 @@ const MADE_OWN =
 const FIGURE = 7;
 const PARAGRAPH = 8;
 
-const canonical = ArticleSchema.parse(ARTICLE);
-function highlightRow(id: string, exact: string) {
-  const text = normalizeText(canonical);
-  const start = [...text.slice(0, text.indexOf(exact))].length;
-  const position = { start, end: start + [...exact].length };
-  return {
-    schemaVersion: 1,
-    id,
-    articleId: ARTICLE.id,
-    revision: 1,
-    position,
-    quote: deriveQuoteSelector(canonical, position),
-    createdAt: "2026-11-02T00:00:00.000Z",
-  };
-}
+const highlightRow = (id: string, exact: string) => highlightOn(ARTICLE, id, exact);
 
-test.beforeEach(async ({ page }) => {
-  await wipeDatabase(page);
-  await page.goto(`${BASE}/#/`);
-  await page.reload();
-  await expect(page.getByRole("heading", { level: 1, name: "Saved articles" })).toBeVisible();
-  await seedStoreRows(page, "articles", [ARTICLE]);
-});
+test.beforeEach(async ({ page }) => freshLibrary(page, [ARTICLE]));
 
-const view = (page: Page) => page.locator(".correction-view");
-const status = (page: Page, text: string | RegExp) =>
-  page.getByRole("status").filter({ hasText: text });
-const surface = (page: Page) =>
-  page
-    .locator(".page-fragment, .article-body:not(.article-body-measurement)")
-    .filter({ hasNot: page.locator(".correction-view") });
-
-async function openReader(page: Page) {
-  await page.goto(`${BASE}/#/article/${ARTICLE.id}`);
-  await expect(page.getByRole("heading", { level: 1, name: "The Harbour at Dawn" })).toBeVisible();
-  await expect(surface(page).first()).toContainText("Leaving port");
-}
+const openReader = (page: Page) => openArticle(page, ARTICLE, "Leaving port");
 
 /** Keyboard only: enter the view, ArrowDown to the figure, select the stray
  * words from the caption's end with Shift+←, one word at a time. */
