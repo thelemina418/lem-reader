@@ -49,6 +49,7 @@ import { setTypeHandler } from "./setType";
 import type { Block, CanonicalArticle, InlineRun } from "../types";
 import { moveWords, ownParagraph } from "./moveWords";
 import {
+  BLOCK_KIND_NOUN,
   blockPathKey,
   buildCorrectionView,
   correctionBlockId,
@@ -108,6 +109,11 @@ export type Step =
 
 export const HIDE_REASONS = {
   notFound: "Its text is no longer in this article.",
+  /** The words are still a whole block, but of another kind or nesting. */
+  reshaped: (noun: string) =>
+    `Its text is still here, but its block is now ${/^[aeiou]/.test(noun) ? "an" : "a"} ${noun}, so it wasn't changed.`,
+  reshapedSeveral:
+    "Its text is still here, but in a different kind of block, so it wasn't changed.",
   ambiguous: "Its text now appears in more than one place, so it can't be placed with confidence.",
   noText:
     "This block has no text, and none around it, to find it by, so the change couldn't be kept reliably.",
@@ -184,6 +190,38 @@ export function resolveBlockTarget(
     matchesContext(clusters, b.start, exact.length, target.quote, article.lang),
   );
   return narrowed.length === 1 ? narrowed[0]! : "ambiguous";
+}
+
+/** Blocks that hold exactly the target's words but no longer match its kind
+ * or depth — e.g. Reprocessing now delivers the paragraph as a heading. */
+export function reshapedBlocks(article: CanonicalArticle, target: BlockTarget): LaidBlock[] {
+  if (target.quote.exact.length === 0) return [];
+  const { clusters } = articleGraphemeIndex(article);
+  const exact = graphemeClusters(target.quote.exact, article.lang);
+  const laid = layoutOf(article);
+  const out: LaidBlock[] = [];
+  for (const start of findAllOccurrences(clusters, exact)) {
+    const end = start + exact.length;
+    for (const b of laid) {
+      if (b.start !== start || b.end !== end) continue;
+      if (b.block.kind === target.kind && b.depth === target.depth) continue;
+      out.push(b);
+    }
+  }
+  return out;
+}
+
+/** Why a target that resolved to "orphan" isn't applied: its words are gone,
+ * or they are still here in a block whose kind or shape changed. */
+export function notFoundReason(article: CanonicalArticle, target: BlockTarget): string {
+  // A quotation and its only child share a range: name the innermost block.
+  const all = reshapedBlocks(article, target);
+  const reshaped = all.filter(
+    (b) => !all.some((o) => o !== b && o.depth > b.depth && o.start === b.start),
+  );
+  if (reshaped.length === 0) return HIDE_REASONS.notFound;
+  if (reshaped.length > 1) return HIDE_REASONS.reshapedSeveral;
+  return HIDE_REASONS.reshaped(BLOCK_KIND_NOUN[reshaped[0]!.block.kind]);
 }
 
 /** The image source a text-less figure is also known by. */
@@ -287,7 +325,9 @@ type Handler<K extends Correction["kind"]> = (
 const KINDS: { [K in Correction["kind"]]: Handler<K> } = {
   hide(state, correction) {
     const found = resolveBlockTarget(state.article, correction.target);
-    if (found === "orphan") return { ok: false, reason: HIDE_REASONS.notFound };
+    if (found === "orphan") {
+      return { ok: false, reason: notFoundReason(state.article, correction.target) };
+    }
     if (found === "ambiguous") return { ok: false, reason: HIDE_REASONS.ambiguous };
     const reason = hideRefusal(state, found);
     if (reason) return { ok: false, reason };
@@ -297,7 +337,9 @@ const KINDS: { [K in Correction["kind"]]: Handler<K> } = {
   },
   unhide(state, correction) {
     const found = resolveBlockTarget(state.article, correction.target);
-    if (found === "orphan") return { ok: false, reason: HIDE_REASONS.notFound };
+    if (found === "orphan") {
+      return { ok: false, reason: notFoundReason(state.article, correction.target) };
+    }
     if (found === "ambiguous") return { ok: false, reason: HIDE_REASONS.ambiguous };
     if (!state.hidden.has(found.key)) {
       return {
@@ -314,7 +356,9 @@ const KINDS: { [K in Correction["kind"]]: Handler<K> } = {
   // #75 — split at a separator inside the block (./splitMerge.ts).
   split(state, correction) {
     const found = resolveBlockTarget(state.article, correction.target);
-    if (found === "orphan") return { ok: false, reason: HIDE_REASONS.notFound };
+    if (found === "orphan") {
+      return { ok: false, reason: notFoundReason(state.article, correction.target) };
+    }
     if (found === "ambiguous") return { ok: false, reason: HIDE_REASONS.ambiguous };
     if (isHiddenAt(state.hidden, found.path)) {
       return { ok: false, reason: SPLIT_MERGE_REASONS.hiddenBlock };
@@ -334,7 +378,9 @@ const KINDS: { [K in Correction["kind"]]: Handler<K> } = {
   // #75 — merge with the next block, which must still be the one merged.
   merge(state, correction) {
     const found = resolveBlockTarget(state.article, correction.target);
-    if (found === "orphan") return { ok: false, reason: HIDE_REASONS.notFound };
+    if (found === "orphan") {
+      return { ok: false, reason: notFoundReason(state.article, correction.target) };
+    }
     if (found === "ambiguous") return { ok: false, reason: HIDE_REASONS.ambiguous };
     if (isHiddenAt(state.hidden, found.path)) {
       return { ok: false, reason: SPLIT_MERGE_REASONS.hiddenBlock };

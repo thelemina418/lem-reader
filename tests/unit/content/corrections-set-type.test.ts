@@ -481,3 +481,45 @@ describe("validity and ordering", () => {
     }
   });
 });
+
+describe("re-applying over a reprocessed original whose block changed type (spec #68)", () => {
+  const before = () => makeArticle([p("Into the harbour"), p("The ferry leaves at dawn.")]);
+
+  it("counts a set-type as applied when the block already arrives with that type", () => {
+    const toHeading = setType(before(), [0], { type: "heading", level: 2 });
+    const reprocessed = makeArticle(
+      [heading(2, "Into the harbour"), p("The ferry leaves at dawn.")],
+      {
+        revision: 2,
+      },
+    );
+    const result = applyCorrections(reprocessed, [toHeading]);
+    expect(result.outcomes).toEqual([{ status: "applied" }]);
+    expect(result.article.blocks[0]).toEqual(heading(2, "Into the harbour"));
+  });
+
+  it("counts a quotation as applied when the paragraph already arrives quoted", () => {
+    const toQuote = setType(before(), [1], { type: "quotation" });
+    const reprocessed = makeArticle(
+      [p("Into the harbour"), { kind: "blockquote", children: [p("The ferry leaves at dawn.")] }],
+      { revision: 2 },
+    );
+    expect(applyCorrections(reprocessed, [toQuote]).outcomes).toEqual([{ status: "applied" }]);
+  });
+
+  it("says the block changed type, not that its text is gone, when the text is still there", () => {
+    const toQuote = setType(before(), [1], { type: "quotation" });
+    const reprocessed = makeArticle(
+      [p("Into the harbour"), heading(3, "The ferry leaves at dawn.")],
+      {
+        revision: 2,
+      },
+    );
+    expect(applyCorrections(reprocessed, [toQuote]).outcomes).toEqual([
+      {
+        status: "not-applied",
+        reason: "Its text is still here, but its block is now a heading, so it wasn't changed.",
+      },
+    ]);
+  });
+});

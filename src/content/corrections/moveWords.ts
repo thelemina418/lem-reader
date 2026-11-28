@@ -43,6 +43,7 @@ import {
   isHiddenUnder,
   layoutOf,
   HIDE_REASONS,
+  notFoundReason,
   resolveBlockTarget,
   type CorrectionsResult,
   type EngineState,
@@ -335,7 +336,7 @@ function locate(
 ): { laid: LaidBlock; region: Region; s: number; e: number } | { reason: string } {
   const { article } = state;
   const found = resolveBlockTarget(article, correction.target);
-  if (found === "orphan") return { reason: HIDE_REASONS.notFound };
+  if (found === "orphan") return { reason: notFoundReason(article, correction.target) };
   if (found === "ambiguous") return { reason: HIDE_REASONS.ambiguous };
   const region = regionOf(found, article.lang);
   if (!region) return { reason: MOVE_REASONS.notText };
