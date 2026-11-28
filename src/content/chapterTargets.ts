@@ -36,6 +36,7 @@
 import type { Book, CanonicalArticle, StructureDestination, WorkStructure } from "./schema";
 import { deriveWorkStructure, validateWorkStructure, structureLeaves } from "./structure";
 import { articleGraphemeIndex } from "./normalizeText";
+import { textStamp } from "./sameText";
 
 /**
  * The ONE structure resolution the target algebra and the reader share (the
@@ -50,7 +51,9 @@ export function resolveWorkStructure(article: CanonicalArticle): WorkStructure |
   }
   const derived = deriveWorkStructure({ ...article, provenanceTitle: article.provenance.title });
   if (derived === undefined) return null;
-  return validateWorkStructure(article, derived);
+  // The derivation input is a copy; the stamp is the article's own (a
+  // corrected article's fingerprint rides the object — sameText.ts).
+  return validateWorkStructure(article, { ...derived, ...textStamp(article) });
 }
 
 /**

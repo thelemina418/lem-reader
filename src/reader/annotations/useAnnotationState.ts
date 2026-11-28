@@ -49,6 +49,7 @@ import type {
   NoteRecord,
 } from "../../content/schema";
 import { deriveQuoteSelector, resolveQuoteSelector } from "../../content/normalizeText";
+import { isHiddenByCorrections } from "../../content/corrections/engine";
 import type { TextPositionSelector } from "../../content/normalizeText";
 import {
   loadHighlights,
@@ -400,6 +401,10 @@ export function useAnnotationState(
             // Best-effort vicinity at the stored hint (D5-04).
             resolvedPosition = record.position;
           } else if (resolution === "orphan") {
+            // Spec #68 / #72 — a highlight inside a hidden block is hidden
+            // while the block is hidden (never "couldn't relocate"): not
+            // shown anywhere in the reader; it matches again on unhide.
+            if (isHiddenByCorrections(article, record.quote)) continue;
             status = "orphan";
             resolvedPosition = record.position;
           } else {

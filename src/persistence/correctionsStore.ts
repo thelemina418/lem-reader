@@ -12,13 +12,21 @@
 //     re-anchored by quote, and chapter consequences (the derivation PDF
 //     repair and Reprocessing share). Carries a snapshot of everything
 //     apply reads.
-//   - `applyCorrectionsChange(preview)` — ONE rw transaction: refuses a
-//     preview made against an older state (STALE_PREVIEW), refuses a
-//     preview with consequences the reader hasn't accepted
-//     (ACCEPTANCE_REQUIRED — #71 never sends one; #72 adds the dialog), then
-//     writes the corrections list, re-anchored highlight positions
-//     (confident matches only; nothing else on a highlight row changes) and
-//     the reading position. Finished stays finished.
+//   - `applyCorrectionsChange(preview, { acceptConsequences })` — ONE rw
+//     transaction: refuses a preview made against an older state
+//     (STALE_PREVIEW), refuses a preview with consequences the reader
+//     hasn't accepted (ACCEPTANCE_REQUIRED — the Correction view shows them
+//     in the consequences dialog first, #72), then writes the corrections
+//     list, re-anchored highlight positions (confident matches only;
+//     nothing else on a highlight row changes), the reading position, and
+//     the accepted chapter consequences (completions and collection
+//     entries removed). Finished stays finished.
+//
+// Chapters: a chapter the correction leaves in place keeps its id and
+// title in the corrected structure (src/content/corrections/structure.ts),
+// so its completions and collection entries carry over untouched; only a
+// chapter that is genuinely removed (its heading hidden) — or whose title
+// changed — is a consequence.
 //
 // The article row is only ever READ here. Bundled fixtures have no row and
 // are not correctable (`NOT_CORRECTABLE`): their corrections would have no
@@ -35,13 +43,22 @@ import {
   type LocationRecord,
 } from "../content/schema";
 import type { CanonicalArticle } from "../content/types";
-import { applyCorrections, type CorrectionOutcome } from "../content/corrections/engine";
+import {
+  applyCorrections,
+  isHiddenByCorrections,
+  type CorrectionOutcome,
+} from "../content/corrections/engine";
 import { carryOffset } from "../content/corrections/positions";
 import { graphemeLength, mainTextLength, resolveQuoteSelector } from "../content/normalizeText";
 import { fromLegacyEndPin, inNotesOffset, isFinishedOffset } from "../reader/readingPosition";
 import { resolveWorkStructure } from "../content/chapterTargets";
 import { isSameText, textStamp } from "../content/sameText";
-import { chapterConsequences, type ChapterConsequence } from "./chapterConsequences";
+import {
+  chapterConsequences,
+  writeChapterConsequences,
+  type ChapterConsequence,
+  type SameChapter,
+} from "./chapterConsequences";
 import { db } from "./db";
 
 export const STALE_PREVIEW =
@@ -168,6 +185,10 @@ function carryBetween(
   return carryOffset(before.article, after.article, offset);
 }
 
+/** Corrections keep an unchanged chapter's id; its range may move. */
+const sameChapter: SameChapter = (was, now) =>
+  was.kind === now.kind && was.title === now.title && was.titleSource === now.titleSource;
+
 interface Plan {
   preview: Omit<CorrectionsPreview, "snapshot">;
   /** Highlight id → its new position (confident matches only). */
@@ -199,13 +220,7 @@ async function plan(articleId: string, next: readonly Correction[]): Promise<Pla
     } else {
       // Still in the view article but inside a hidden block → hidden while
       // the block is hidden (matches again on unhide).
-      const inView = resolveQuoteSelector(after.view.article, record.quote);
-      const hiddenThere =
-        typeof inView !== "string" &&
-        after.view.allBlocks.some(
-          (b) => b.hidden && b.viewStart <= inView.start && inView.end <= b.viewEnd,
-        );
-      outcome = hiddenThere ? "hidden" : then;
+      outcome = isHiddenByCorrections(after, record.quote) ? "hidden" : then;
     }
     highlights.push({ highlightId: record.id, exact: record.quote.exact, outcome });
   }
@@ -225,6 +240,7 @@ async function plan(articleId: string, next: readonly Correction[]): Promise<Pla
     articleId,
     resolveWorkStructure(before.article),
     resolveWorkStructure(after.article),
+    sameChapter,
   );
   const clean = chapters.length === 0 && highlights.every((h) => h.outcome === "confident");
   return {
@@ -262,20 +278,40 @@ export async function previewAddCorrection(
   return previewCorrectionsChange(articleId, [...current, correction]);
 }
 
+export interface ApplyOptions {
+  /** The reader accepted the preview's consequences (the dialog). */
+  readonly acceptConsequences?: boolean;
+}
+
 /** Apply a preview — one atomic transaction (see the header). */
-export async function applyCorrectionsChange(preview: CorrectionsPreview): Promise<void> {
-  if (!preview.clean) throw new CorrectionsRefusal(ACCEPTANCE_REQUIRED);
+export async function applyCorrectionsChange(
+  preview: CorrectionsPreview,
+  options: ApplyOptions = {},
+): Promise<void> {
+  const accepted = options.acceptConsequences === true;
+  if (!preview.clean && !accepted) throw new CorrectionsRefusal(ACCEPTANCE_REQUIRED);
   const { articleId } = preview;
   await db.transaction(
     "rw",
-    [db.articles, db.corrections, db.highlights, db.location, db.completions, db.collections],
+    [
+      db.articles,
+      db.corrections,
+      db.highlights,
+      db.location,
+      db.completions,
+      db.collections,
+      db.collectionActiveEntries,
+    ],
     async () => {
       if ((await snapshotOf(articleId)) !== preview.snapshot) {
         throw new CorrectionsRefusal(STALE_PREVIEW);
       }
       const { positions, location, preview: fresh } = await plan(articleId, preview.corrections);
-      if (!fresh.clean) throw new CorrectionsRefusal(ACCEPTANCE_REQUIRED);
+      // Consent covers exactly what the reader was shown: the same state
+      // (snapshot) gives the same consequences, re-derived here.
+      if (!fresh.clean && !accepted) throw new CorrectionsRefusal(ACCEPTANCE_REQUIRED);
       const stamp = textStamp(fresh.proposed);
+      const now = new Date().toISOString();
 
       if (preview.corrections.length === 0) {
         await db.corrections.delete(articleId);
@@ -284,10 +320,11 @@ export async function applyCorrectionsChange(preview: CorrectionsPreview): Promi
           schemaVersion: CORRECTIONS_SCHEMA_VERSION,
           articleId,
           corrections: [...preview.corrections],
-          updatedAt: new Date().toISOString(),
+          updatedAt: now,
         };
         await db.corrections.put(record);
       }
+      if (accepted) await writeChapterConsequences(fresh.chapters, now);
 
       for (const [id, position] of positions) {
         const row = await db.highlights.get(id);

@@ -34,9 +34,16 @@
 
 import { findAllOccurrences, matchesContext } from "../../annotations/resolution";
 import { footnoteRefOf } from "../footnoteReferences";
-import { articleGraphemeIndex, deriveQuoteSelector, graphemeClusters } from "../normalizeText";
+import {
+  articleGraphemeIndex,
+  deriveQuoteSelector,
+  graphemeClusters,
+  resolveQuoteSelector,
+} from "../normalizeText";
 import type { BlockTarget, Correction } from "../schema";
+import type { TextQuoteSelector } from "../normalizeText";
 import { registerCorrectionsFingerprint } from "../sameText";
+import { correctedStructure } from "./structure";
 import type { Block, CanonicalArticle, InlineRun } from "../types";
 import {
   blockPathKey,
@@ -85,9 +92,6 @@ export const REASONS = {
   lastBlock: "Hiding this would leave nothing to read.",
   footnoteReference:
     "This block holds a footnote reference, and its note needs somewhere to return to.",
-  // Temporary limits (#71), lifted when the consequences step lands (#72).
-  heading: "Headings can't be hidden yet, because hiding one would change the chapters.",
-  highlight: "This block holds a highlight, so it can't be hidden yet.",
 } as const;
 
 // ── Block layout of the view article (memoized per article object) ─────────
@@ -310,21 +314,54 @@ function finish(
   }
   const blocks = buildCorrectedBlocks(state.article.blocks, [], state.hidden);
   // The corrected article never carries the original's frozen structure
-  // snapshot: its chapters are derived from the corrected blocks (and the
-  // snapshot is never written back onto the original row — ADR 0014).
+  // snapshot: its chapters are derived from the corrected blocks, keeping
+  // unchanged chapters' ids and titles (./structure.ts, #72) — and nothing
+  // is ever written back onto the original row (ADR 0014).
   const { structure: _frozen, ...rest } = state.article;
   void _frozen;
-  const article: CanonicalArticle = { ...rest, blocks };
+  const article: { -readonly [K in keyof CanonicalArticle]: CanonicalArticle[K] } = {
+    ...rest,
+    blocks,
+  };
   // The fingerprint is a function of the corrected substrate itself, so two
   // correction lists that read the same (hide then unhide) share a stamp.
   const fingerprint = `c${fingerprintText(JSON.stringify(blocks))}`;
   registerCorrectionsFingerprint(article, fingerprint);
-  return {
+  // Set on the object itself (not a copy) so the fingerprint registration
+  // and every per-object cache stay with the one corrected article.
+  const structure = correctedStructure(original, article);
+  if (structure !== undefined) article.structure = structure;
+  const result: CorrectionsResult = {
     article,
     view: buildCorrectionView(state.article, state.hidden),
     outcomes,
     fingerprint,
   };
+  resultsByArticle.set(article, result);
+  return result;
+}
+
+/** Corrected article → the result that built it (for `isHiddenByCorrections`). */
+const resultsByArticle = new WeakMap<CanonicalArticle, CorrectionsResult>();
+
+/**
+ * Is this quote (a highlight's words) inside a hidden block of the article
+ * being read? Such a highlight is "hidden while its block is hidden": not
+ * shown, not orphaned, and it matches again on unhide (spec #68). Accepts
+ * the corrected article itself or its corrections result; false for an
+ * article no correction built.
+ */
+export function isHiddenByCorrections(
+  shown: CanonicalArticle | CorrectionsResult,
+  quote: TextQuoteSelector,
+): boolean {
+  const result = "view" in shown ? shown : resultsByArticle.get(shown);
+  if (!result) return false;
+  const inView = resolveQuoteSelector(result.view.article, quote);
+  if (typeof inView === "string") return false;
+  return result.view.allBlocks.some(
+    (b) => b.hidden && b.viewStart <= inView.start && inView.end <= b.viewEnd,
+  );
 }
 
 function run(original: CanonicalArticle, corrections: readonly Correction[]): CorrectionsResult {
@@ -385,11 +422,6 @@ export function correctedArticle(
 export type Availability =
   { readonly available: true } | { readonly available: false; readonly reason: string };
 
-export interface AvailabilityContext {
-  /** Highlight ranges in READING coordinates (the corrected article). */
-  readonly highlights?: readonly { readonly start: number; readonly end: number }[];
-}
-
 function engineStateOf(result: CorrectionsResult): EngineState {
   const hidden = new Set<string>();
   for (const b of result.view.allBlocks) if (b.hiddenDirectly) hidden.add(blockPathKey(b.path));
@@ -401,12 +433,12 @@ function laidFor(result: CorrectionsResult, block: CorrectionViewBlock): LaidBlo
   return layoutOf(result.view.article).find((b) => b.key === key);
 }
 
-/** Can the reader hide this block now? (Engine validity + #71's temporary
- * limits: no headings, no blocks holding a highlight — lifted by #72.) */
+/** Can the reader hide this block now? (Engine validity only: a hide with
+ * side effects — a heading's chapter, a highlight in the block — is
+ * available and goes through the consequences step first, #72.) */
 export function hideAvailability(
   result: CorrectionsResult,
   block: CorrectionViewBlock,
-  context: AvailabilityContext = {},
 ): Availability {
   const laid = laidFor(result, block);
   if (!laid) return { available: false, reason: REASONS.notFound };
@@ -414,15 +446,6 @@ export function hideAvailability(
   const state = engineStateOf(result);
   const refusal = hideRefusal(state, laid);
   if (refusal) return { available: false, reason: refusal };
-  const holdsHeading = (b: Block): boolean =>
-    b.kind === "heading" || (b.kind === "blockquote" && b.children.some(holdsHeading));
-  if (holdsHeading(laid.block)) return { available: false, reason: REASONS.heading };
-  if (block.readingStart !== null && block.readingEnd !== null) {
-    const { readingStart: start, readingEnd: end } = block;
-    if ((context.highlights ?? []).some((h) => h.start < end && h.end > start)) {
-      return { available: false, reason: REASONS.highlight };
-    }
-  }
   // The target must be findable again: unique by text in this article.
   const target = blockTargetFor(result.view.article, block.path);
   if (!target || resolveBlockTarget(result.view.article, target) !== laid) {
