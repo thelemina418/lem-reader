@@ -90,3 +90,32 @@ describe("bounded paragraph projection", () => {
     }
   });
 });
+
+// Spec #66 review S3 — the slicing walks address the same stream as
+// normalizeText when a marker run joins without a separator.
+describe("marker runs in the D-05 stream (spec #66 S3)", () => {
+  const runs: InlineRun[] = [
+    { text: "Claim", marks: [] },
+    { text: "1", marks: [{ type: "footnote-ref", footnoteId: "fn-1", occurrence: 1 }] },
+    { text: " more.", marks: [] },
+  ];
+
+  it("every cut partitions the raw text and the streams concatenate", () => {
+    const norm = blockNormalizedText(paragraph(runs));
+    expect(norm).toBe("Claim1 more.");
+    const total = graphemeClusters(norm, "en").length;
+    for (let start = 0; start <= total; start++) {
+      const { before, after } = splitParagraphRuns(runs, start, "en");
+      expect(rawText(before) + rawText(after), `cut ${start}`).toBe(rawText(runs));
+      expect(blockNormalizedText(paragraph(before)), `before ${start}`).toBe(
+        norm.slice(0, start).trimEnd(),
+      );
+      const prefix = rawPrefixUtf16ForNormOffset(runs, start, "en");
+      expect(prefix, `prefix ${start}`).toBe(rawText(before).length);
+    }
+    // The marker is grapheme 5 and its raw offset maps straight back.
+    expect(charOffsetToNormGrapheme(runs, 5, "en")).toBe(5);
+    expect(charOffsetToNormGrapheme(runs, 7, "en")).toBe(7);
+    expect(blockRawText(splitInlineBlock(paragraph(runs), 5, 6, "en"))).toBe("1");
+  });
+});

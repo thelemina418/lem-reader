@@ -39,9 +39,13 @@
 import { unified } from "unified";
 import remarkParse from "remark-parse"; // strict CommonMark (raw HTML escaped by default)
 import remarkFrontmatter from "remark-frontmatter"; // emits mdast `yaml` node for front-matter
+import { gfmFootnote } from "micromark-extension-gfm-footnote"; // issue #62 — `[^n]` syntax only
+import { gfmFootnoteFromMarkdown } from "mdast-util-gfm-footnote";
 import { parse as parseYaml } from "yaml"; // strict YAML 1.2 (safe-schema; no implicit type coercion)
 import type { Block, InlineRun } from "../src/content/schema";
 import { attachAdjacentCaptions, withCaption } from "./figureCaptions";
+import { footnoteBodyFromParagraphs, type FootnoteBodyT } from "../src/content/footnoteBody";
+import { MAX_LINKED_FOOTNOTES } from "./footnoteLinks";
 
 /** ProvenancePartial — same shape as `server/htmlToBlocks.ts` L37-42. The
  * orchestrator merges this into a full Provenance + computes originalHtmlHash
@@ -59,11 +63,8 @@ type ProvenancePartial = {
 // orchestrator boundary (07-05). The discriminatedUnion in schema.ts is the
 // single source of truth; this mirror exists only because the mdast walker
 // accumulates plain objects before tidyRuns narrows them to InlineRun.
-type Mark =
-  | { type: "link"; href: string; title?: string }
-  | { type: "code" }
-  | { type: "strong" }
-  | { type: "em" };
+// Derived from the schema's Mark union (the single source of truth).
+type Mark = InlineRun["marks"][number];
 
 type InlineRunT = { text: string; marks: Mark[] };
 
@@ -101,13 +102,41 @@ interface MdastNode {
   url?: string;
   title?: string | null;
   alt?: string | null;
+  // footnoteReference / footnoteDefinition (issue #62)
+  identifier?: string;
 }
 
 /** The unified processor — strict CommonMark + YAML front-matter (D8-16).
  * `remarkParse` (default CommonMark) escapes raw HTML; we never enable the
  * raw-HTML pass-through option. `remarkFrontmatter` recognises the leading
  * `--- ... ---` block and emits it as a `yaml` mdast node. */
-const processor = unified().use(remarkParse).use(remarkFrontmatter);
+const processor = unified().use(remarkParse).use(remarkFrontmatter).use(remarkFootnotesOnly);
+
+/** Spec #66 / issue #62 — GitHub-style footnotes (`[^label]` references and
+ * `[^label]: …` definitions) and NOTHING else from GFM. `remark-gfm` would
+ * also switch on tables, task lists, strikethrough and autolinks, changing
+ * the output of documents without footnotes; wiring the official footnote
+ * extension pair directly keeps those documents byte-identical. Raw HTML
+ * inside a definition is parsed by the same CommonMark rules as the body, so
+ * the D8-16 inert-text boundary above holds inside notes too. */
+function remarkFootnotesOnly(this: ReturnType<typeof unified>): void {
+  const data = this.data();
+  (data.micromarkExtensions ??= []).push(gfmFootnote());
+  (data.fromMarkdownExtensions ??= []).push(gfmFootnoteFromMarkdown());
+}
+
+/** What one mdast `footnoteReference` becomes, decided by the numbering pass
+ * before any block is built (so block-building may re-extract runs — the
+ * image-first caption probe does — without advancing a counter). A body
+ * reference becomes a footnote-ref mark; a reference inside a note becomes
+ * its plain marker (references inside notes are not followed — #55 rule). */
+type ReferenceRole =
+  | { kind: "mark"; marker: string; footnoteId: string; occurrence: number }
+  | { kind: "plain"; marker: string };
+
+/** Keyed by mdast node identity; each parse makes fresh nodes, so calls
+ * never see each other's entries. */
+const referenceRoles = new WeakMap<MdastNode, ReferenceRole>();
 
 // ── Inline-run extraction (D-04 mark set — mirrors htmlToBlocks L121-156) ────
 /** Recurse an mdast node LIST and accumulate inline runs carrying D-04 marks.
@@ -130,6 +159,22 @@ function extractInlineMdastNodes(nodes: MdastNode[], marks: Mark[]): InlineRunT[
       // mdast `break` (a backslash + newline or two trailing spaces) → single
       // space — mirrors htmlToBlocks L130-133 (`<br>` handling).
       runs.push({ text: " ", marks });
+      continue;
+    }
+    if (child.type === "footnoteReference") {
+      // Issue #62 — the marker text is the note number (as GitHub renders
+      // it). A reference with no role (unreachable: micromark only makes a
+      // reference when the label is defined) contributes nothing.
+      const role = referenceRoles.get(child);
+      if (role?.kind === "mark") {
+        const { marker, footnoteId, occurrence } = role;
+        runs.push({
+          text: marker,
+          marks: [...marks, { type: "footnote-ref", footnoteId, occurrence }],
+        });
+      } else if (role) {
+        runs.push({ text: role.marker, marks });
+      }
       continue;
     }
     if (child.type === "inlineCode") {
@@ -380,10 +425,13 @@ function figureFromImage(node: MdastNode): Block[] {
  * orchestrator destructures both with the same code. */
 export interface MarkdownToBlocksResult {
   blocks: Block[];
-  footnotes: { id: string; content: InlineRun[] }[];
+  footnotes: FootnoteBodyT[];
   lang: string;
   provenancePartial: ProvenancePartial;
   isReaderable: boolean;
+  /** Definitions past MAX_LINKED_FOOTNOTES that were left out (issue #60);
+   * absent when none were. */
+  omittedFootnoteCount?: number;
 }
 
 /**
@@ -402,12 +450,13 @@ export interface MarkdownToBlocksResult {
  * (Task 2), not here — this adapter is filename-agnostic.
  */
 export async function markdownToBlocks(md: string): Promise<MarkdownToBlocksResult> {
-  const tree = processor.parse(md);
+  const tree = processor.parse(md) as unknown as MdastNode;
+  const definitions = takeFootnoteDefinitions(tree);
 
   const provenancePartial: ProvenancePartial = {};
   const body: MdastNode[] = [];
 
-  for (const node of tree.children as unknown as MdastNode[]) {
+  for (const node of tree.children ?? []) {
     // yaml front-matter → provenancePartial (does NOT emit a Block).
     if (node.type === "yaml") {
       mergeYamlFrontMatter(node.value ?? "", provenancePartial);
@@ -415,15 +464,132 @@ export async function markdownToBlocks(md: string): Promise<MarkdownToBlocksResu
     }
     body.push(node);
   }
+  const numbered = numberFootnotes(body, definitions);
+  // Issue #60 — the note cap HTML shares; the rest are counted for the
+  // ingest disclosure (their references already read as plain markers).
+  const notes = numbered.slice(0, MAX_LINKED_FOOTNOTES);
+  const omittedFootnoteCount = numbered.length - notes.length;
   const blocks = visitChildren(body);
+  const footnotes = notes.map((def, i) => footnoteBodyFromParagraphs(`fn-${i + 1}`, noteRuns(def)));
 
   return {
     blocks,
-    footnotes: [], // strict CommonMark has no footnote syntax (RESEARCH §Pattern 1 L319)
+    footnotes,
     lang: "en", // markdown carries no lang attribute (mirrors htmlToBlocks detectLang default)
     provenancePartial,
     isReaderable: blocks.length >= 3, // mirrors deriveConfidence heuristic; planner-tunable
+    // Present only when the cap cut notes: documents under it are unchanged.
+    ...(omittedFootnoteCount > 0 ? { omittedFootnoteCount } : {}),
   };
+}
+
+// ── Footnotes (spec #66 / issue #62) ────────────────────────────────────────
+
+/** Remove every `footnoteDefinition` from the tree (definitions may sit at
+ * any container level) and return them in document order, first definition
+ * per identifier winning, as GitHub does. Removing them keeps a note from
+ * also appearing in the body flow. */
+function takeFootnoteDefinitions(root: MdastNode): Map<string, MdastNode> {
+  const definitions = new Map<string, MdastNode>();
+  const walk = (node: MdastNode): void => {
+    if (!node.children) return;
+    const kept: MdastNode[] = [];
+    for (const child of node.children) {
+      if (child.type === "footnoteDefinition") {
+        const id = child.identifier ?? "";
+        if (!definitions.has(id)) definitions.set(id, child);
+        continue;
+      }
+      walk(child);
+      kept.push(child);
+    }
+    node.children = kept;
+  };
+  walk(root);
+  return definitions;
+}
+
+/** Assign every reference its role and return the notes in `fn-N` order:
+ * notes numbered by their first body reference (GitHub's rendered order),
+ * then definitions nothing in the body points at, in definition order —
+ * kept rather than silently dropped. Notes past MAX_LINKED_FOOTNOTES are
+ * still returned (the caller cuts and counts them); their body references
+ * become plain markers. The body walk is a plain document-order
+ * traversal, matching the order the canonical reference spans read. */
+function numberFootnotes(body: MdastNode[], definitions: Map<string, MdastNode>): MdastNode[] {
+  const numbers = new Map<string, number>();
+  const order: MdastNode[] = [];
+  const occurrences = new Map<string, number>();
+  const number = (id: string): number => {
+    let n = numbers.get(id);
+    if (n === undefined) {
+      order.push(definitions.get(id)!);
+      n = order.length;
+      numbers.set(id, n);
+    }
+    return n;
+  };
+  const visitRefs = (nodes: MdastNode[], inNote: boolean): void => {
+    for (const node of nodes) {
+      if (node.type === "footnoteReference") {
+        const id = node.identifier ?? "";
+        if (!definitions.has(id)) continue;
+        if (inNote) continue; // numbered after the body pass
+        const n = number(id);
+        if (n > MAX_LINKED_FOOTNOTES) {
+          // Past the cap (issue #60): the note is left out, so its
+          // reference is its plain marker, never a link to nowhere.
+          referenceRoles.set(node, { kind: "plain", marker: String(n) });
+          continue;
+        }
+        const footnoteId = `fn-${n}`;
+        const occurrence = (occurrences.get(footnoteId) ?? 0) + 1;
+        occurrences.set(footnoteId, occurrence);
+        referenceRoles.set(node, { kind: "mark", marker: String(n), footnoteId, occurrence });
+        continue;
+      }
+      visitRefs(node.children ?? [], inNote);
+    }
+  };
+  visitRefs(body, false);
+  for (const id of definitions.keys()) number(id);
+  const markInNotes = (nodes: MdastNode[]): void => {
+    for (const node of nodes) {
+      if (node.type === "footnoteReference" && definitions.has(node.identifier ?? "")) {
+        referenceRoles.set(node, { kind: "plain", marker: String(numbers.get(node.identifier!)) });
+        continue;
+      }
+      markInNotes(node.children ?? []);
+    }
+  };
+  for (const def of definitions.values()) markInNotes(def.children ?? []);
+  return order;
+}
+
+/** A definition's note body (issue #59): its children through the normal
+ * block walker, flattened to paragraphs — a quotation or list inside a note
+ * becomes paragraphs with its text intact. Figures contribute their caption;
+ * code keeps its text. */
+function noteRuns(definition: MdastNode): InlineRun[][] {
+  return noteParagraphs(visitChildren(definition.children ?? []))
+    .map((runs) => tidyRuns(runs as InlineRunT[]))
+    .filter((runs) => runs.length > 0);
+}
+
+function noteParagraphs(blocks: Block[]): InlineRun[][] {
+  return blocks.flatMap((block): InlineRun[][] => {
+    if (block.kind === "paragraph" || block.kind === "heading") return [block.content];
+    if (block.kind === "figure") return block.caption.length ? [block.caption] : [];
+    if (block.kind === "blockquote") return noteParagraphs(block.children);
+    if (block.kind === "bulleted-list" || block.kind === "numbered-list") {
+      return block.items.flatMap((item) => noteParagraphs(item.content));
+    }
+    if (block.kind === "code-block") {
+      const text = block.source.replace(/\s+/g, " ").trim();
+      return text ? [[{ text, marks: [{ type: "code" }] }]] : [];
+    }
+    return []; // unsupported / legacy reference kinds carry no note text
+  });
 }
 
 /** Parse a YAML front-matter block and merge title/author/date string fields

@@ -53,6 +53,8 @@
     "is-animated": "2.0.2",
     "isomorphic-dompurify": "3.22.0",
     "jsdom": "30.0.1",
+    "mdast-util-gfm-footnote": "2.1.0",
+    "micromark-extension-gfm-footnote": "2.1.0",
     "react": "19.2.8",
     "react-dom": "19.2.8",
     "remark-frontmatter": "5.0.0",

@@ -43,11 +43,21 @@
 // retired: the
 // shipped single-block path is the degenerate case blockIndexA === blockIndexB
 // on the SAME code path.
+//
+// Issue #65: footnote BODIES are eligible too. A note renders as
+// `li#fn-N` (scrolling section and paged entries alike) with its text in a
+// `[data-footnote-content]` wrapper; a paged continuation carries
+// `data-footnote-grapheme-start`. An endpoint in a note resolves against the
+// note's canonical row (footnoteRows). A highlight stays inside ONE region —
+// the main text, or one note — so a selection whose endpoints fall in
+// different regions refuses whole as "boundary-ineligible".
 import type { Block, CanonicalArticle } from "../content/types";
 import {
   BLOCK_SEPARATOR,
   blockNormalizedText,
   buildRawToNormMap,
+  footnoteRowFor,
+  footnoteText,
   graphemeClusters,
 } from "../content/normalizeText";
 import type { TextPositionSelector } from "../content/normalizeText";
@@ -65,7 +75,16 @@ import type { TextPositionSelector } from "../content/normalizeText";
  * is NOT a span descriptor.
  */
 export type CaptureResult =
-  | { ok: true; blockIndex: number; position: TextPositionSelector }
+  | {
+      ok: true;
+      /** Start endpoint's block; `article.blocks.length` (the footnotes
+       * region, as in PageFragment entries) for a note highlight. */
+      blockIndex: number;
+      /** Issue #65: the note (index into article.footnotes) a note
+       * highlight lies in; absent for main-text highlights. */
+      footnoteIndex?: number;
+      position: TextPositionSelector;
+    }
   | {
       ok: false;
       reason: "empty" | "ineligible" | "measurement-body" | "boundary-ineligible" | "empty-span";
@@ -221,10 +240,69 @@ function isInsideMeasurementBody(node: Node): boolean {
 /** One endpoint's successful resolution (Phase 19 span capture). */
 interface EndpointResolution {
   ok: true;
-  /** The article block index resolved from the endpoint's block ancestor. */
+  /** The article block index resolved from the endpoint's block ancestor
+   * (`article.blocks.length` for a note endpoint). */
   blockIndex: number;
-  /** The endpoint's INTRA-BLOCK grapheme offset (window-corrected). */
-  intraOffset: number;
+  /** Issue #65: the note the endpoint sits in; absent in the main text. */
+  footnoteIndex?: number;
+  /** The endpoint's article-global D-05 grapheme offset. */
+  globalOffset: number;
+}
+
+/**
+ * Issue #65 — resolve an endpoint inside a rendered note (`li#fn-N`) against
+ * the note's canonical row. Returns null when the point is in no note.
+ *
+ * The note's text lives in `[data-footnote-content]`; the rest of the `li`
+ * is return chrome (↩ a b) with no coordinates. A point in that chrome
+ * clamps to the nearer edge of the note's text, so a drag that overshoots
+ * onto the return still captures to the note's end.
+ */
+function resolveNoteEndpoint(
+  article: CanonicalArticle,
+  readingRoot: HTMLElement,
+  container: Node,
+  offset: number,
+): EndpointResolution | { ok: false; reason: "ineligible" } | null {
+  const el =
+    container.nodeType === Node.ELEMENT_NODE ? (container as Element) : container.parentElement;
+  const note = el?.closest<HTMLElement>('li[id^="fn-"]') ?? null;
+  if (!note || !readingRoot.contains(note)) return null;
+  const footnoteIndex = article.footnotes.findIndex((fn) => fn.id === note.id);
+  const row = footnoteIndex < 0 ? undefined : footnoteRowFor(article, footnoteIndex);
+  if (!row) return { ok: false, reason: "ineligible" };
+  const contentEl = note.querySelector<HTMLElement>("[data-footnote-content]") ?? note;
+  const sliceStartAttr = note.getAttribute("data-footnote-grapheme-start");
+  const sliceStart =
+    sliceStartAttr !== null && Number.isInteger(Number(sliceStartAttr))
+      ? Number(sliceStartAttr)
+      : 0;
+  const normClusters = graphemeClusters(
+    footnoteText(article.footnotes[footnoteIndex]!),
+    article.lang,
+  ).slice(sliceStart);
+  let point: [Node, number] = [container, offset];
+  if (!contentEl.contains(container)) {
+    const content = document.createRange();
+    content.selectNodeContents(contentEl);
+    point =
+      content.comparePoint(container, offset) > 0
+        ? [contentEl, contentEl.childNodes.length]
+        : [contentEl, 0];
+  }
+  const intra = domPointToIntraBlockGraphemeOffset(
+    contentEl,
+    point[0],
+    point[1],
+    article.lang,
+    normClusters,
+  );
+  return {
+    ok: true,
+    blockIndex: article.blocks.length,
+    footnoteIndex,
+    globalOffset: row.start + sliceStart + intra,
+  };
 }
 
 /**
@@ -235,10 +313,10 @@ interface EndpointResolution {
  *
  * Refusal taxonomy (D19-05/D19-08 — reject whole, never narrow; no position
  * is returned on any refusal):
- *   - "ineligible"          → no data-block-index ancestor within the reading
- *                             root (footnote BODIES land here — they carry no
- *                             data-block-index; 19-RESEARCH Pitfall 6), a bad
- *                             index, or the ancestor outside readingRoot.
+ *   - "ineligible"          → neither a data-block-index ancestor nor a
+ *                             rendered note (li#fn-N) within the reading
+ *                             root, a bad index, a note with no canonical
+ *                             row, or the ancestor outside readingRoot.
  *   - "boundary-ineligible" → the endpoint RESOLVED to a block that fails
  *                             isEligibleBlock (unsupported content).
  */
@@ -248,11 +326,16 @@ function resolveSelectionEndpoint(
   container: Node,
   offset: number,
 ): EndpointResolution | { ok: false; reason: "ineligible" | "boundary-ineligible" } {
-  // 1. The [data-block-index] ancestor (footnote bodies have none → the walk
-  //    terminates at readingRoot → "ineligible").
+  // 1. The [data-block-index] ancestor. Footnote bodies have none — issue
+  //    #65 resolves them against their note instead.
   const blockEl = findBlockAncestor(container, readingRoot);
   if (!blockEl) {
-    return { ok: false, reason: "ineligible" };
+    return (
+      resolveNoteEndpoint(article, readingRoot, container, offset) ?? {
+        ok: false,
+        reason: "ineligible",
+      }
+    );
   }
   // Defensive containment: findBlockAncestor's walk stops at readingRoot for
   // in-root nodes, but a node OUTSIDE the reading surface (a sibling surface)
@@ -315,7 +398,7 @@ function resolveSelectionEndpoint(
       return {
         ok: true,
         blockIndex,
-        intraOffset: inCaption + captionLocalStart,
+        globalOffset: computeBlockGlobalStart(article, blockIndex) + inCaption + captionLocalStart,
       };
     }
     const placeholderEl = blockEl.querySelector(".figure-placeholder");
@@ -367,7 +450,11 @@ function resolveSelectionEndpoint(
     article.lang,
     normClusters,
   );
-  return { ok: true, blockIndex, intraOffset: windowedOffset + windowStart };
+  return {
+    ok: true,
+    blockIndex,
+    globalOffset: computeBlockGlobalStart(article, blockIndex) + windowedOffset + windowStart,
+  };
 }
 
 /**
@@ -390,16 +477,18 @@ function resolveSelectionEndpoint(
  *
  * INVALID selections return a typed reason (NO position on any refusal):
  *   - "empty"               → collapsed or no selection
- *   - "ineligible"          → an endpoint has no data-block-index ancestor
- *                             within readingRoot (footnote bodies — Pitfall 6),
- *                             a bad index, or an ancestor outside readingRoot
+ *   - "ineligible"          → an endpoint is in neither a data-block-index
+ *                             block nor a note within readingRoot, a bad
+ *                             index, or an ancestor outside readingRoot
  *   - "measurement-body"    → an endpoint sits inside the hidden measurement
  *                             body (D5-08; checked on BOTH endpoints in
  *                             Phase 19 — cross-page selections still refuse,
  *                             ANNO-13 is Future)
  *   - "boundary-ineligible" → an endpoint resolved to a block failing
  *                             isEligibleBlock (unsupported content — D19-05
- *                             reject-whole; the whole selection is refused)
+ *                             reject-whole; the whole selection is refused),
+ *                             or the endpoints lie in different regions
+ *                             (main text vs a note, or two notes — #65)
  *   - "empty-span"          → defensive: the composed global range collapsed
  *                             to start === end (reachable when a non-collapsed
  *                             DOM selection covers only whitespace that
@@ -427,7 +516,7 @@ export function captureSelection(
     return { ok: false, reason: "measurement-body" };
   }
 
-  // 1. Resolve EACH endpoint independently to { blockIndex, intraOffset }.
+  // 1. Resolve EACH endpoint independently to its global offset + region.
   //    (Endpoint-only composition — intermediate blocks are never walked.)
   const startEndpoint = resolveSelectionEndpoint(
     article,
@@ -448,12 +537,17 @@ export function captureSelection(
     return { ok: false, reason: endEndpoint.reason };
   }
 
-  // 2. Compose ONE global TextPositionSelector (D-05 substrate coordinates):
-  //    each endpoint's block-global start + its intra-block offset. The DOM
-  //    Range is already in document order — no swap step (Pitfall 9).
-  const start =
-    computeBlockGlobalStart(article, startEndpoint.blockIndex) + startEndpoint.intraOffset;
-  const end = computeBlockGlobalStart(article, endEndpoint.blockIndex) + endEndpoint.intraOffset;
+  // 2. Issue #65: one region per highlight — the main text, or one note.
+  //    Endpoints in different regions refuse whole (no narrowing).
+  if (startEndpoint.footnoteIndex !== endEndpoint.footnoteIndex) {
+    return { ok: false, reason: "boundary-ineligible" };
+  }
+
+  // 3. Compose ONE global TextPositionSelector (D-05 substrate coordinates)
+  //    from the two endpoints. The DOM Range is already in document order —
+  //    no swap step (Pitfall 9).
+  const start = startEndpoint.globalOffset;
+  const end = endEndpoint.globalOffset;
   if (start === end) {
     // Defensive — never reachable from an ordinary non-collapsed Range, but
     // a whitespace-only selection over text normalizeRunText collapses can
@@ -463,6 +557,9 @@ export function captureSelection(
   return {
     ok: true,
     blockIndex: startEndpoint.blockIndex,
+    ...(startEndpoint.footnoteIndex !== undefined
+      ? { footnoteIndex: startEndpoint.footnoteIndex }
+      : {}),
     position: { start, end },
   };
 }

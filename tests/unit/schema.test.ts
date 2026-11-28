@@ -92,7 +92,88 @@ describe("FootnoteReferenceBlock footnoteId regex (Pitfall 4)", () => {
   });
 });
 
+// ── Inline footnote reference (spec #66 / issue #55) ─────────────────────────
+
+describe("footnote-ref inline mark (issue #55)", () => {
+  it.each([
+    ["main", "main"],
+    ["fn-abc (non-numeric)", "fn-abc"],
+    ["missing prefix", "1"],
+    ["uppercase", "FN-1"],
+  ])("rejects footnoteId %s (DOM-clobbering guard)", (_label, footnoteId) => {
+    expect(() => Mark.parse({ type: "footnote-ref", footnoteId, occurrence: 1 })).toThrow();
+  });
+
+  it("rejects a non-positive occurrence", () => {
+    expect(() => Mark.parse({ type: "footnote-ref", footnoteId: "fn-1", occurrence: 0 })).toThrow();
+  });
+
+  it("round-trips an article carrying an inline reference", () => {
+    const input = validArticle({
+      blocks: [
+        {
+          kind: "paragraph",
+          content: [
+            { text: "The claim", marks: [] },
+            { text: "1", marks: [{ type: "footnote-ref", footnoteId: "fn-1", occurrence: 1 }] },
+            { text: " holds.", marks: [] },
+          ],
+        },
+      ],
+      footnotes: [{ id: "fn-1", content: [{ text: "A note.", marks: [] }] }],
+    });
+    const parsed = ArticleSchema.parse(input);
+    expect(ArticleSchema.parse(JSON.parse(JSON.stringify(parsed)))).toEqual(parsed);
+    expect(parsed.blocks[0]).toEqual((input as { blocks: unknown[] }).blocks[0]);
+  });
+
+  it("stored rows with the legacy block-level reference and single-content notes still parse", () => {
+    const parsed = ArticleSchema.parse(
+      validArticle({
+        blocks: [
+          { kind: "paragraph", content: [{ text: "Claim", marks: [] }] },
+          { kind: "footnote-reference", footnoteId: "fn-1", marker: "[1]" },
+        ],
+        footnotes: [{ id: "fn-1", content: [{ text: "A note.", marks: [] }] }],
+      }),
+    );
+    expect(parsed.blocks[1]).toEqual({
+      kind: "footnote-reference",
+      footnoteId: "fn-1",
+      marker: "[1]",
+    });
+    expect(parsed.footnotes).toEqual([{ id: "fn-1", content: [{ text: "A note.", marks: [] }] }]);
+  });
+});
+
 // ── URL scheme rejection (Pitfall 5 — stored XSS) ────────────────────────────
+
+// ── Multi-paragraph Footnote bodies (spec #66 / issue #59) ──────────────────
+
+describe("footnote bodies with several paragraphs (issue #59)", () => {
+  it("a stored single-content note parses unchanged, with no paragraphs field", () => {
+    const stored = { id: "fn-1", content: [{ text: "One note.", marks: [] }] };
+    const parsed = ArticleSchema.parse(validArticle({ footnotes: [stored] }));
+    expect(parsed.footnotes).toEqual([stored]);
+    expect(JSON.stringify(parsed.footnotes[0])).toBe(JSON.stringify(stored));
+  });
+
+  it("round-trips a note with later paragraphs", () => {
+    const note = {
+      id: "fn-1",
+      content: [{ text: "First.", marks: [] }],
+      laterParagraphs: [[{ text: "Second.", marks: [] }], [{ text: "Third.", marks: [] }]],
+    };
+    const parsed = ArticleSchema.parse(validArticle({ footnotes: [note] }));
+    expect(parsed.footnotes).toEqual([note]);
+    expect(ArticleSchema.parse(JSON.parse(JSON.stringify(parsed)))).toEqual(parsed);
+  });
+
+  it("rejects an empty later-paragraphs list (a one-paragraph note omits it)", () => {
+    const note = { id: "fn-1", content: [{ text: "Only." }], laterParagraphs: [] };
+    expect(ArticleSchema.safeParse(validArticle({ footnotes: [note] })).success).toBe(false);
+  });
+});
 
 describe("LinkMark href scheme allow-list (Pitfall 5)", () => {
   it.each([
@@ -267,9 +348,9 @@ describe("FigureBlock asset evolution (Phase 20 — IMG-01/IMG-02 substrate)", (
   });
 });
 
-// ── Inline marks — locked set of 4 (D-04) ────────────────────────────────────
+// ── Inline marks — locked set (D-04 four + footnote-ref, issue #55) ──────────
 
-describe("Mark union is locked to exactly 4 marks (D-04)", () => {
+describe("Mark union is locked (D-04 + footnote-ref)", () => {
   it("parses a run carrying [strong, em, code, link]", () => {
     const run = {
       text: "rich text",

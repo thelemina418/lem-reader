@@ -30,7 +30,9 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { CanonicalArticle } from "../content/types";
-import { chunkArticleForSpeech } from "../readaloud/chunks";
+import { chunkArticleForSpeech, speechScopeForStart } from "../readaloud/chunks";
+import { graphemeLength, mainTextLength } from "../content/normalizeText";
+import { noteListenEndOffset } from "./readingPosition";
 import type { SpeechScope } from "../readaloud/chunks";
 import type { CarriedFollow, ListenFinishedInfo } from "../readaloud/engine";
 import { ReadAloudEngine } from "../readaloud/engine";
@@ -71,6 +73,14 @@ export const BOOK_HANDOFF_MESSAGE = "Continuing to the next chapter.";
 // (one type, one rename site); re-exported for the host's finish handler.
 export type { ListenFinishedInfo };
 
+/** Issue #58 — the host-facing finish: the engine's info plus, for a
+ * session that read a single note, that note's canonical end. A note
+ * session is not reading the article through — the host keeps the
+ * position at the note and never hands off to the next chapter. */
+export interface ReadAloudFinishInfo extends ListenFinishedInfo {
+  readonly noteEnd?: number;
+}
+
 export interface UseReadAloudHandlers {
   /** The reader's live canonical position, read at press time (the only
    * start is Play, and Play starts at the current reading location). */
@@ -91,7 +101,7 @@ export interface UseReadAloudHandlers {
    * through continueFromHandoff() when the next chapter ARRIVES. Anything
    * else is the ordinary finish (the finished announcement + rest). A
    * paused finish (info.fromPaused) must never return "continue". */
-  onListenFinished: (info: ListenFinishedInfo) => "continue" | void;
+  onListenFinished: (info: ReadAloudFinishInfo) => "continue" | void;
 }
 
 export interface UseReadAloudReturn {
@@ -284,10 +294,23 @@ export function useReadAloud(
     // first frame — the probe window included — and the first progress
     // event refines it to the speaking chunk.
     setFollowLevel(FOLLOW_LEVEL_FLOOR);
-    setProgressOffset(handlersRef.current.getStartOffset());
+    const startOffset = handlersRef.current.getStartOffset();
+    setProgressOffset(startOffset);
+    // Issue #58 — continuous reading stops at the end of the main text; a
+    // session started inside a note reads that note only (the notes are
+    // reference material, not reading). The assignment range still clips.
+    const sessionScope = speechScopeForStart(
+      currentArticle,
+      startOffset,
+      optionsRef.current?.speechRange ?? undefined,
+    );
+    const noteEnd =
+      sessionScope !== undefined && sessionScope.start > mainTextLength(currentArticle)
+        ? noteListenEndOffset(sessionScope.end, graphemeLength(currentArticle))
+        : undefined;
     const nextEngine = new ReadAloudEngine({
       adapter: createWebSpeechAdapter(),
-      chunks: chunkArticleForSpeech(currentArticle, optionsRef.current?.speechRange ?? undefined),
+      chunks: chunkArticleForSpeech(currentArticle, sessionScope),
       voiceURI,
       rate: settingsRef.current.rate,
       carriedFollow: carried ?? undefined,
@@ -308,7 +331,9 @@ export function useReadAloud(
           // resolved voice + probed follow level for the arriving chapter.
           // A paused finish (seek-to-end while paused) never continues —
           // the reader is holding the book, not leaving it.
-          const decision = handlersRef.current.onListenFinished(info);
+          const decision = handlersRef.current.onListenFinished(
+            noteEnd === undefined ? info : { ...info, noteEnd },
+          );
           if (decision === "continue" && !info.fromPaused) {
             continuationRef.current = {
               voiceURI: nextEngine.getVoiceURI(),

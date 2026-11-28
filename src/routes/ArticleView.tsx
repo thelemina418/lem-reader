@@ -33,7 +33,7 @@ import type { Book } from "../content/schema";
 import { ArticleBody } from "../content/render/BlockRenderer";
 import type { ArticleBodyHighlight } from "../content/render/BlockRenderer";
 import { loadLocation } from "../persistence/locationStore";
-import { computeTopVisibleOffset, queryBlocks } from "../reader/restoreLocation";
+import { computeTopVisibleOffset, notesRegionTop, queryBlocks } from "../reader/restoreLocation";
 // Issue #98 (decision #96) — the ONE polite status-region primitive: this
 // route's load/error card and its three visually-hidden announcers render
 // through it (no raw aria-live trio outside the primitive). One disclosed
@@ -50,6 +50,11 @@ import { StatusRegion } from "../ui/StatusRegion";
 import { jumpToOffset, settleFocus } from "../reader/jumpToOffset";
 import type { JumpToOffsetInput } from "../reader/jumpToOffset";
 import { useScrollSave } from "../reader/useScrollSave";
+import {
+  routeFootnoteLink,
+  type FootnoteExcursion,
+  type FootnoteLinkRoute,
+} from "../reader/footnoteExcursion";
 // Issue #34 (reading-history milestone): one append-only reading-session row
 // per visit (decision #24). The hook owns the accumulator lifecycle + flush
 // discipline; this route supplies the pulse sources it owns (page turns via
@@ -102,7 +107,7 @@ import type { TransportState } from "../readaloud/types";
 import { transportIsActive } from "../readaloud/types";
 // Issue #2 — the end-pin policy stays imported for the mark-read gesture;
 // the restore/mode-swap end-LANDING decision moved behind jumpToOffset.
-import { endPinOffset, atScrollBottom } from "../reader/readingPosition";
+import { endPinOffset, atScrollBottom, mainTextEndInView } from "../reader/readingPosition";
 // Issue #246 — the shared-completion seam (records + transition writer) and
 // the crossing algebra (which forward reading move completes which chapter).
 import { useChapterCompletion } from "../reader/useChapterCompletion";
@@ -405,6 +410,9 @@ function AssignmentEndNav({
     </nav>
   );
 }
+
+/** Issue #57 — keys that scroll the page (reading on from the notes). */
+const SCROLL_KEYS = new Set(["ArrowDown", "ArrowUp", "PageDown", "PageUp", " ", "Home", "End"]);
 
 export function ArticleView({
   articleId,
@@ -994,8 +1002,13 @@ export function ArticleView({
   // reader never persists a location at all. 260908-oht: saveLocationNow is
   // the synchronous flush-now seam for handleMarkRead (unmount cancels
   // pending debounces — the explicit button must flush, not schedule).
+  // Spec #66 / issue #57 — the Footnote excursion (reader state, never
+  // persisted; see src/reader/footnoteExcursion.ts). While it is set, every
+  // scheduled save holds the followed reference's offset.
+  const excursionRef = useRef<FootnoteExcursion | null>(null);
   const { scheduleLocationSave, saveLocationNow } = useScrollSave(article, articleRef, {
     readingEndOffset: assignment?.endOffset,
+    heldOffset: () => excursionRef.current?.offset ?? null,
   });
 
   // Phase 3 (PAGE-06 + PAGE-07): mount the staleness-safe measurement
@@ -1228,6 +1241,7 @@ export function ArticleView({
     // the ONE end-pin offset as the session's end position before the
     // unmount flush closes the row.
     noteActivity(endPinOffset(article));
+    excursionRef.current = null; // spec #66 — an explicit finish leaves any excursion
     saveLocationNow(endPinOffset(article));
   }, [article, saveLocationNow, noteActivity]);
 
@@ -1252,6 +1266,7 @@ export function ArticleView({
         direction === "next"
           ? endPinOffset(article)
           : (surfaceRef.current?.getCurrentAnchorOffset() ?? currentAnchorOffsetRef.current);
+      excursionRef.current = null; // spec #66 — leaving the chapter ends any excursion
       saveLocationNow(departing);
     },
     [article, saveLocationNow],
@@ -1380,6 +1395,19 @@ export function ArticleView({
       onListenSpoken: (range) => spokenSetterRef.current(range),
       onListenFinished: (info) => {
         if (!article) return;
+        // Issue #58 — a session started inside a note read that note only:
+        // it is not reading the article through. The position stays at the
+        // note's end (never the main-text end-pin), and no chapter handoff.
+        // Spec #66 review S2 — mid-excursion, the save keeps the reference
+        // (useScrollSave's hold covers saveLocationNow), so closing after
+        // listening to a note still resumes where the reader left from.
+        if (info.noteEnd !== undefined) {
+          currentAnchorOffsetRef.current = info.noteEnd;
+          lastPreciseAnchorRef.current = info.noteEnd;
+          noteActivity(info.noteEnd);
+          saveLocationNow(info.noteEnd);
+          return;
+        }
         // Pin completion BEFORE branching: the last spoken passage may precede
         // trailing code/media. A layout commit during the handoff must see
         // the canonical end-pin, not rewind the saved position to a page head.
@@ -1470,6 +1498,9 @@ export function ArticleView({
     // Issue #246 — a manual turn is the paginated reading-move signal (the
     // anchor handler consumes the pairing; see handleAnchorChange).
     manualTurnRef.current = true;
+    // Issue #57 — a page turn is reading on: the excursion ends and the
+    // turn's commit saves normally.
+    excursionRef.current = null;
     follow.suspend();
     handoff.cancelPending();
   }, [follow, handoff]);
@@ -1583,6 +1614,10 @@ export function ArticleView({
     // OffsetRef is kept fresh by the scroll listener / onAnchorChange above.
     const currentEffective = sessionModeOverride ?? settings.readingMode;
     const offset = captureModeSwapAnchor(currentEffective === "scrolling");
+    // The swap's own scrolls (the surface change, then the anchor landing)
+    // are not reader scrolls: they must neither read as a reading move nor
+    // end a footnote excursion (issue #57 — the excursion survives a toggle).
+    markProgrammaticScroll();
     pendingModeSwapRef.current = {
       from: currentEffective,
       offset,
@@ -1609,7 +1644,14 @@ export function ArticleView({
       // re-explains itself if the next paginated pass fails again).
       setFallbackFailure(null);
     }
-  }, [settings.readingMode, sessionModeOverride, update, handoff, captureModeSwapAnchor]);
+  }, [
+    settings.readingMode,
+    sessionModeOverride,
+    update,
+    handoff,
+    captureModeSwapAnchor,
+    markProgrammaticScroll,
+  ]);
 
   // Register the handler on the App-provided ref. Updated every render so the
   // closure always sees the latest settings.readingMode; cleared on unmount
@@ -1728,7 +1770,14 @@ export function ArticleView({
           scrollY: window.scrollY,
           viewportHeight: window.innerHeight,
           scrollHeight: document.documentElement.scrollHeight,
-        })
+        }) ||
+        // Issue #58 — the end of the MAIN TEXT is the end: the notes region
+        // in view is the same equivalence as the absolute bottom.
+        (next < endPinOffset(article) &&
+          mainTextEndInView({
+            notesTop: notesRegionTop(articleEl),
+            viewportHeight: window.innerHeight,
+          }))
       ) {
         const bottomAssignment =
           assignmentRef.current !== null && assignmentRef.current.kind === "destination"
@@ -1782,6 +1831,103 @@ export function ArticleView({
     // completion write's re-render never re-registers the listener.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [isPaginated, article, articleEl]);
+
+  // Spec #66 / issue #57 — the Footnote excursion's routing, shared by both
+  // modes. Following a reference records the occurrence left from (and, in
+  // scrolling mode, where its marker sat on screen); a return clears the
+  // excursion BEFORE its landing commits, so that landing saves normally.
+  const routeFootnoteClick = useCallback(
+    (anchor: HTMLAnchorElement, viewportTop?: number): FootnoteLinkRoute | null => {
+      if (!article) return null;
+      const route = routeFootnoteLink(article, anchor, excursionRef.current);
+      if (!route) return null;
+      if (route.kind === "follow") {
+        excursionRef.current =
+          viewportTop === undefined ? route.excursion : { ...route.excursion, viewportTop };
+        // Re-hold whatever save is pending (the page or scroll position
+        // the reader was at a moment ago) at the reference itself.
+        scheduleLocationSave(route.excursion.offset);
+      } else {
+        excursionRef.current = null;
+      }
+      return route;
+    },
+    [article, scheduleLocationSave],
+  );
+  const routeFootnoteClickRef = useRef(routeFootnoteClick);
+  routeFootnoteClickRef.current = routeFootnoteClick;
+  // The paged surface's routing hook (stable identity: reads the ref).
+  const routePagedFootnoteLink = useCallback(
+    (anchor: HTMLAnchorElement) => routeFootnoteClickRef.current(anchor)?.targetId ?? null,
+    [],
+  );
+  // A new article (or chapter) never inherits an excursion.
+  useEffect(() => {
+    excursionRef.current = null;
+  }, [article?.id]);
+
+  // Scrolling mode: references and returns are routed here rather than by
+  // the native fragment hop, so focus lands ON the note (li tabIndex -1)
+  // and back ON the marker, the return restores the marker's place on
+  // screen, and the URL stays free of fragment churn (the paged surface's
+  // discipline). The jump is programmatic: it neither reads as a reading
+  // move nor ends the excursion it just began.
+  useEffect(() => {
+    if (isPaginated || !articleEl) return;
+    const onClick = (event: MouseEvent) => {
+      const anchor = (event.target as HTMLElement | null)?.closest?.(
+        "a[href^='#fn-']",
+      ) as HTMLAnchorElement | null;
+      if (!anchor || anchor.closest(".article-body-measurement")) return;
+      const route = routeFootnoteClickRef.current(anchor, anchor.getBoundingClientRect().top);
+      if (route === null) return;
+      const target = document.getElementById(route.targetId);
+      if (!target) return;
+      event.preventDefault();
+      markProgrammaticScroll();
+      const originTop = route.kind === "return" ? route.origin?.viewportTop : undefined;
+      if (originTop !== undefined) {
+        // Back to the marker's own place on screen (same layout, same spot).
+        window.scrollBy({
+          top: target.getBoundingClientRect().top - originTop,
+          behavior: "instant",
+        });
+      } else {
+        target.scrollIntoView({ block: "center", behavior: "instant" });
+      }
+      target.focus({ preventScroll: true });
+    };
+    // Reading on in scrolling mode is the reader's own scroll INPUT —
+    // wheel, touch, a scroll key, the scrollbar — never a scroll event as
+    // such: layout settling, a mode swap's landing and the jump above all
+    // scroll without the reader. The input precedes its scroll, so that
+    // scroll already saves normally.
+    const readOn = () => {
+      excursionRef.current = null;
+    };
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (!SCROLL_KEYS.has(event.key)) return;
+      const t = event.target as HTMLElement | null;
+      if (t?.closest?.("input, textarea, select, [contenteditable='true']")) return;
+      readOn();
+    };
+    const onPointerDown = (event: PointerEvent) => {
+      // The scrollbar: a press on the root element itself.
+      if (event.target === document.documentElement) readOn();
+    };
+    articleEl.addEventListener("click", onClick);
+    window.addEventListener("wheel", readOn, { passive: true });
+    window.addEventListener("touchmove", readOn, { passive: true });
+    window.addEventListener("keydown", onKeyDown);
+    window.addEventListener("pointerdown", onPointerDown, { passive: true });
+    return () => {
+      articleEl.removeEventListener("click", onClick);
+      window.removeEventListener("wheel", readOn);
+      window.removeEventListener("touchmove", readOn);
+      window.removeEventListener("keydown", onKeyDown);
+      window.removeEventListener("pointerdown", onPointerDown);
+    };
+  }, [isPaginated, articleEl, markProgrammaticScroll]);
 
   // Phase 4 Plan 04-04 (D4-10 anchor apply — paginated→scrolling): after the
   // mode swap commits, silent-scroll the scrolling ArticleBody to the captured
@@ -2869,6 +3015,7 @@ export function ArticleView({
   const handleNavigateBack = useCallback(
     (highlightId: string) => {
       handoff.cancelPending();
+      excursionRef.current = null; // issue #57 — a jump ends the excursion
       onCloseDrawer();
       if (!article || !articleRef.current) return;
       const api = highlightApiRef.current;
@@ -2929,6 +3076,7 @@ export function ArticleView({
   const handleTocJump = useCallback(
     (entry: TocEntry) => {
       handoff.cancelPending();
+      excursionRef.current = null; // issue #57 — a contents jump ends the excursion
       // Close FIRST, through the seam: hidePopover fires the toggle event →
       // state reset + focus restore to the trigger; the destination focus
       // below (rAF + 120ms) then wins the final focus position.
@@ -3510,6 +3658,7 @@ export function ArticleView({
                       orientationLabel={orientationLabel}
                       initialAnchorOffset={currentAnchorOffsetRef.current}
                       onAnchorChange={handleAnchorChange}
+                      routeFootnoteLink={routePagedFootnoteLink}
                       spokenRange={follow.spokenRange}
                       onUserTurn={handleSurfaceUserTurn}
                       // Issue #238 — the whole-book turn seam: when the book

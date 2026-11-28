@@ -881,6 +881,21 @@ body:has(main.paginated-main) {
   margin-block: 1.25em;
   margin-inline: 0;
 }
+/* Issue #59 — a Footnote with several paragraphs (FootnoteBodyContent).
+   The wrapper is inline and its last paragraph runs inline, so the note's
+   return (placed after the wrapper) trails the note's final words exactly as
+   it does for a one-paragraph note; the first paragraph starts on the
+   marker line with no extra block margin. Measurement rows render the same
+   wrapper, so pagination measures the layout the page shows. */
+.article-body .footnote-paragraphs {
+  display: inline;
+}
+.article-body .footnote-paragraphs > p:first-child {
+  margin-block-start: 0;
+}
+.article-body .footnote-paragraphs > p:last-child {
+  display: inline;
+}
 .article-body blockquote {
   font-style: italic;
   margin-inline: 1em;
@@ -7645,4 +7660,27 @@ dialog.add-reading {
   padding: 0;
   border: 0;
   background: transparent;
+}
+
+/* ── Issue #64 — the whole-book Reprocessing dialog (the dialog.edit-metadata
+   anatomy clone, own hooks so dialog.<class> locators stay strict). The
+   inner also carries .pdf-repair-panel for the shared preview vocabulary
+   (file picker, consequence checklist). */
+dialog.reprocess-book {
+  margin: auto; /* UA dialog:modal centering (D13-14) */
+  padding: 0;
+  width: calc(100vw - var(--space-xl)); /* safe at 320px */
+  max-width: 560px;
+  overflow: auto;
+}
+.reprocess-book-inner {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-sm);
+  margin-block: 0;
+  padding: var(--space-lg);
+}
+.reprocess-book-inner h2,
+.reprocess-book-inner p {
+  margin-block: 0;
 }

@@ -14,7 +14,9 @@
 // wrapping loop is REUSED UNCHANGED inside each slice (a link inside a
 // highlight stays active — D5-07). NO parallel renderer is forked (DOC-02
 // reading order + D-05 offset integrity depend on reusing this same output).
-import type { InlineRun } from "../types";
+import { createContext, useContext } from "react";
+import type { Block, InlineRun } from "../types";
+import { footnoteMarkerLabel, footnoteReferenceAnchorId } from "../footnoteReferences";
 import type { HighlightSlice } from "../../annotations/highlightRanges";
 // Issue #118 — the shared mark-trait helpers (the ONE className + aria-label
 // copy contract, shared with the code twin in BlockRenderer).
@@ -30,10 +32,57 @@ import { SpokenMark } from "./SpokenMark";
 // was derived at the mapping site; this just carries it onto the mark).
 import { tintMarkStyle } from "../../settings/highlightTint";
 
-function Inline({ run }: { run: InlineRun }) {
+/**
+ * Spec #66 / issue #55 — TRUE inside a hidden measurement body. Inline
+ * footnote references there render their marker as plain superscript text:
+ * no fn-ref ids and no #fn links (issue #235 — the visible page is the only
+ * place an exposed footnote identifier may exist). ArticleBody provides it
+ * from its `measurementProjection` prop; everything else is visible.
+ */
+export const MeasurementProjectionContext = createContext(false);
+
+/**
+ * Spec #66 review H1 — the article's legacy block-level reference anchor ids
+ * (legacyReferenceAnchorIds), provided by ArticleBody and the paged
+ * fragment view so a legacy note cited twice renders `fn-ref-N-2` for its
+ * second reference, never a duplicate `fn-ref-N`.
+ */
+export const LegacyReferenceAnchorsContext = createContext<ReadonlyMap<Block, string> | null>(null);
+
+/**
+ * Review H2 — a highlight boundary inside a marker splits its run into
+ * pieces; only the first piece of an occurrence carries the anchor id
+ * (the Phase 19 first-slice-only id precedent), every piece keeps the link.
+ */
+function Inline({ run, stampAnchorId = true }: { run: InlineRun; stampAnchorId?: boolean }) {
+  const measurementProjection = useContext(MeasurementProjectionContext);
   let node: React.ReactNode = run.text;
   for (const mark of run.marks) {
     switch (mark.type) {
+      case "footnote-ref":
+        // The Footnote reference (issue #55): a superscript link to its note.
+        // footnoteId is schema-locked to /^fn-\d+$/ and the anchor id derives
+        // from it (fn-ref-N / fn-ref-N-K), so neither can clobber the DOM.
+        node = measurementProjection ? (
+          <sup>
+            <span>{node}</span>
+          </sup>
+        ) : (
+          <sup>
+            <a
+              id={
+                stampAnchorId
+                  ? footnoteReferenceAnchorId(mark.footnoteId, mark.occurrence)
+                  : undefined
+              }
+              href={`#${mark.footnoteId}`}
+              aria-label={footnoteMarkerLabel(run.text)}
+            >
+              {node}
+            </a>
+          </sup>
+        );
+        break;
       case "strong":
         node = <strong>{node}</strong>;
         break;
@@ -93,6 +142,19 @@ export function InlineList({
     );
   }
 
+  // Review H2 — first piece of each reference occurrence stamps its id.
+  const stamped = new Set<string>();
+  const run = (r: InlineRun, key: number) => {
+    let stamp = true;
+    for (const mark of r.marks) {
+      if (mark.type !== "footnote-ref") continue;
+      const id = footnoteReferenceAnchorId(mark.footnoteId, mark.occurrence);
+      stamp = !stamped.has(id);
+      stamped.add(id);
+    }
+    return <Inline key={key} run={r} stampAnchorId={stamp} />;
+  };
+
   // Highlight-aware path: render each slice. Highlighted slices (highlightId
   // !== null) wrap in <mark class="highlight"> with ARIA. The Inline mark-
   // wrapping loop is reused UNCHANGED inside each slice (D5-07 — a link inside
@@ -103,22 +165,10 @@ export function InlineList({
       {highlightSlices.map((slice, i) => {
         if (slice.highlightId === null) {
           // Un-highlighted gap slice — render its runs directly.
-          return (
-            <span key={i}>
-              {slice.runs.map((r, j) => (
-                <Inline key={j} run={r} />
-              ))}
-            </span>
-          );
+          return <span key={i}>{slice.runs.map((r, j) => run(r, j))}</span>;
         }
         if (isSpokenMarkerId(slice.highlightId)) {
-          return (
-            <SpokenMark key={i}>
-              {slice.runs.map((r, j) => (
-                <Inline key={j} run={r} />
-              ))}
-            </SpokenMark>
-          );
+          return <SpokenMark key={i}>{slice.runs.map((r, j) => run(r, j))}</SpokenMark>;
         }
         // Highlighted slice — wrap in <mark class="highlight">. The modifiers
         // reflect the D5-02 tri-state (Plan 05-04): confident → bare fill;
@@ -157,9 +207,7 @@ export function InlineList({
             aria-label={highlightAriaLabel(slice)}
             style={markStyle}
           >
-            {slice.runs.map((r, j) => (
-              <Inline key={j} run={r} />
-            ))}
+            {slice.runs.map((r, j) => run(r, j))}
           </mark>
         );
       })}

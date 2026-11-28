@@ -33,12 +33,14 @@
 import type { BlockKind } from "../measurement/engine";
 import type { Block, CanonicalArticle, InlineRun } from "../content/types";
 import type { SplitDecision } from "./types";
+import { footnoteBodyAsBlock } from "../content/footnoteBody";
 import {
   BLOCK_SEPARATOR,
   blockNormalizedText,
   buildRawToNormMap,
   graphemeClusters,
   normalizeRunText,
+  runSeparators,
 } from "../content/normalizeText";
 
 // Compile-time guarantee: Block.kind literals match BlockKind exactly. If
@@ -154,14 +156,12 @@ export function classifyBlock(block: Block): SplitDecision {
  * now address the same stream, so marks stay aligned across wrap and reflow.
  */
 export function inlineStreamGraphemeLength(runs: readonly InlineRun[], lang: string): number {
+  const separators = runSeparators(runs);
   let len = 0;
-  let contributing = 0;
-  for (const run of runs) {
+  runs.forEach((run, i) => {
     const normLen = runClusters(run, lang).norm.length;
-    if (normLen === 0) continue;
-    len += normLen + (contributing > 0 ? 1 : 0);
-    contributing++;
-  }
+    if (normLen > 0) len += normLen + separators[i]!;
+  });
   return len;
 }
 
@@ -205,6 +205,25 @@ function runClusters(run: InlineRun, lang: string): RunClusters {
   };
   runClusterCache.set(run, value);
   return value;
+}
+
+/**
+ * Per run, the separator graphemes that FOLLOW its contribution in the
+ * stream — the join before the next contributing run (runSeparators — the
+ * ONE join rule; spec #66 glues a Footnote reference with no source
+ * whitespace), or 1 past the last one (the walks' historical cursor
+ * convention, kept byte-stable). Cursor walks advance by this, so a
+ * whitespace-only run's cursor is always the next contribution's start.
+ */
+function separatorsAfter(runs: readonly InlineRun[]): number[] {
+  const before = runSeparators(runs);
+  const after = new Array<number>(runs.length).fill(1);
+  let next = 1;
+  for (let i = runs.length - 1; i >= 0; i--) {
+    after[i] = next;
+    if (normalizeRunText(runs[i]!.text).length > 0) next = before[i]!;
+  }
+  return after;
 }
 
 /**
@@ -280,14 +299,15 @@ export function splitParagraphRuns(
 ): { before: InlineRun[]; after: InlineRun[] } {
   const before: InlineRun[] = [];
   const after: InlineRun[] = [];
+  const joins = separatorsAfter(runs);
   let cursor = 0;
-  for (const run of runs) {
+  runs.forEach((run, i) => {
     const clusters = runClusters(run, lang);
     const cut = runRawCut(clusters, cursor, splitAtGrapheme);
     if (cut > 0) before.push({ text: run.text.slice(0, cut), marks: run.marks });
     if (cut < run.text.length) after.push({ text: run.text.slice(cut), marks: run.marks });
-    if (clusters.norm.length > 0) cursor += clusters.norm.length + 1;
-  }
+    if (clusters.norm.length > 0) cursor += clusters.norm.length + joins[i]!;
+  });
   return { before, after };
 }
 
@@ -316,8 +336,9 @@ export function splitInlineBlock(
   const originalLen = inlineStreamGraphemeLength(inlineBlock.content, lang);
   if (startGrapheme <= 0 && endGrapheme >= originalLen) return block;
   const content: InlineRun[] = [];
+  const joins = separatorsAfter(inlineBlock.content);
   let cursor = 0;
-  for (const run of inlineBlock.content) {
+  inlineBlock.content.forEach((run, i) => {
     const clusters = runClusters(run, lang);
     // At source boundaries retain leading/trailing raw whitespace just as
     // a whole block does; internal cuts share the partition rule.
@@ -331,8 +352,8 @@ export function splitInlineBlock(
           : { text: run.text.slice(start, end), marks: run.marks },
       );
     }
-    if (clusters.norm.length > 0) cursor += clusters.norm.length + 1;
-  }
+    if (clusters.norm.length > 0) cursor += clusters.norm.length + joins[i]!;
+  });
   return { ...inlineBlock, content };
 }
 
@@ -354,14 +375,15 @@ export function rawPrefixUtf16ForNormOffset(
   startGrapheme: number,
   lang: string,
 ): number {
+  const joins = separatorsAfter(runs);
   let prefix = 0;
   let cursor = 0;
-  for (const run of runs) {
+  for (const [i, run] of runs.entries()) {
     const clusters = runClusters(run, lang);
     const cut = runRawCut(clusters, cursor, startGrapheme);
     prefix += cut;
     if (cut < run.text.length) return prefix;
-    if (clusters.norm.length > 0) cursor += clusters.norm.length + 1;
+    if (clusters.norm.length > 0) cursor += clusters.norm.length + joins[i]!;
   }
   return prefix;
 }
@@ -380,10 +402,11 @@ export function charOffsetToNormGrapheme(
   charOffset: number,
   lang: string,
 ): number {
+  const joins = separatorsAfter(runs);
   let rawStart = 0;
   let normStart = 0;
   let normEnd = 0;
-  for (const run of runs) {
+  for (const [i, run] of runs.entries()) {
     const clusters = runClusters(run, lang);
     const rawLen = run.text.length;
     if (charOffset < rawStart + rawLen || run === runs.at(-1)) {
@@ -402,8 +425,8 @@ export function charOffsetToNormGrapheme(
     }
     rawStart += rawLen;
     if (clusters.norm.length > 0) {
-      normStart += clusters.norm.length + 1; // +1: the " " run join separator
-      normEnd = normStart - 1;
+      normStart += clusters.norm.length + joins[i]!; // the run join separator
+      normEnd = normStart - joins[i]!;
     }
   }
   // Past the end of text — the exclusive-end convention.
@@ -559,8 +582,9 @@ const atomicCoordinateCache = new WeakMap<
 >();
 
 // ── Footnote-body slicing view (issue #235) ────────────────────────────
-// A footnote body is a pure InlineRun[] stream — exactly a paragraph's
-// content shape. This cached VIEW lets the ONE slicing/classification
+// A one-paragraph footnote body is a pure InlineRun[] stream — exactly a
+// paragraph's content shape; a multi-paragraph body (issue #59) is a
+// container of paragraphs (src/content/footnoteBody.ts). This cached VIEW lets the ONE slicing/classification
 // machinery (classifyBlock, blockSliceBoundary, blockCharOffsetToNorm-
 // Grapheme, resolveBlockSlice, blockRawPrefixUtf16) address a footnote row
 // without a fork: the view is a slicing coordinate over footnote content,
@@ -577,7 +601,7 @@ export function footnoteBodyBlock(
 ): Block {
   const hit = footnoteViewCache.get(footnote);
   if (hit && hit.lang === lang) return hit.block;
-  const block: Block = { kind: "paragraph", content: footnote.content };
+  const block: Block = footnoteBodyAsBlock(footnote);
   footnoteViewCache.set(footnote, { lang, block });
   return block;
 }

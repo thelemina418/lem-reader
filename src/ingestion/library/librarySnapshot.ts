@@ -34,8 +34,9 @@
 //                             strip/LibraryView/BookRow folds all read THIS
 //                             map now — one fold, no drift-prone copies.
 //   - totalsByArticleId     — THE grapheme-total fold: one
-//                             graphemeClusters(normalizeText(article), lang)
-//                             .length pass per load, keyed by article id
+//                             mainTextLength(article) pass per load (the
+//                             main text — notes excluded, issue #58), keyed
+//                             by article id
 //                             (the D-05 substrate; rows/hairlines/strip and
 //                             the book-progress text-length lookup all read
 //                             THIS map now).
@@ -97,7 +98,7 @@ import type {
   ReadingSessionRecord,
 } from "../../content/schema";
 import type { ArticleNote } from "../../persistence/articleNotesStore";
-import { graphemeClusters, normalizeText } from "../../content/normalizeText";
+import { graphemeLength, mainTextLength } from "../../content/normalizeText";
 import { listArticles } from "../../content/repository";
 import { loadAllLocations } from "../../persistence/locationStore";
 import { loadAllHighlights } from "../../persistence/highlightsStore";
@@ -112,7 +113,7 @@ import { loadAllTags } from "./tagsStore";
 // Issue #117 — the ONE pure tag-text vocabulary backs the highlight-tag
 // fold (the tagText module header's "every seam that touches tag strings").
 import { normalizeTags } from "./tagText";
-import { latestLocationByArticle } from "../../reader/readingPosition";
+import { fromLegacyEndPin, latestLocationByArticle } from "../../reader/readingPosition";
 
 /**
  * The one consistent library read model. All fields derive from ONE settled
@@ -132,8 +133,8 @@ export interface LibrarySnapshot {
   /** THE latest-location fold (max savedAt per articleId — D8-10; ties keep
    * the first row in iteration order, the readingPosition discipline). */
   latestLocationByArticleId: Map<string, LocationRecord>;
-  /** THE grapheme-total fold: graphemeClusters(normalizeText(article), lang)
-   * .length per article id (the D-05 substrate, computed once per load). */
+  /** THE grapheme-total fold: mainTextLength(article) per article id — the
+   * D-05 main text, notes excluded (issue #58), computed once per load. */
   totalsByArticleId: Map<string, number>;
   /** Issue #76 (decision #72) — THE per-article highlight-count fold:
    * highlight rows per articleId, computed once per load (the library-row
@@ -312,16 +313,32 @@ export async function loadLibrarySnapshot(): Promise<LibrarySnapshot> {
 
   // THE grapheme-total fold — one Intl.Segmenter pass per load (the same
   // totalsById memo LibraryView/the strip/BookRow each used to run).
+  // Issue #58 — the total is the MAIN TEXT (mainTextLength): the notes are
+  // reference material, so progress, completion, and Estimated reading time
+  // all measure against the end of the main text. A saved position inside
+  // the notes lies past that end and is not a completion signal (spec #66).
   const totalsByArticleId = new Map<string, number>();
   for (const article of articles) {
-    totalsByArticleId.set(
-      article.id,
-      graphemeClusters(normalizeText(article), article.lang).length,
-    );
+    totalsByArticleId.set(article.id, mainTextLength(article));
   }
 
   // THE latest-location fold — readingPosition's one fold (Issue #2).
+  // Spec #66 — a row at the legacy end pin (a footnoted article finished
+  // before #66, pinned at the end of its notes) folds as today's end pin, so
+  // every completion/progress consumer of this fold reads it finished.
   const latestLocationByArticleId = latestLocationByArticle(locations);
+  for (const article of articles) {
+    const loc = latestLocationByArticleId.get(article.id);
+    if (loc === undefined || loc.revision !== article.revision) continue;
+    const offset = fromLegacyEndPin(
+      loc.graphemeOffset,
+      totalsByArticleId.get(article.id)!,
+      graphemeLength(article),
+    );
+    if (offset !== loc.graphemeOffset) {
+      latestLocationByArticleId.set(article.id, { ...loc, graphemeOffset: offset });
+    }
+  }
 
   // Issue #76 — THE per-article highlight-count fold (one pass per load;
   // the library rows' review entry reads it — highlight-only).

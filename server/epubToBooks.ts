@@ -59,12 +59,27 @@ import { createHash } from "node:crypto";
 import { XMLParser } from "fast-xml-parser";
 import { unzipSync } from "fflate";
 import { JSDOM } from "jsdom";
-import type { Block, InlineRun } from "../src/content/schema";
+import { footnoteBodyFromParagraphs, type FootnoteBodyT } from "../src/content/footnoteBody";
+import type { Block } from "../src/content/schema";
 import { isSafeEntryName } from "../src/portability/zipSlip";
 import { rewriteFiguresWithAssets, type AssetResolution } from "./assetStage";
 import { IngestionError } from "./errors";
 import { sniffImageAsset, type ImageAsset } from "./fetchImageAsset";
-import { htmlToBlocks, sanitizeExtractedHtml, type FigureSrcResolver } from "./htmlToBlocks";
+import {
+  collectCrossFileTargets,
+  copyReferencedNotes,
+  mayHoldNotes,
+  numberChapterNotes,
+  settleCopiedNotes,
+  type BookHrefResolver,
+} from "./epubFootnotes";
+import { detectLinkedFootnotes } from "./footnoteLinks";
+import {
+  footnoteBodiesParagraphs,
+  htmlToBlocks,
+  sanitizeExtractedHtml,
+  type FigureSrcResolver,
+} from "./htmlToBlocks";
 import {
   EPUB_EXTRACTION_TIMEOUT_MS,
   EPUB_MAX_CHAPTERS,
@@ -698,7 +713,15 @@ const figureSrcResolver: FigureSrcResolver = (src) => src.length > 0;
 /** One walked spine document. */
 interface WalkedDocument {
   blocks: Block[];
-  footnotes: { id: string; content: InlineRun[] }[];
+  /** The document's own detected notes, local ids fn-1…fn-k (issue #61);
+   * numberChapterNotes renumbers them per chapter unit. */
+  footnotes: FootnoteBodyT[];
+  /** Parallel to `footnotes`: the source note a cross-file copy came from. */
+  footnoteSources: (string | undefined)[];
+  /** Spine paths this document copied referenced notes from. */
+  notesCopiedFrom: string[];
+  /** Notes past MAX_LINKED_FOOTNOTES left out of this document (issue #60). */
+  omittedFootnoteCount: number;
   /** The document's own <title> text, extracted from the RAW markup before
    * sanitize strips the head — the document-title step of the chapter title
    * chain. */
@@ -715,20 +738,65 @@ interface WalkedDocument {
  * container markers (figureSrcResolver above); resolution happens per
  * chapter unit in extractUnitFigures, AFTER the D12-10 admission gate.
  */
-function walkChapterDocument(xhtml: string): WalkedDocument {
+function walkChapterDocument(
+  xhtml: string,
+  path: string,
+  noteSources: ReadonlyMap<string, Document>,
+): WalkedDocument {
   const rawDom = new JSDOM(xhtml);
-  const titleText = rawDom.window.document.querySelector("title")?.textContent?.trim();
+  const rawDocument = rawDom.window.document;
+  const titleText = rawDocument.querySelector("title")?.textContent?.trim();
   const docTitle = titleText !== undefined && titleText.length > 0 ? titleText : undefined;
 
-  const sanitized = sanitizeExtractedHtml(xhtml);
+  // Issue #61 — footnotes, read from the RAW document (the sanitizer drops
+  // every id and epub:type): notes this document references in another
+  // spine document are copied in first, then the shared link-graph
+  // detection (with EPUB note semantics) extracts every note.
+  const copied = copyReferencedNotes({ path, document: rawDocument }, noteSources, resolveBookHref);
+  const linked = detectLinkedFootnotes(rawDocument, { epubSemantics: true });
+  const footnoteSources = settleCopiedNotes(copied, linked.noteHtml.length, linked.omittedCount);
+  const footnotes = footnoteBodiesParagraphs(linked.noteHtml, undefined).map((paragraphs, i) =>
+    footnoteBodyFromParagraphs(`fn-${i + 1}`, paragraphs),
+  );
+
+  // A document with no notes walks its original markup, byte-stable.
+  const sanitized = sanitizeExtractedHtml(
+    footnotes.length > 0 || copied !== undefined ? rawDom.serialize() : xhtml,
+  );
   const dom = new JSDOM(sanitized);
-  const walked = htmlToBlocks(dom.window.document, undefined, figureSrcResolver);
+  const walked = htmlToBlocks(
+    dom.window.document,
+    undefined,
+    figureSrcResolver,
+    new Set(footnotes.map((_, i) => i + 1)),
+  );
   return {
     blocks: walked.blocks,
-    footnotes: walked.footnotes,
+    footnotes,
+    footnoteSources,
+    notesCopiedFrom: (copied?.copies ?? []).map((c) => c.notePath),
+    omittedFootnoteCount: linked.omittedCount,
     docTitle,
   };
 }
+
+/** A book-internal href (written in the document at `fromPath`) → the spine
+ * path + element id it names; null for external schemes and links without
+ * a fragment. Paths go through the ONE shared normalizer. */
+const resolveBookHref: BookHrefResolver = (rawHref, fromPath) => {
+  if (/^[a-z][a-z0-9+.-]*:/i.test(rawHref) || rawHref.startsWith("//")) return null;
+  const hashAt = rawHref.indexOf("#");
+  if (hashAt < 0) return null;
+  let fragment = rawHref.slice(hashAt + 1);
+  try {
+    fragment = decodeURIComponent(fragment);
+  } catch {
+    return null; // malformed escape — never a link-graph edge
+  }
+  if (fragment.length === 0) return null;
+  const path = hashAt === 0 ? fromPath : normalizeEpubHref(rawHref, dirOf(fromPath));
+  return { path, fragment };
+};
 
 // ── Container figure extraction (20-06 — the D12-16 retirement) ──────────────
 
@@ -899,6 +967,9 @@ interface SpineDoc {
   item: EpubManifestItem;
   xhtml: string;
   walked: WalkedDocument;
+  /** Issue #61: other chapters copied notes from this document (a Notes
+   * file). It stays in the book as an ordinary chapter. */
+  suppliesNotes: boolean;
 }
 
 /** Media types that can be content documents; anything else in the spine
@@ -915,7 +986,7 @@ const CONTENT_MEDIA_TYPES = new Set(["application/xhtml+xml", "text/html"]);
  * (Pitfall 10).
  */
 function loadSpineDocs(archive: EpubArchive): SpineDoc[] {
-  const docs: SpineDoc[] = [];
+  const loaded: Array<{ pos: number; item: EpubManifestItem; xhtml: string }> = [];
   for (const [pos, spineItem] of archive.spine.entries()) {
     const item = spineItem.item;
     if (item === undefined) continue; // dangling idref — no document exists
@@ -925,8 +996,27 @@ function loadSpineDocs(archive: EpubArchive): SpineDoc[] {
     if (!CONTENT_MEDIA_TYPES.has(item.mediaType)) continue;
     const xhtml = archive.entryText(item.href);
     if (xhtml === undefined) continue; // manifest item with no zip entry
-    docs.push({ pos, item, xhtml, walked: walkChapterDocument(xhtml) });
+    loaded.push({ pos, item, xhtml });
   }
+  // Issue #61 — the spine documents other documents link into (a Notes
+  // file, usually) are parsed once more, read-only, as cross-file note
+  // sources; every document then walks against them.
+  const targets = new Map<string, Set<string>>();
+  for (const d of loaded) collectCrossFileTargets(d.xhtml, d.item.href, resolveBookHref, targets);
+  const noteSources = new Map<string, Document>();
+  for (const d of loaded) {
+    const fragments = targets.get(d.item.href);
+    if (fragments === undefined || noteSources.has(d.item.href)) continue;
+    const document = new JSDOM(d.xhtml).window.document;
+    if (mayHoldNotes(document, fragments)) noteSources.set(d.item.href, document);
+  }
+  const docs = loaded.map((d) => ({
+    ...d,
+    walked: walkChapterDocument(d.xhtml, d.item.href, noteSources),
+    suppliesNotes: false,
+  }));
+  const supplying = new Set(docs.flatMap((d) => d.walked.notesCopiedFrom));
+  for (const d of docs) d.suppliesNotes = supplying.has(d.item.href);
   return docs;
 }
 
@@ -951,7 +1041,7 @@ interface ChapterUnit {
  * chapter-figure assets + the per-figure refusal count for disclosure. */
 export interface ChapterDraft {
   blocks: Block[];
-  footnotes: { id: string; content: InlineRun[] }[];
+  footnotes: FootnoteBodyT[];
   lang: string;
   title: string;
   /** First spine position of the chapter's content (debug/traceability). */
@@ -963,6 +1053,9 @@ export interface ChapterDraft {
   /** 20-06: per-figure refusals, disclosed through extractionWarnings
    * (D12-11 honesty mirror — refused figures are never silently dropped). */
   figureRefusedCount: number;
+  /** Issue #60: notes past the cap left out of the chapter's documents,
+   * disclosed through extractionWarnings (footnotesOmittedWarning). */
+  omittedFootnoteCount: number;
 }
 
 /** The adapter output (12-RESEARCH Pattern 1 — planner-confirmed shape). */
@@ -1109,14 +1202,18 @@ function emitChapter(
   assets: ImageAsset[],
   figureRefusedCount: number,
 ): ChapterDraft {
-  const blocks: Block[] = [];
-  const footnotes: { id: string; content: InlineRun[] }[] = [];
   const hasher = createHash("sha256");
-  for (const d of unitDocs) {
-    blocks.push(...d.walked.blocks);
-    footnotes.push(...d.walked.footnotes);
-    hasher.update(d.xhtml);
-  }
+  for (const d of unitDocs) hasher.update(d.xhtml);
+  // Issue #61 — one fn-1…fn-N sequence for the chapter's documents.
+  const numbered = numberChapterNotes(
+    unitDocs.map((d) => ({
+      blocks: d.walked.blocks,
+      footnotes: d.walked.footnotes,
+      sources: d.walked.footnoteSources,
+    })),
+  );
+  const blocks = numbered.blocks.flat();
+  const footnotes = numbered.footnotes;
   const first = unitDocs[0];
   return {
     blocks,
@@ -1127,6 +1224,7 @@ function emitChapter(
     sourceHtmlHash: hasher.digest("hex"),
     assets,
     figureRefusedCount,
+    omittedFootnoteCount: unitDocs.reduce((n, d) => n + d.walked.omittedFootnoteCount, 0),
   };
 }
 
@@ -1155,7 +1253,10 @@ function assembleChapters(archive: EpubArchive): {
     // leading range holding only the nav document) — not a disclosed skip
     const blocks: Block[] = [];
     for (const d of unitDocs) blocks.push(...d.walked.blocks);
-    if (!isReaderableDocument(blocks)) {
+    // Issue #61: a Notes file is often one heading and one long list — under
+    // the block floor, yet the very notes the chapters cite. It stays.
+    const suppliesNotes = unitDocs.some((d) => d.suppliesNotes) && blocks.length > 0;
+    if (!isReaderableDocument(blocks) && !suppliesNotes) {
       skippedCount += 1; // cover plates / pure-image pages — disclosed
       continue;
     }

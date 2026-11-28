@@ -8,6 +8,7 @@
 // (annotations) persist offsets against this contract — it cannot change after
 // release without corrupting every saved location and highlight.
 import type { Block, CanonicalArticle, InlineRun } from "./types";
+import { footnoteBodyAsBlock, type FootnoteBodyT } from "./footnoteBody";
 
 /** Separator between consecutive blocks (and between body and footnotes region). */
 export const BLOCK_SEPARATOR = "\n";
@@ -29,11 +30,62 @@ export function normalizeRunText(text: string): string {
  * Exported for the read-aloud speakable-channel walk (src/readaloud/chunks.ts),
  * which needs the caption sub-range of a figure block — the SAME function the
  * D-05 substrate uses, never a fork (Pitfall 3). */
-export function inlineText(runs: InlineRun[]): string {
-  return runs
-    .map((r) => normalizeRunText(r.text))
-    .filter(Boolean)
-    .join(" ");
+export function inlineText(runs: readonly InlineRun[]): string {
+  const separators = runSeparators(runs);
+  let text = "";
+  runs.forEach((run, i) => {
+    const norm = normalizeRunText(run.text);
+    if (norm.length > 0) text += (separators[i] === 1 ? " " : "") + norm;
+  });
+  return text;
+}
+
+const LEADING_ASCII_WS = /^[\t\n\f\r ]/;
+const TRAILING_ASCII_WS = /[\t\n\f\r ]$/;
+
+function isFootnoteRefRun(run: InlineRun): boolean {
+  return run.marks.some((mark) => mark.type === "footnote-ref");
+}
+
+const separatorCache = new WeakMap<readonly InlineRun[], readonly (0 | 1)[]>();
+
+/**
+ * runSeparators — THE inline run-join rule, per run: the separator graphemes
+ * the D-05 stream places before that run's contribution (0 for a run with no
+ * contribution, and for the first contributing run).
+ *
+ * Adjacent contributions join with one " " — except at a Footnote
+ * reference's edge with no whitespace in the source: spec #66 keeps the
+ * marker graphemes where the old flattened ingest had them ("Claim1 more."),
+ * so a stored highlight quote that includes a marker is unchanged.
+ * Whitespace-only runs between two contributions count as source
+ * whitespace. Every walk over the stream (inlineText, the splitBlock
+ * slicing family, footnoteReferenceSpans) reads its joins from here.
+ */
+export function runSeparators(runs: readonly InlineRun[]): readonly (0 | 1)[] {
+  const hit = separatorCache.get(runs);
+  if (hit) return hit;
+  const separators: (0 | 1)[] = new Array<0 | 1>(runs.length).fill(0);
+  let previous: InlineRun | null = null;
+  let whitespaceBetween = false;
+  runs.forEach((run, i) => {
+    if (normalizeRunText(run.text).length === 0) {
+      if (run.text.length > 0) whitespaceBetween = true;
+      return;
+    }
+    if (previous !== null) {
+      const glued =
+        (isFootnoteRefRun(previous) || isFootnoteRefRun(run)) &&
+        !whitespaceBetween &&
+        !TRAILING_ASCII_WS.test(previous.text) &&
+        !LEADING_ASCII_WS.test(run.text);
+      separators[i] = glued ? 0 : 1;
+    }
+    previous = run;
+    whitespaceBetween = false;
+  });
+  separatorCache.set(runs, separators);
+  return separators;
 }
 
 /**
@@ -69,6 +121,17 @@ function blockText(block: Block): string {
 }
 
 /**
+ * A Footnote body's normalized text contribution (issue #59): its block-shaped
+ * view's text — one paragraph's inline text, or a multi-paragraph note's
+ * paragraphs joined with BLOCK_SEPARATOR. A one-paragraph note's text is
+ * byte-identical to the pre-#59 `inlineText(fn.content)`, so stored offsets
+ * never move. The ONE derivation every footnote-text consumer reads.
+ */
+export function footnoteText(fn: FootnoteBodyT): string {
+  return blockText(footnoteBodyAsBlock(fn));
+}
+
+/**
  * Exported alias for `blockText` — Phase 4 Plan 04-04 anchor helpers
  * (src/pagination/anchor.ts) need per-block normalized text to compute
  * article-global grapheme offsets for the D4-10 mode-switch + D4-11
@@ -90,11 +153,8 @@ export function blockNormalizedText(block: Block): string {
  */
 export function normalizeText(article: CanonicalArticle): string {
   const bodyText = article.blocks.map(blockText).join(BLOCK_SEPARATOR);
-  const footnoteText = article.footnotes
-    .map((fn) => inlineText(fn.content))
-    .filter(Boolean)
-    .join(BLOCK_SEPARATOR);
-  return [bodyText, footnoteText].filter(Boolean).join(BLOCK_SEPARATOR);
+  const notesText = article.footnotes.map(footnoteText).filter(Boolean).join(BLOCK_SEPARATOR);
+  return [bodyText, notesText].filter(Boolean).join(BLOCK_SEPARATOR);
 }
 
 // ── Locale-keyed Intl.Segmenter cache (260819-tld) ───────────────────────────
@@ -222,7 +282,7 @@ function deriveFootnoteRows(
   const bodyEmpty = perBlockLengths.every((len) => len === 0);
   let cursor = bodyEmpty ? 0 : (blockStartOffsets[article.blocks.length] ?? 0);
   for (const [i, fn] of article.footnotes.entries()) {
-    const length = graphemeClusters(inlineText(fn.content), article.lang).length;
+    const length = graphemeClusters(footnoteText(fn), article.lang).length;
     if (length === 0) continue;
     rows.push({ index: i, start: cursor, length });
     cursor += length + BLOCK_SEPARATOR.length;
@@ -242,6 +302,16 @@ export function footnoteRowFor(
   footnoteIndex: number,
 ): FootnoteRow | undefined {
   return articleGraphemeIndex(article).footnoteRows.find((r) => r.index === footnoteIndex);
+}
+
+/**
+ * The canonical row whose text contains article-global `offset`, or
+ * undefined in the main text (issue #65 — which note a highlight lies in).
+ */
+export function footnoteRowAt(article: CanonicalArticle, offset: number): FootnoteRow | undefined {
+  return articleGraphemeIndex(article).footnoteRows.find(
+    (r) => offset >= r.start && offset < r.start + r.length,
+  );
 }
 
 /**
@@ -307,6 +377,23 @@ export function articleGraphemeIndex(article: CanonicalArticle): ArticleGrapheme
 /** The canonical length of an article in grapheme clusters. */
 export function graphemeLength(article: CanonicalArticle): number {
   return articleGraphemeIndex(article).totalGraphemes;
+}
+
+/**
+ * Issue #58 — the canonical length of the article's MAIN TEXT: the
+ * coordinate stream up to (not including) the notes region. The notes are
+ * reference material, not reading: completion, progress, read-aloud's
+ * continuous stop, and Estimated reading time all measure against this
+ * end. Equals graphemeLength when there are no footnote rows. The body's
+ * last block ends one separator before the first row
+ * (normalizeText's `[body, notes].join(SEP)`); an all-empty body spends no
+ * separator, so its main text is empty.
+ */
+export function mainTextLength(article: CanonicalArticle): number {
+  const index = articleGraphemeIndex(article);
+  const firstRow = index.footnoteRows[0];
+  if (firstRow === undefined) return index.totalGraphemes;
+  return Math.max(0, firstRow.start - BLOCK_SEPARATOR.length);
 }
 
 // ── Raw↔normalized cluster alignment (Pitfall 1 bridge) ─────────────────────

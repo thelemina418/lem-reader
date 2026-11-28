@@ -26,7 +26,7 @@ import { renderToStaticMarkup } from "react-dom/server";
 import { ArticleBody } from "../../../src/content/render/BlockRenderer";
 import { PageFragmentView } from "../../../src/pagination/fragmentRenderer";
 import { blockGraphemeLength } from "../../../src/pagination/anchor";
-import { articleGraphemeIndex } from "../../../src/content/normalizeText";
+import { articleGraphemeIndex, footnoteRows } from "../../../src/content/normalizeText";
 import type { PageFragment } from "../../../src/pagination/types";
 import type { CanonicalArticle } from "../../../src/content/types";
 import { bundledFixtures } from "../../../src/fixtures";
@@ -394,11 +394,17 @@ function chunkHighlights(article: CanonicalArticle, chunks: number) {
   return out;
 }
 
+/** Every body block, then every note row (issue #65: notes carry marks). */
 function wholeEntries(article: CanonicalArticle): PageFragment {
-  return frag(
-    0,
-    article.blocks.map((_, i) => wholeEntry(article, i)),
-  );
+  return frag(0, [
+    ...article.blocks.map((_, i) => wholeEntry(article, i)),
+    ...footnoteRows(article).map((row) => ({
+      blockIndex: article.blocks.length,
+      footnoteIndex: row.index,
+      startGrapheme: 0,
+      endGrapheme: row.length,
+    })),
+  ]);
 }
 
 /** The ordered (highlightId, markedText) sequence a markup string carries. */

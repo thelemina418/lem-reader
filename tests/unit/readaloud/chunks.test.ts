@@ -248,6 +248,40 @@ describe("chunkArticleForSpeech — the spoken channel rules (issue #43, O7)", (
     expect(spoken[spoken.length - 1]).toBe("Smith 2020, page 12.");
   });
 
+  it("skips inline footnote markers but keeps the spoken words aligned (issue #55)", () => {
+    const article = makeArticle([
+      {
+        kind: "paragraph",
+        content: [
+          { text: "The claim" },
+          { text: "12", marks: [{ type: "footnote-ref", footnoteId: "fn-1", occurrence: 1 }] },
+          { text: " is supported. Next" },
+          { text: "†", marks: [{ type: "footnote-ref", footnoteId: "fn-2", occurrence: 1 }] },
+          { text: "." },
+        ],
+      },
+    ]);
+    const chunks = chunkArticleForSpeech(article);
+    expect(chunks.map((c) => c.text)).toEqual(["The claim is supported.", "Next."]);
+    // The marker keeps its place in the coordinate stream: a boundary on
+    // "is" maps to the canonical offset of "is", past the skipped marker.
+    const clusters = graphemeClusters(normalizeText(article), "en");
+    const first = chunks[0]!;
+    const at = first.text.indexOf("is");
+    const canonical = first.startGrapheme + first.utf16ToGrapheme[at]!;
+    expect(clusters.slice(canonical, canonical + 2).join("")).toBe("is");
+    expect(clusters.join("")).toContain("claim12 is"); // spec #66 S3: no inserted space
+  });
+
+  it("skips the legacy block-level marker too", () => {
+    const article = makeArticle([
+      { kind: "paragraph", content: [{ text: "A claim." }] },
+      { kind: "footnote-reference", footnoteId: "fn-1", marker: "[1]" },
+      { kind: "paragraph", content: [{ text: "More." }] },
+    ]);
+    expect(chunkArticleForSpeech(article).map((c) => c.text)).toEqual(["A claim.", "More."]);
+  });
+
   it("preserves document order across mixed skipped and spoken blocks", () => {
     const article = makeArticle([
       { kind: "heading", level: 2, content: [{ text: "The header" }] },
@@ -394,6 +428,38 @@ describe("chunkArticleForSpeech — edges", () => {
     for (const chunk of chunks) {
       expect(chunk.text.trim().length).toBeGreaterThan(0);
       expect(chunk.text).not.toContain("\n");
+    }
+  });
+});
+
+describe("chunkArticleForSpeech — notes with several paragraphs (issue #59)", () => {
+  it("reads every paragraph of a note, in order, as that note's one paragraph unit", () => {
+    const article = ArticleSchema.parse({
+      ...baseArticle,
+      blocks: [{ kind: "paragraph", content: [{ text: "Body text here." }] }],
+      footnotes: [
+        {
+          id: "fn-1",
+          content: [{ text: "The note opens" }],
+          laterParagraphs: [[{ text: "and continues" }], [{ text: "Then it ends." }]],
+        },
+        { id: "fn-2", content: [{ text: "Second source." }] },
+      ],
+    }) as CanonicalArticle;
+    const chunks = chunkArticleForSpeech(article);
+    const clusters = graphemeClusters(normalizeText(article), "en");
+    // A paragraph boundary is a spoken break: no words glue across it.
+    expect(chunks.map((c) => c.text)).toEqual([
+      "Body text here.",
+      "The note opens",
+      "and continues",
+      "Then it ends.",
+      "Second source.",
+    ]);
+    expect(chunks.map((c) => c.units.paragraphIndex)).toEqual([0, 1, 1, 1, 2]);
+    // Each chunk addresses its own words in the canonical stream.
+    for (const c of chunks) {
+      expect(clusters.slice(c.startGrapheme, c.endGrapheme).join("")).toBe(c.text);
     }
   });
 });

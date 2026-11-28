@@ -31,8 +31,9 @@
 import { useCallback, useEffect, useRef } from "react";
 import type { CanonicalArticle } from "../content/types";
 import type { LocationRecord } from "../content/schema";
-import { computeTopVisibleOffset, queryBlocks } from "./restoreLocation";
-import { atScrollBottom, endPinOffset } from "./readingPosition";
+import { computeTopVisibleOffset, notesRegionTop, queryBlocks } from "./restoreLocation";
+import { atScrollBottom, endPinOffset, mainTextEndInView } from "./readingPosition";
+import { graphemeLength } from "../content/normalizeText";
 import { saveLocation } from "../persistence/locationStore";
 import { classifyStorageError } from "../persistence/errors";
 // Issue #102 — the write-followup broadcast. The bus module is the
@@ -88,6 +89,14 @@ interface UseScrollSaveOptions {
   /** A scoped scrolling body's bottom is this canonical boundary, not the
    * whole work's completion pin. Explicit saves remain caller-owned. */
   readingEndOffset?: number;
+  /**
+   * Spec #66 / issue #57 — the Footnote excursion's hold. While it returns a
+   * number, every SCHEDULED save (scroll, page commit, listened progress)
+   * persists that offset — the reference the reader followed — instead of
+   * where the reader is in the notes. saveLocationNow is held too (review
+   * S2); callers that leave the excursion on purpose end it first.
+   */
+  heldOffset?: () => number | null;
 }
 
 /**
@@ -172,7 +181,16 @@ export function useScrollSave(
     const loc = pendingRef.current;
     if (!loc) return;
     pendingRef.current = null;
-    saveLocation(loc)
+    // Spec #66 — the end-pin lets the save carry completion into the notes
+    // (a notes position is not itself a completion signal).
+    const current = articleRef.current;
+    const sameArticle =
+      current !== null && current.id === loc.articleId && current.revision === loc.revision;
+    const mainTextEnd = sameArticle ? endPinOffset(current) : undefined;
+    // …and the whole length lets it read a pre-#66 finish (the legacy end
+    // pin, fromLegacyEndPin) as the finish it was.
+    const textEnd = sameArticle ? graphemeLength(current) : undefined;
+    saveLocation(loc, { mainTextEnd, textEnd })
       .then(() => {
         // Two failure domains, kept separate: the .catch below routes WRITE
         // failures to STATE-05 — the broadcast is not a write, so a throwing
@@ -219,11 +237,12 @@ export function useScrollSave(
     (graphemeOffset: number) => {
       const currentArticle = articleRef.current;
       if (!currentArticle) return;
+      const held = optionsRef.current?.heldOffset?.() ?? null;
       scheduleSave({
         schemaVersion: 1,
         articleId: currentArticle.id,
         revision: currentArticle.revision,
-        graphemeOffset,
+        graphemeOffset: held ?? graphemeOffset,
         savedAt: new Date().toISOString(),
       });
     },
@@ -246,11 +265,16 @@ export function useScrollSave(
   const saveLocationNow = useCallback<ScheduleLocationSave>((graphemeOffset: number) => {
     const currentArticle = articleRef.current;
     if (!currentArticle) return;
+    // Spec #66 review S2 — the excursion's hold covers immediate saves too
+    // (story 14: closing mid-excursion resumes at the reference). A caller
+    // that deliberately leaves the excursion (Mark read, a chapter
+    // departure) ends it before saving.
+    const held = optionsRef.current?.heldOffset?.() ?? null;
     pendingRef.current = {
       schemaVersion: 1,
       articleId: currentArticle.id,
       revision: currentArticle.revision,
-      graphemeOffset,
+      graphemeOffset: held ?? graphemeOffset,
       savedAt: new Date().toISOString(),
     };
     if (saveTimer.current !== null) {
@@ -286,7 +310,29 @@ export function useScrollSave(
         );
         return;
       }
-      scheduleSaveAtOffset(computeOffset());
+      const offset = computeOffset();
+      // Issue #58 — a footnoted article finishes at the end of its MAIN
+      // TEXT: once the notes region comes into view while the top of the
+      // viewport is still in the main text, persist the end-pin (the notes
+      // are reference material — the reader never has to walk them). A top
+      // offset already inside the notes saves as itself (it restores into
+      // its note; it never finishes the article — spec #66).
+      const articleEl = articleElRef.current;
+      if (
+        currentArticle !== null &&
+        articleEl !== null &&
+        offset < endPinOffset(currentArticle) &&
+        mainTextEndInView({
+          notesTop: notesRegionTop(articleEl),
+          viewportHeight: window.innerHeight,
+        })
+      ) {
+        scheduleSaveAtOffset(
+          Math.min(endPinOffset(currentArticle), optionsRef.current?.readingEndOffset ?? Infinity),
+        );
+        return;
+      }
+      scheduleSaveAtOffset(offset);
     };
     // Passive scroll listener — we never preventDefault; just observe.
     window.addEventListener("scroll", onScroll, { passive: true });

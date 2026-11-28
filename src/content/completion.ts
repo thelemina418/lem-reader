@@ -50,7 +50,7 @@ import type {
   LocationRecord,
   StructureDestination,
 } from "./schema";
-import { isFinishedOffset } from "../reader/readingPosition";
+import { inNotesOffset, isFinishedOffset } from "../reader/readingPosition";
 
 /**
  * completionTargetKey — the ONE target identity (the collectionsStore's
@@ -122,12 +122,30 @@ export function articleCompletionFinished(
   total: number | undefined,
   record: CompletionRecord | undefined,
 ): boolean {
+  const signal = completionSignal(loc, total);
   const derived =
-    loc !== undefined && total !== undefined && isFinishedOffset(loc.graphemeOffset, total);
-  if (record !== undefined && recordSupersedes(record, loc?.savedAt)) {
+    signal !== undefined && total !== undefined && isFinishedOffset(signal.graphemeOffset, total);
+  if (record !== undefined && recordSupersedes(record, signal?.savedAt)) {
     return record.finished;
   }
   return derived;
+}
+
+/**
+ * completionSignal — the location as a completion signal. Spec #66 ("reaching
+ * or reading the notes never finishes an article"): a position saved inside
+ * the notes is not one — it neither finishes the article nor outranks a
+ * completion record. What the reader had when they entered the notes is
+ * carried by the record the location save writes at that transition
+ * (locationStore.saveLocation), so an article already finished stays
+ * finished there, and one jumped into early stays unfinished.
+ */
+function completionSignal(
+  loc: LocationRecord | undefined,
+  total: number | undefined,
+): LocationRecord | undefined {
+  if (loc === undefined || total === undefined) return loc;
+  return inNotesOffset(loc.graphemeOffset, total) ? undefined : loc;
 }
 
 function articleFinished(articleId: string, inputs: EntryCompletionInputs): boolean {
@@ -161,7 +179,11 @@ export function entryFinished(
     // record) arbitrates against the book-level correction.
     let newestSignal: string | undefined;
     for (const id of chapterIds) {
-      newestSignal = newerSignal(inputs.latestLocationByArticleId.get(id)?.savedAt, newestSignal);
+      newestSignal = newerSignal(
+        completionSignal(inputs.latestLocationByArticleId.get(id), inputs.textLengthOf(id))
+          ?.savedAt,
+        newestSignal,
+      );
       newestSignal = newerSignal(
         inputs.completionByKey.get(completionTargetKey({ kind: "article", articleId: id }))
           ?.updatedAt,

@@ -22,11 +22,14 @@ import {
   BOTTOM_EPSILON_PX,
   isFinishedOffset,
   atScrollBottom,
+  mainTextEndInView,
   isFinalPage,
   endPinOffset,
   isAtArticleEnd,
   landingForRestore,
   latestLocationByArticle,
+  fromLegacyEndPin,
+  noteListenEndOffset,
 } from "../../src/reader/readingPosition";
 import { ArticleSchema, LocationRecordSchema } from "../../src/content/schema";
 import type { CanonicalArticle } from "../../src/content/types";
@@ -193,6 +196,22 @@ describe("endPinOffset + isAtArticleEnd — the shared end substrate", () => {
     expect(isAtArticleEnd(endPinOffset(article), graphemeLength(article))).toBe(true);
   });
 
+  // Issue #58 — the notes are not reading: the end pin is the end of the
+  // MAIN TEXT, so reaching the end of the main text finishes the article
+  // without walking the notes. "Opening passage." + SEP + "Closing." = 25.
+  it("a footnoted article's end pin is the end of the main text, before the notes", () => {
+    const article = ArticleSchema.parse({
+      ...baseArticle,
+      blocks: [
+        { kind: "paragraph", content: [{ text: "Opening passage." }] },
+        { kind: "paragraph", content: [{ text: "Closing." }] },
+      ],
+      footnotes: [{ id: "fn-1", content: [{ text: "A note that is not reading." }] }],
+    });
+    expect(endPinOffset(article)).toBe(25);
+    expect(graphemeLength(article)).toBeGreaterThan(25);
+  });
+
   it("isAtArticleEnd — total → true, total − 1 → false, overshoot → true, 0 → false", () => {
     expect(isAtArticleEnd(100, 100)).toBe(true);
     expect(isAtArticleEnd(99, 100)).toBe(false);
@@ -218,6 +237,16 @@ describe("landingForRestore — restore/mode-swap landing table (260908-oht end-
 
   it('offset 0 (article top) → "passage"', () => {
     expect(landingForRestore(0, 100)).toBe("passage");
+  });
+
+  // Issue #58 — with notes, the end pin (main-text end) still lands at the
+  // end, but a position INSIDE the notes is a passage (it restores into the
+  // note, never to the bottom where the next save would re-pin it).
+  it('with notes: the main-text end → "end", inside the notes → "passage", past them → "end"', () => {
+    expect(landingForRestore(100, 100, 160)).toBe("end");
+    expect(landingForRestore(130, 100, 160)).toBe("passage");
+    expect(landingForRestore(99, 100, 160)).toBe("passage");
+    expect(landingForRestore(160, 100, 160)).toBe("end");
   });
 
   it('composed with the end pin: a pinned save lands at "end"', () => {
@@ -276,5 +305,50 @@ describe("latestLocationByArticle — the D8-10 fold + savedAt-tie table", () =>
     const midFirst = latestLocationByArticle([midRow, finishedRow]).get("art-a")!;
     expect(isFinishedOffset(finishedFirst.graphemeOffset, total)).toBe(true);
     expect(isFinishedOffset(midFirst.graphemeOffset, total)).toBe(false);
+  });
+});
+
+// Issue #58 — scrolling mode reaches the end of the main text when the notes
+// region's top edge has come into the viewport (everything above it — the
+// whole main text — has been scrolled to), long before the document bottom.
+describe("mainTextEndInView — scrolling-mode main-text end (viewport 800)", () => {
+  it("notes top inside the viewport → true; below it → false; no notes → false", () => {
+    expect(mainTextEndInView({ notesTop: 799, viewportHeight: 800 })).toBe(true);
+    expect(mainTextEndInView({ notesTop: -500, viewportHeight: 800 })).toBe(true);
+    expect(mainTextEndInView({ notesTop: 800, viewportHeight: 800 })).toBe(false);
+    expect(mainTextEndInView({ notesTop: null, viewportHeight: 800 })).toBe(false);
+  });
+});
+
+// Spec #66 — the legacy end pin: before #66 a footnoted article's end pin was
+// the end of its notes (the whole coordinate stream). A saved offset exactly
+// there reads as the modern end pin (the main-text end); every other offset,
+// including one inside the notes, reads as saved.
+describe("fromLegacyEndPin (spec #66)", () => {
+  it.each([
+    // offset, mainEnd, textEnd, expected
+    [180, 100, 180, 100], // the legacy pin → the main-text end
+    [179, 100, 180, 179], // inside the notes → as saved
+    [140, 100, 180, 140],
+    [100, 100, 180, 100], // the modern pin → unchanged
+    [40, 100, 180, 40],
+    [100, 100, 100, 100], // no notes: the pin is the end
+    [0, 0, 0, 0],
+  ])("offset %i (main end %i, text end %i) reads as %i", (offset, mainEnd, textEnd, expected) => {
+    expect(fromLegacyEndPin(offset, mainEnd, textEnd)).toBe(expected);
+  });
+});
+
+// Spec #66 — listening to a note pins the reader at that note's end, but the
+// LAST note's end is the legacy end pin (the article's whole length), which
+// reads finished. The pin stays one grapheme inside that note instead.
+describe("noteListenEndOffset (spec #66)", () => {
+  it.each([
+    // note end, text end, expected
+    [150, 180, 150], // an earlier note: its own end
+    [180, 180, 179], // the last note: never the legacy end pin
+  ])("note end %i (text end %i) pins %i", (noteEnd, textEnd, expected) => {
+    expect(noteListenEndOffset(noteEnd, textEnd)).toBe(expected);
+    expect(fromLegacyEndPin(noteListenEndOffset(noteEnd, textEnd), 100, textEnd)).toBe(expected);
   });
 });

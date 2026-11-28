@@ -152,6 +152,16 @@ describe("deriveBookProgress (D12-03 — chapters-finished ratio)", () => {
       deriveBookProgress(book, latestOf(locations), lengthsOf({ "epub-book000111-c00": 1000 })),
     ).toBe(0);
   });
+
+  // Spec #66 (review S1) — the length is the chapter's MAIN text; a
+  // position past it lies in the chapter's notes and never finishes it.
+  it("a chapter position inside its notes does not count as finished", () => {
+    const book = makeBook(["epub-book000111-c00"]);
+    const locations = [loc("epub-book000111-c00", 1200, "2026-01-02T00:00:00.000Z")];
+    expect(
+      deriveBookProgress(book, latestOf(locations), lengthsOf({ "epub-book000111-c00": 1000 })),
+    ).toBe(0);
+  });
 });
 
 describe("resolveResumeChapterId (D12-07 — last-read wins)", () => {

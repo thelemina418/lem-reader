@@ -120,8 +120,9 @@ test("fixture list exposes one row per curated fixture (DOC-01)", async ({ page 
 // figures are registry-backed local blobs since the 20-04 regeneration —
 // the stub is belt-and-suspenders, never a load-bearing dependency).
 //
-// Plan 13-09 (G4): the round-trip is a scrolling-flow interaction — native
-// fragment scrolling to the footnote body and back. Before G4 it ran under
+// Plan 13-09 (G4): the round-trip is a scrolling-flow interaction — the
+// footnote body and back (reader-routed since issue #57; it was the native
+// fragment hop). Before G4 it ran under
 // the paginated default but only worked by clicking the marker inside the
 // pre-settle scrolling window, the exact first-paint surface this plan
 // removed (in settled paginated mode the DOM-first marker lives inside the
@@ -155,9 +156,11 @@ test("footnote round-trip stays in-article (figure-heavy, Gap 3)", async ({ page
   const forwardMarker = page.locator('sup > a[href^="#fn-"]').first();
   await forwardMarker.click();
 
-  // The hash is now an in-page fragment (NOT a #/article/... route), the
-  // article is still mounted, and the target footnote body is present.
-  await expect(page).toHaveURL(/\/#fn-\d+$/);
+  // Issue #57 — the reader routes the hop itself (focus lands on the note,
+  // the excursion begins), so no fragment reaches the URL: the route is
+  // untouched, the article is still mounted, and the footnote body is there.
+  await expect(page).toHaveURL(/\/#\/article\/figure-heavy$/);
+  await expect(page.locator("li#fn-1")).toBeFocused();
   await expect(articleH1).toBeVisible();
   await expect(page.locator("li#fn-1")).toBeVisible();
 
@@ -165,8 +168,9 @@ test("footnote round-trip stays in-article (figure-heavy, Gap 3)", async ({ page
   const backLink = page.locator('section[aria-label="Footnotes"] a[href^="#fn-ref-"]').first();
   await backLink.click();
 
-  // The hash is now an in-page reference fragment, and the article is still
-  // mounted (no route swap back to the fixture list).
-  await expect(page).toHaveURL(/\/#fn-ref-\d+$/);
+  // Back on the marker, with the route still the article (no swap back to
+  // the fixture list).
+  await expect(forwardMarker).toBeFocused();
+  await expect(page).toHaveURL(/\/#\/article\/figure-heavy$/);
   await expect(articleH1).toBeVisible();
 });
