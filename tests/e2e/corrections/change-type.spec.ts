@@ -221,7 +221,7 @@ test.describe("Change a block's type (#74)", () => {
 
     await changeType(page, "def tide(hour):", "Code block");
     await expect(status(page, "Paragraph is now Code block.")).toHaveCount(1);
-    await expect(frame).toHaveAttribute("aria-label", "Code");
+    await expect(frame).toHaveAttribute("aria-label", "Code block");
     expect(await frame.locator("pre").textContent()).toBe(CODE);
 
     await page.keyboard.press("c");

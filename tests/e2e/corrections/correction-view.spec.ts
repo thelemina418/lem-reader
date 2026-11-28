@@ -180,7 +180,7 @@ test.describe("Correction view (#70)", () => {
     expect(labels.length).toBe(await blocks.count());
     for (const l of labels) {
       expect(l).toMatch(
-        /^(Paragraph|Heading [1-6]|Quotation|Code|Figure( with caption)?|Bulleted list|Numbered list|Footnote reference|Unsupported content)$/,
+        /^(Paragraph|Heading [1-6]|Quotation|Code block|Figure( with caption)?|Bulleted list|Numbered list|Footnote reference|Unsupported block)$/,
       );
     }
     expect(labels).toContain("Paragraph");
@@ -192,7 +192,7 @@ test.describe("Correction view (#70)", () => {
     await expect(focused).toHaveAttribute("role", "group");
     await expect(focused).toHaveAttribute(
       "aria-label",
-      /^(Paragraph|Heading [1-6]|Quotation|Code|Figure.*|.*list|Footnote reference|Unsupported content)$/,
+      /^(Paragraph|Heading [1-6]|Quotation|Code block|Figure.*|.*list|Footnote reference|Unsupported block)$/,
     );
     await page.keyboard.press("ArrowDown");
     await expect(page.locator(".correction-block:focus")).not.toHaveAttribute(

@@ -46,13 +46,13 @@ describe("correctionViewFromArticle", () => {
       "Heading 2",
       "Paragraph",
       "Quotation",
-      "Code",
+      "Code block",
       "Figure with caption",
       "Figure",
       "Bulleted list",
       "Numbered list",
       "Footnote reference",
-      "Unsupported content",
+      "Unsupported block",
     ]);
     expect(model.blocks.map((b) => b.index)).toEqual([0, 1, 2, 3, 4, 5, 6, 7, 8, 9]);
     expect(model.blocks.some((b) => b.hidden)).toBe(false);

@@ -64,28 +64,30 @@ export interface CorrectionViewModel {
   readingOffsetFor(viewOffset: number): number;
 }
 
+/** Every block kind as a noun ("code block") — the ONE map from block kind
+ * to words: the view's labels and the corrections list's sentences both
+ * read from it. */
+export const BLOCK_KIND_NOUN: Readonly<Record<Block["kind"], string>> = {
+  heading: "heading",
+  paragraph: "paragraph",
+  blockquote: "quotation",
+  "code-block": "code block",
+  figure: "figure",
+  "bulleted-list": "bulleted list",
+  "numbered-list": "numbered list",
+  "footnote-reference": "footnote reference",
+  unsupported: "unsupported block",
+};
+
+export function capitalized(noun: string): string {
+  return noun.charAt(0).toUpperCase() + noun.slice(1);
+}
+
 /** A block's type in words — the label the view shows and announces. */
 export function blockTypeLabel(block: Block): string {
-  switch (block.kind) {
-    case "heading":
-      return `Heading ${block.level}`;
-    case "paragraph":
-      return "Paragraph";
-    case "blockquote":
-      return "Quotation";
-    case "code-block":
-      return "Code";
-    case "figure":
-      return block.caption.length > 0 ? "Figure with caption" : "Figure";
-    case "bulleted-list":
-      return "Bulleted list";
-    case "numbered-list":
-      return "Numbered list";
-    case "footnote-reference":
-      return "Footnote reference";
-    case "unsupported":
-      return "Unsupported content";
-  }
+  if (block.kind === "heading") return `Heading ${block.level}`;
+  if (block.kind === "figure" && block.caption.length > 0) return "Figure with caption";
+  return capitalized(BLOCK_KIND_NOUN[block.kind]);
 }
 
 /** The key a block path is known by (view ids and the engine's hidden set). */

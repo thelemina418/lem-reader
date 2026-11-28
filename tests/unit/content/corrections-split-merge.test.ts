@@ -361,7 +361,7 @@ describe("validity reasons (one place for 'unavailable' and 'not applied')", () 
     });
     expect(mergeAvailability(result, viewBlock(result, [2]))).toEqual({
       available: false,
-      reason: R.mergeNextKind("list"),
+      reason: R.mergeNextKind("bulleted list"),
     });
     expect(mergeAvailability(result, viewBlock(result, [4, 1]))).toEqual({
       available: false,

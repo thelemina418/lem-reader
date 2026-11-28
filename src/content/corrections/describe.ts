@@ -9,8 +9,10 @@
 // correction's own recorded text, never the article, so a not-applied
 // correction is described just as well as an applied one.
 
+import { BLOCK_KIND_NOUN, capitalized } from "../correctionView";
 import { graphemeClusters } from "../normalizeText";
-import type { BlockTarget, BlockTypeChoice, Correction } from "../schema";
+import type { BlockTarget, Correction } from "../schema";
+import { blockTypeChoiceLabel } from "./setType";
 
 /** The first words of a quote, at most `max` graphemes-ish, with "…". */
 export function excerpt(text: string, max = 40): string {
@@ -30,41 +32,9 @@ export function tailExcerpt(text: string, max = 30): string {
   return `…${(firstSpace >= 0 && firstSpace < max / 2 ? cut.slice(firstSpace + 1) : cut).trimStart()}`;
 }
 
-const BLOCK_NOUN: Record<BlockTarget["kind"], string> = {
-  heading: "heading",
-  paragraph: "paragraph",
-  blockquote: "quotation",
-  "bulleted-list": "list",
-  "numbered-list": "numbered list",
-  figure: "figure",
-  "code-block": "code block",
-  "footnote-reference": "footnote reference",
-  unsupported: "block",
-};
-
 /** “the paragraph “Share this article”” */
 export function blockPhrase(target: BlockTarget): string {
-  return `the ${BLOCK_NOUN[target.kind]} “${excerpt(target.quote.exact)}”`;
-}
-
-/** The type a set-type correction gives, in words ("Heading 2"). */
-function typeLabel(to: BlockTypeChoice): string {
-  switch (to.type) {
-    case "paragraph":
-      return "Paragraph";
-    case "heading":
-      return `Heading ${to.level}`;
-    case "quotation":
-      return "Quotation";
-    case "caption":
-      return "Caption";
-    case "code-block":
-      return "Code block";
-  }
-}
-
-function capitalized(noun: string): string {
-  return noun.charAt(0).toUpperCase() + noun.slice(1);
+  return `the ${BLOCK_KIND_NOUN[target.kind]} “${excerpt(target.quote.exact)}”`;
 }
 
 type Describer<K extends Correction["kind"]> = (correction: Extract<Correction, { kind: K }>) => {
@@ -81,7 +51,7 @@ const DESCRIBERS: { [K in Correction["kind"]]: Describer<K> } = {
     return { done: `Split ${blockPhrase(c.target)} after “${tailExcerpt(before)}”` };
   },
   merge: (c) => ({
-    done: `Merged ${blockPhrase(c.next)} into the ${BLOCK_NOUN[c.target.kind]} before`,
+    done: `Merged ${blockPhrase(c.next)} into the ${BLOCK_KIND_NOUN[c.target.kind]} before`,
   }),
   // #74 — the words never change; only the block type holding them does.
   "set-type": (c) => {
@@ -95,7 +65,7 @@ const DESCRIBERS: { [K in Correction["kind"]]: Describer<K> } = {
       return { done: `Took the caption of the figure ${words} out as a paragraph` };
     }
     return {
-      done: `Changed ${words} from ${capitalized(BLOCK_NOUN[c.target.kind])} to ${typeLabel(c.to)}`,
+      done: `Changed ${words} from ${capitalized(BLOCK_KIND_NOUN[c.target.kind])} to ${blockTypeChoiceLabel(c.to)}`,
     };
   },
   "move-words": (c) => ({
