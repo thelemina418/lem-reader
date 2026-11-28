@@ -33,7 +33,6 @@ import type { Collection, Table } from "dexie";
 import {
   ArticleSchema,
   BookSchema,
-  CollectionSchema,
   type ArticleSource,
   type Book,
   type CanonicalArticle,
@@ -67,7 +66,11 @@ import { EPUB_MAX_BYTES } from "../ingestion/types";
 import { bookAssetsForChapters } from "../ingestion/addToLibrary";
 import type { BookAsset } from "./booksStore";
 import { db, type AssetRecordRow } from "./db";
-import { chapterConsequences, type ChapterConsequence } from "./chapterConsequences";
+import {
+  chapterConsequences,
+  writeChapterConsequences,
+  type ChapterConsequence,
+} from "./chapterConsequences";
 import { isSameText } from "../content/sameText";
 
 /** A calm, reader-facing refusal. Nothing was changed when one is thrown. */
@@ -421,34 +424,6 @@ function assetRowsOf(
   }));
 }
 
-/** Inside a transaction: drop the accepted completion and collection-entry
- * consequences. */
-async function writeConsequences(
-  consequences: readonly ChapterConsequence[],
-  updatedAt: string,
-): Promise<void> {
-  for (const consequence of consequences) {
-    if (consequence.kind === "completion") await db.completions.delete(consequence.id);
-  }
-  const byCollection = new Map<string, Set<string>>();
-  for (const item of consequences) {
-    if (item.kind !== "collection-entry") continue;
-    const set = byCollection.get(item.collectionId) ?? new Set<string>();
-    set.add(item.entryId);
-    byCollection.set(item.collectionId, set);
-  }
-  for (const [id, removed] of byCollection) {
-    const before = CollectionSchema.parse(await db.collections.get(id));
-    await db.collections.put({
-      ...before,
-      entries: before.entries.filter((entry) => !removed.has(entry.id)),
-      updatedAt,
-    });
-    const active = await db.collectionActiveEntries.get(id);
-    if (active && removed.has(active.entryId)) await db.collectionActiveEntries.delete(id);
-  }
-}
-
 /** Inside a transaction: write one planned revision, its re-anchored
  * position and its replacement assets. `row` adds stored-only fields (the
  * denormalized chapter `bookId` index). */
@@ -501,7 +476,7 @@ export async function applyReprocess(
         throw new ReprocessRefusal(STALE_PREVIEW);
       if (preview.consequences.length > 0 && options.acceptConsequences !== true)
         throw new ReprocessRefusal(ACCEPTANCE_REQUIRED);
-      await writeConsequences(preview.consequences, createdAt);
+      await writeChapterConsequences(preview.consequences, createdAt);
       await writeRevision(preview, assetRows, createdAt);
     },
   );
@@ -763,7 +738,7 @@ export async function applyBookReprocess(
         );
       if (preview.consequences.length > 0 && options.acceptConsequences !== true)
         throw new ReprocessRefusal(ACCEPTANCE_REQUIRED);
-      await writeConsequences(
+      await writeChapterConsequences(
         preview.consequences.filter((c): c is ChapterConsequence => c.kind !== "chapter-removed"),
         createdAt,
       );

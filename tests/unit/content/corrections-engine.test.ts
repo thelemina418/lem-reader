@@ -26,6 +26,8 @@ import {
   normalizeText,
 } from "../../../src/content/normalizeText";
 import { isSameText, textStamp } from "../../../src/content/sameText";
+import { resolveWorkStructure } from "../../../src/content/chapterTargets";
+import { deriveWorkStructure } from "../../../src/content/structure";
 
 const paragraph = (text: string): Block => ({ kind: "paragraph", content: [{ text, marks: [] }] });
 const heading = (level: 2 | 3, text: string): Block => ({
@@ -133,10 +135,10 @@ describe("hide", () => {
     expect(isSameText(textStamp(result.article), result.article)).toBe(true);
   });
 
-  it("drops the original's frozen work structure from the corrected article", () => {
+  it("never carries the original's frozen work structure onto the corrected article", () => {
     const article = { ...chrome(), structure: { frozen: true } as never };
     const result = applyCorrections(article, [hide(article, [2])]);
-    expect("structure" in result.article).toBe(false);
+    expect(result.article.structure).not.toEqual({ frozen: true });
   });
 
   it("hides a trailing block so the main text ends earlier", () => {
@@ -342,20 +344,11 @@ describe("validity rules", () => {
     });
   });
 
-  it("refuses (for now) to hide a heading or a block holding a highlight", () => {
+  it("offers hiding a heading or a highlighted block (the consequences step asks first)", () => {
     const article = chrome();
     const result = applyCorrections(article, []);
-    expect(hideAvailability(result, result.view.blocks[0]!)).toEqual({
-      available: false,
-      reason: REASONS.heading,
-    });
-    const share = result.view.blocks[2]!;
-    expect(
-      hideAvailability(result, share, {
-        highlights: [{ start: share.readingStart! + 1, end: share.readingStart! + 3 }],
-      }),
-    ).toEqual({ available: false, reason: REASONS.highlight });
-    expect(hideAvailability(result, share)).toEqual({ available: true });
+    expect(hideAvailability(result, result.view.blocks[0]!)).toEqual({ available: true });
+    expect(hideAvailability(result, result.view.blocks[2]!)).toEqual({ available: true });
   });
 
   it("refuses a figure with no text to find it by", () => {
@@ -365,6 +358,72 @@ describe("validity rules", () => {
       available: false,
       reason: REASONS.noText,
     });
+  });
+});
+
+describe("chapters of the corrected article", () => {
+  // Three chapters; site chrome sits inside the first.
+  const book = () =>
+    makeArticle([
+      paragraph("A short preface."),
+      heading(2, "Morning the ferry"),
+      paragraph("The ferry leaves at dawn."),
+      paragraph("Share this article"),
+      heading(2, "Noon"),
+      paragraph("Gulls follow it out past the breakwater."),
+      heading(2, "Evening"),
+      paragraph("The lamps come on along the quay."),
+    ]);
+  const chapters = (article: CanonicalArticle) =>
+    resolveWorkStructure(article)!.destinations.filter((d) => d.kind === "chapter");
+
+  it("keeps every unchanged chapter's identity and title when a paragraph is hidden", () => {
+    const article = book();
+    const result = applyCorrections(article, [hide(article, [3])]);
+    const before = chapters(article);
+    const after = chapters(result.article);
+    expect(after.map((c) => [c.id, c.title])).toEqual(before.map((c) => [c.id, c.title]));
+    // The ranges are the corrected article's own (the structure validates
+    // against the text the reader reads).
+    expect(after[1]!.startOffset).toBeLessThan(before[1]!.startOffset);
+  });
+
+  it("keeps the publisher's chapter titles captured at ingest", () => {
+    const plain = book();
+    const structure = deriveWorkStructure({ ...plain, provenanceTitle: plain.provenance.title }, [
+      "Morning: the ferry",
+      "Noon",
+      "Evening",
+    ])!;
+    const article = { ...plain, structure };
+    expect(chapters(article).map((c) => c.title)).toEqual([
+      "Morning: the ferry",
+      "Noon",
+      "Evening",
+    ]);
+    const result = applyCorrections(article, [hide(article, [3])]);
+    expect(chapters(result.article).map((c) => [c.title, c.titleSource])).toEqual([
+      ["Morning: the ferry", "publisher"],
+      ["Noon", "publisher"],
+      ["Evening", "publisher"],
+    ]);
+  });
+
+  it("removes a hidden heading's chapter and keeps the others", () => {
+    const article = book();
+    const before = chapters(article);
+    const result = applyCorrections(article, [hide(article, [4])]);
+    expect(chapters(result.article).map((c) => [c.id, c.title])).toEqual([
+      [before[0]!.id, "Morning the ferry"],
+      [before[2]!.id, "Evening"],
+    ]);
+  });
+
+  it("is the original structure again after unhiding", () => {
+    const article = book();
+    const hidden = [hide(article, [4])];
+    const result = applyCorrections(article, [...hidden, unhide(article, [4], hidden)]);
+    expect(resolveWorkStructure(result.article)).toEqual(resolveWorkStructure(article));
   });
 });
 

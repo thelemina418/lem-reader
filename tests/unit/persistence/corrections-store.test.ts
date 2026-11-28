@@ -317,3 +317,219 @@ describe("reading the corrections list", () => {
     expect((await loadAllCorrections()).size).toBe(0);
   });
 });
+
+// ── Issue #72 — consequences before applying ────────────────────────────────
+
+const heading2 = (text: string) => ({
+  kind: "heading" as const,
+  level: 2 as const,
+  content: [{ text, marks: [] }],
+});
+
+// A chaptered work with chrome inside its first chapter.
+const work = ArticleSchema.parse({
+  ...saved,
+  id: "harbour-work",
+  blocks: [
+    heading2("Morning"),
+    para("The ferry leaves at dawn, before the fog lifts."),
+    para("Share this article"),
+    heading2("Noon"),
+    para("Gulls follow it out past the breakwater and back."),
+    heading2("Evening"),
+    para("The lamps come on along the quay."),
+  ],
+});
+
+const STAMP = "2026-11-01T00:00:00.000Z";
+
+async function chapterIds() {
+  const { resolveWorkStructure } = await import("../../../src/content/chapterTargets");
+  return resolveWorkStructure(work)!
+    .destinations.filter((d) => d.kind === "chapter")
+    .map((d) => d.id);
+}
+
+/** Completions for Noon and Evening; a collection holding both, with Noon active. */
+async function seedWork() {
+  const { db } = await import("../../../src/persistence/db");
+  await db.articles.put(work);
+  const [, noon, evening] = await chapterIds();
+  const target = (destinationId: string) => ({
+    kind: "work-chapter" as const,
+    articleId: work.id,
+    destinationId: destinationId!,
+  });
+  for (const id of [noon!, evening!]) {
+    await db.completions.put({
+      schemaVersion: 1,
+      targetKey: `work-chapter:${work.id}/${id}`,
+      target: target(id),
+      finished: true,
+      source: "reader",
+      updatedAt: STAMP,
+    });
+  }
+  await db.collections.put({
+    schemaVersion: 1,
+    id: "harbour-plan",
+    name: "Harbour plan",
+    entries: [
+      { id: "e-noon", target: target(noon!), addedAt: STAMP },
+      { id: "e-evening", target: target(evening!), addedAt: STAMP },
+    ],
+    createdAt: STAMP,
+    updatedAt: STAMP,
+  });
+  await db.collectionActiveEntries.put({
+    schemaVersion: 1,
+    collectionId: "harbour-plan",
+    entryId: "e-noon",
+    updatedAt: STAMP,
+  });
+  return { db, noon: noon!, evening: evening! };
+}
+
+function workHide(path: number[]): Correction {
+  const result = applyCorrections(work, []);
+  const block = result.view.allBlocks.find((b) => b.path.join(".") === path.join("."))!;
+  return blockCorrection("hide", result, block, {
+    id: `hide-${path.join(".")}`,
+    createdAt: "2026-11-27T10:00:00.000Z",
+  })!;
+}
+
+describe("a correction with consequences", () => {
+  it("reports a highlight in a hidden block by its words, as hidden while the block is hidden", async () => {
+    const db = await seed();
+    const { previewAddCorrection } = await store();
+    const before = JSON.stringify(await db.highlights.toArray());
+    const preview = await previewAddCorrection(saved.id, hideOf([2]));
+    expect(preview.highlights).toEqual([
+      { highlightId: "h-gulls", exact: "past the breakwater", outcome: "hidden" },
+    ]);
+    expect(preview.chapters).toEqual([]);
+    expect(preview.clean).toBe(false);
+    expect(await db.corrections.count()).toBe(0);
+    expect(JSON.stringify(await db.highlights.toArray())).toBe(before);
+  });
+
+  it("is refused without the reader's acceptance and changes nothing", async () => {
+    const db = await seed();
+    const { previewAddCorrection, applyCorrectionsChange, ACCEPTANCE_REQUIRED } = await store();
+    const preview = await previewAddCorrection(saved.id, hideOf([2]));
+    await expect(applyCorrectionsChange(preview)).rejects.toThrow(ACCEPTANCE_REQUIRED);
+    expect(await db.corrections.count()).toBe(0);
+  });
+
+  it("applies once accepted, leaving the hidden highlight's record untouched until unhide", async () => {
+    const db = await seed();
+    const { previewAddCorrection, applyCorrectionsChange, previewCorrectionsChange } =
+      await store();
+    const hide = hideOf([2]);
+    await applyCorrectionsChange(await previewAddCorrection(saved.id, hide), {
+      acceptConsequences: true,
+    });
+    expect(await db.highlights.get("h-gulls")).toEqual(gulls);
+    const result = applyCorrections(saved, [hide]);
+    const unhide = blockCorrection("unhide", result, result.view.blocks[2]!, {
+      id: "unhide-2",
+      createdAt: "2026-11-27T10:01:00.000Z",
+    })!;
+    // Unhiding has no consequence: the highlight simply matches again.
+    const back = await previewCorrectionsChange(saved.id, [hide, unhide]);
+    expect(back.clean).toBe(true);
+    await applyCorrectionsChange(back);
+    expect((await db.highlights.get("h-gulls"))!.position).toEqual(gulls.position);
+  });
+
+  it("carries unchanged chapters over: hiding a paragraph has no chapter consequence", async () => {
+    const { db } = await seedWork();
+    const { previewAddCorrection, applyCorrectionsChange } = await store();
+    const before = {
+      completions: await db.completions.toArray(),
+      collections: await db.collections.toArray(),
+    };
+    const preview = await previewAddCorrection(work.id, workHide([2]));
+    expect(preview.chapters).toEqual([]);
+    expect(preview.clean).toBe(true);
+    await applyCorrectionsChange(preview);
+    expect(await db.completions.toArray()).toEqual(before.completions);
+    expect(await db.collections.toArray()).toEqual(before.collections);
+  });
+
+  it("names exactly the hidden heading's chapter completion and collection entries", async () => {
+    const { noon } = await seedWork();
+    const { previewAddCorrection } = await store();
+    const preview = await previewAddCorrection(work.id, workHide([3]));
+    expect(preview.clean).toBe(false);
+    expect(preview.chapters).toEqual([
+      {
+        kind: "completion",
+        id: `work-chapter:${work.id}/${noon}`,
+        label: `Remove finished status for chapter “Noon” (${noon}).`,
+      },
+      {
+        kind: "collection-entry",
+        collectionId: "harbour-plan",
+        entryId: "e-noon",
+        label: `Remove chapter “Noon” (${noon}), entry e-noon, from “Harbour plan”; it cannot be redirected to a different chapter.`,
+      },
+    ]);
+  });
+
+  it("writes the correction and the accepted chapter changes in one transaction", async () => {
+    const { db, evening } = await seedWork();
+    const { previewAddCorrection, applyCorrectionsChange, loadCorrections } = await store();
+    const hide = workHide([3]);
+    const preview = await previewAddCorrection(work.id, hide);
+    await applyCorrectionsChange(preview, { acceptConsequences: true });
+    expect(await loadCorrections(work.id)).toEqual([hide]);
+    expect((await db.completions.toArray()).map((c) => c.targetKey)).toEqual([
+      `work-chapter:${work.id}/${evening}`,
+    ]);
+    expect((await db.collections.get("harbour-plan"))!.entries.map((e) => e.id)).toEqual([
+      "e-evening",
+    ]);
+    expect(await db.collectionActiveEntries.get("harbour-plan")).toBeUndefined();
+  });
+
+  it("is atomic: a failed write leaves corrections, completions and collections as they were", async () => {
+    const { db } = await seedWork();
+    const { previewAddCorrection, applyCorrectionsChange } = await store();
+    const before = {
+      completions: await db.completions.toArray(),
+      collections: await db.collections.toArray(),
+      active: await db.collectionActiveEntries.toArray(),
+    };
+    const preview = await previewAddCorrection(work.id, workHide([3]));
+    const put = db.corrections.put.bind(db.corrections);
+    db.corrections.put = (() =>
+      Promise.reject(new Error("disk full"))) as unknown as typeof db.corrections.put;
+    try {
+      await expect(applyCorrectionsChange(preview, { acceptConsequences: true })).rejects.toThrow();
+    } finally {
+      db.corrections.put = put;
+    }
+    expect(await db.corrections.count()).toBe(0);
+    expect(await db.completions.toArray()).toEqual(before.completions);
+    expect(await db.collections.toArray()).toEqual(before.collections);
+    expect(await db.collectionActiveEntries.toArray()).toEqual(before.active);
+  });
+
+  it("refuses an accepted preview once the library changed underneath it", async () => {
+    const { db } = await seedWork();
+    const { previewAddCorrection, applyCorrectionsChange, STALE_PREVIEW } = await store();
+    const preview = await previewAddCorrection(work.id, workHide([3]));
+    // A new collection entry for the same chapter the reader hasn't seen.
+    const row = (await db.collections.get("harbour-plan"))!;
+    await db.collections.put({
+      ...row,
+      entries: [...row.entries, { ...row.entries[0]!, id: "e-noon-2" }],
+    });
+    await expect(applyCorrectionsChange(preview, { acceptConsequences: true })).rejects.toThrow(
+      STALE_PREVIEW,
+    );
+    expect(await db.corrections.count()).toBe(0);
+  });
+});

@@ -1756,6 +1756,43 @@ dialog.wipe-confirm {
    text; forced-colors safety — UI-SPEC §Color contrast contract line 290).
    The confirm-dialog gate stands. */
 
+/* ── Correction consequences alertdialog (spec #68 / #72) ────────────────── */
+/* Structural clone of .wipe-confirm: centered native modal, Cancel first in
+   focus. The lists are the Reprocessing preview's (shared checklist). */
+dialog.correction-consequences {
+  margin: auto;
+  padding: 0;
+  width: calc(100vw - var(--space-xl));
+  max-width: 560px;
+  overflow: auto;
+}
+.correction-consequences-inner {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-md);
+  padding: var(--space-lg);
+}
+.correction-consequences-inner :is(p, ul, h3) {
+  margin: 0;
+}
+.correction-consequences-inner p {
+  color: var(--ink-soft);
+  line-height: 1.5;
+}
+.correction-consequences-inner ul {
+  padding-inline-start: var(--space-lg);
+  line-height: 1.5;
+  overflow-wrap: anywhere;
+}
+.correction-consequences-inner label {
+  display: flex;
+  gap: var(--space-sm);
+  align-items: baseline;
+}
+.correction-consequences-error {
+  color: var(--destructive);
+}
+
 /* ── AddDialog — the focused Add-to-library modal (Plan 16-02/16-03) ──────── */
 /* Stable source selection and footer preserve orientation between inputs. */
 dialog.add-dialog {

@@ -2,8 +2,8 @@
 // Spec #68 / issue #71 — the first correction end to end (seam 3). The
 // reader hides a block of site chrome in the Correction view: it is gone
 // from paged and scrolling reading, stays in the view dimmed and labelled
-// "Hidden", and Unhide brings it back exactly. Hide is unavailable, with a
-// reason, on a heading. Each change is announced in the status region.
+// "Hidden", and Unhide brings it back exactly. A hide with no consequences
+// applies with no dialog (#72). Each change is announced in the status region.
 import { test, expect, type Page } from "@playwright/test";
 import { modeToggle, switchMode, wipeDatabase } from "../annotations/_fixtures";
 import { seedStoreRows } from "../library/seedStoreRows";
@@ -83,6 +83,8 @@ test.describe("Hide and unhide a block (#71)", () => {
     );
     await page.keyboard.press("x");
     await expect(page.getByRole("status").filter({ hasText: "Paragraph hidden." })).toHaveCount(1);
+    // No consequences → applied at once, never a dialog (#72).
+    await expect(page.getByRole("alertdialog")).toHaveCount(0);
     // Still in the view, dimmed and labelled — never deleted.
     await expect(chrome).toHaveAttribute("data-hidden", "true");
     await expect(chrome).toHaveAttribute("aria-label", "Paragraph, hidden");
@@ -136,23 +138,5 @@ test.describe("Hide and unhide a block (#71)", () => {
     await page.keyboard.press("c");
     await expect(view(page)).toBeHidden();
     await expect(readingText(page)).toContainText(CHROME);
-  });
-
-  test("hide is unavailable on a heading, with a reason, and changes nothing", async ({ page }) => {
-    await openReader(page);
-    await page.keyboard.press("c");
-    await expect(view(page)).toBeVisible();
-    const heading = frameFor(page, "Leaving port");
-    await heading.focus();
-    const button = page.getByRole("button", { name: /Hide block/ });
-    await expect(button).toHaveAttribute("aria-disabled", "true");
-    await expect(page.locator(".correction-commands-reason")).toHaveText(
-      /Headings can't be hidden yet/,
-    );
-    await page.keyboard.press("x");
-    await expect(
-      page.getByRole("status").filter({ hasText: /Headings can't be hidden yet/ }),
-    ).toHaveCount(1);
-    await expect(heading).not.toHaveAttribute("data-hidden", "true");
   });
 });
