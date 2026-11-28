@@ -161,6 +161,12 @@ import {
   REASONS as CORRECTION_REASONS,
 } from "../content/corrections/engine";
 import { storedOffsetInShown } from "../content/corrections/positions";
+import {
+  BLOCK_TYPE_CHOICES,
+  blockTypeChoiceLabel,
+  setTypeAvailability,
+  setTypeCorrection,
+} from "../content/corrections/setType";
 import type { Correction } from "../content/schema";
 import {
   applyCorrectionsChange,
@@ -174,6 +180,7 @@ import {
   CorrectionView,
   type BlockCommand,
   type CorrectionViewHandle,
+  type TypeChoiceCommand,
 } from "../reader/CorrectionView";
 import { SelectionToolbar } from "../reader/annotations/SelectionToolbar";
 // Shared annotation panel for passage and drawer entry.
@@ -1869,19 +1876,17 @@ export function ArticleView({
     },
     [correctionsResult],
   );
+  // One pending correction at a time, whatever its kind: the dialog's
+  // title and confirm label, and what the status region says once applied.
   const [pendingCorrection, setPendingCorrection] = useState<{
     preview: CorrectionsPreview;
-    block: CorrectionViewBlock;
-    action: BlockCommand["action"];
+    title: string;
+    confirmLabel: string;
+    announcement: string;
   } | null>(null);
   const [pendingCorrectionError, setPendingCorrectionError] = useState("");
   const commitCorrection = useCallback(
-    async (
-      preview: CorrectionsPreview,
-      block: CorrectionViewBlock,
-      action: BlockCommand["action"],
-      acceptConsequences: boolean,
-    ) => {
+    async (preview: CorrectionsPreview, announcement: string, acceptConsequences: boolean) => {
       await applyCorrectionsChange(preview, { acceptConsequences });
       // A paused read-aloud holds chunks in the old text's coordinates:
       // end it, so the reader's next Play speaks the corrected article
@@ -1889,11 +1894,7 @@ export function ArticleView({
       stopReadAloud();
       setCorrections(preview.corrections);
       invalidateLibrarySnapshot();
-      setCorrectionAnnouncement(
-        action === "hide"
-          ? `${block.label} hidden. It stays here, dimmed; press X to unhide it.`
-          : `${block.label} unhidden.`,
-      );
+      setCorrectionAnnouncement(announcement);
     },
     [stopReadAloud],
   );
@@ -1901,6 +1902,30 @@ export function ArticleView({
     error instanceof CorrectionsRefusal
       ? error.message
       : "The correction couldn't be saved. Nothing was changed.";
+  /** Preview a correction; apply it at once when clean, else ask first. */
+  const proposeCorrection = useCallback(
+    async (
+      correction: Correction,
+      copy: { title: string; confirmLabel: string; announcement: string },
+    ) => {
+      if (!originalArticle) return;
+      setCorrectionBusy(true);
+      try {
+        const preview = await previewAddCorrection(originalArticle.id, correction);
+        if (!preview.clean) {
+          setPendingCorrectionError("");
+          setPendingCorrection({ preview, ...copy });
+          return;
+        }
+        await commitCorrection(preview, copy.announcement, false);
+      } catch (error) {
+        setCorrectionAnnouncement(correctionFailure(error));
+      } finally {
+        setCorrectionBusy(false);
+      }
+    },
+    [originalArticle, commitCorrection],
+  );
   const handleCorrectionCommand = useCallback(
     async (block: CorrectionViewBlock, command: BlockCommand) => {
       if (!command.available) {
@@ -1916,29 +1941,69 @@ export function ArticleView({
         setCorrectionAnnouncement(CORRECTION_REASONS.noText);
         return;
       }
-      setCorrectionBusy(true);
-      try {
-        const preview = await previewAddCorrection(originalArticle.id, correction);
-        if (!preview.clean) {
-          setPendingCorrectionError("");
-          setPendingCorrection({ preview, block, action: command.action });
-          return;
-        }
-        await commitCorrection(preview, block, command.action, false);
-      } catch (error) {
-        setCorrectionAnnouncement(correctionFailure(error));
-      } finally {
-        setCorrectionBusy(false);
-      }
+      const hiding = command.action === "hide";
+      await proposeCorrection(correction, {
+        title: hiding ? "Hide this block?" : "Unhide this block?",
+        confirmLabel: hiding ? "Hide block" : "Unhide block",
+        announcement: hiding
+          ? `${block.label} hidden. It stays here, dimmed; press X to unhide it.`
+          : `${block.label} unhidden.`,
+      });
     },
-    [originalArticle, correctionsResult, commitCorrection],
+    [originalArticle, correctionsResult, proposeCorrection],
+  );
+  // Issue #74 — Change type: every choice with the engine's availability
+  // (one place for "unavailable because…"); a choice goes through the same
+  // preview → consequences → apply path as Hide.
+  const correctionTypeChoicesFor = useCallback(
+    (block: CorrectionViewBlock): readonly TypeChoiceCommand[] =>
+      BLOCK_TYPE_CHOICES.map(({ to, label }) => {
+        if (!correctionsResult) return { to, label, available: false };
+        const availability = setTypeAvailability(correctionsResult, block, to);
+        return availability.available
+          ? { to, label, available: true }
+          : { to, label, available: false, reason: availability.reason };
+      }),
+    [correctionsResult],
+  );
+  const handleChangeType = useCallback(
+    async (block: CorrectionViewBlock, choice: TypeChoiceCommand) => {
+      if (!choice.available) {
+        setCorrectionAnnouncement(choice.reason ?? "That isn't available here.");
+        return;
+      }
+      if (!originalArticle || !correctionsResult) return;
+      const correction = setTypeCorrection(correctionsResult, block, choice.to, {
+        id: crypto.randomUUID(),
+        createdAt: new Date().toISOString(),
+      });
+      if (!correction) {
+        setCorrectionAnnouncement(CORRECTION_REASONS.noText);
+        return;
+      }
+      const label = blockTypeChoiceLabel(choice.to);
+      const announcement =
+        choice.to.type === "caption"
+          ? `${block.label} is now the figure's caption.`
+          : block.label === "Quotation" && choice.to.type === "paragraph"
+            ? "The quotation's blocks are ordinary blocks again."
+            : block.label.startsWith("Figure") && choice.to.type === "paragraph"
+              ? "The caption is now a paragraph after the figure."
+              : `${block.label} is now ${choice.to.type === "quotation" ? "a quotation" : label}.`;
+      await proposeCorrection(correction, {
+        title: `Change this block to ${label}?`,
+        confirmLabel: `Change to ${label}`,
+        announcement,
+      });
+    },
+    [originalArticle, correctionsResult, proposeCorrection],
   );
   const handleConfirmPendingCorrection = useCallback(async () => {
     if (!pendingCorrection) return;
-    const { preview, block, action } = pendingCorrection;
+    const { preview, announcement } = pendingCorrection;
     setCorrectionBusy(true);
     try {
-      await commitCorrection(preview, block, action, true);
+      await commitCorrection(preview, announcement, true);
       setPendingCorrection(null);
     } catch (error) {
       setPendingCorrectionError(correctionFailure(error));
@@ -3872,16 +3937,14 @@ export function ArticleView({
                 entryOffset={correctionEntry.viewOffset}
                 commandFor={correctionCommandFor}
                 onCommand={handleCorrectionCommand}
+                typeChoicesFor={correctionTypeChoicesFor}
+                onChangeType={(block, choice) => void handleChangeType(block, choice)}
                 busy={correctionBusy || pendingCorrection !== null}
               />
               <CorrectionConsequencesDialog
                 preview={pendingCorrection?.preview ?? null}
-                title={
-                  pendingCorrection?.action === "unhide" ? "Unhide this block?" : "Hide this block?"
-                }
-                confirmLabel={
-                  pendingCorrection?.action === "unhide" ? "Unhide block" : "Hide block"
-                }
+                title={pendingCorrection?.title ?? ""}
+                confirmLabel={pendingCorrection?.confirmLabel ?? ""}
                 busy={correctionBusy}
                 error={pendingCorrectionError}
                 onConfirm={() => void handleConfirmPendingCorrection()}

@@ -15,6 +15,7 @@
 // everything untouched.
 import { useEffect, useRef, useState } from "react";
 import { ConsequenceChecklist } from "../ingestion/library/reprocessParts";
+import type { DroppedMark } from "../content/corrections/engine";
 import type {
   CorrectionHighlightOutcome,
   CorrectionsPreview,
@@ -26,6 +27,16 @@ const OUTCOME_COPY: Record<CorrectionHighlightOutcome, string> = {
   ambiguous: "ambiguous — it will be shown as needing your attention",
   orphan: "orphaned — it will be shown as orphaned, never moved",
 };
+
+/** Issue #74 — a dropped mark in words. */
+const MARK_COPY: Record<DroppedMark["mark"], string> = {
+  link: "Link",
+  em: "Emphasis",
+  strong: "Bold",
+  code: "Code formatting",
+};
+
+const quoted = (text: string) => `“${text.length > 120 ? `${text.slice(0, 120)}…` : text}”`;
 
 interface CorrectionConsequencesDialogProps {
   /** The preview to confirm; null = closed. */
@@ -102,6 +113,8 @@ export function CorrectionConsequencesDialog({
 
   const highlights = preview?.highlights.filter((h) => h.outcome !== "confident") ?? [];
   const chapters = preview?.chapters ?? [];
+  const contents = preview?.contents ?? [];
+  const droppedMarks = preview?.droppedMarks ?? [];
   const ready = accepted.size === chapters.length;
 
   return (
@@ -117,8 +130,8 @@ export function CorrectionConsequencesDialog({
         <div className="correction-consequences-inner">
           <h2 id="correction-consequences-title">{title}</h2>
           <p id="correction-consequences-body">
-            This correction affects your reading data. Nothing changes unless you confirm, and you
-            can undo the correction later.
+            This correction changes more than the block itself. Nothing changes unless you confirm,
+            and you can undo the correction later.
           </p>
           {highlights.length > 0 && (
             <>
@@ -126,8 +139,32 @@ export function CorrectionConsequencesDialog({
               <ul aria-label="Highlights after this correction">
                 {highlights.map((h) => (
                   <li key={h.highlightId}>
-                    “{h.exact.length > 120 ? `${h.exact.slice(0, 120)}…` : h.exact}” —{" "}
-                    {OUTCOME_COPY[h.outcome]}
+                    {quoted(h.exact)} — {OUTCOME_COPY[h.outcome]}
+                  </li>
+                ))}
+              </ul>
+            </>
+          )}
+          {contents.length > 0 && (
+            <>
+              <h3>Contents</h3>
+              <ul aria-label="Contents after this correction">
+                {contents.map((c, i) => (
+                  <li key={i}>
+                    {c.change === "added" ? "Adds" : "Removes"} chapter {quoted(c.title)}
+                  </li>
+                ))}
+              </ul>
+            </>
+          )}
+          {droppedMarks.length > 0 && (
+            <>
+              <h3>Formatting</h3>
+              <p>A code block holds plain text only, so this formatting will be dropped:</p>
+              <ul aria-label="Formatting dropped">
+                {droppedMarks.map((m, i) => (
+                  <li key={i}>
+                    {MARK_COPY[m.mark]} on {quoted(m.text)}
                   </li>
                 ))}
               </ul>
