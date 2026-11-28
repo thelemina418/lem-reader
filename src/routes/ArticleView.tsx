@@ -1897,6 +1897,10 @@ export function ArticleView({
           return;
         }
         await applyCorrectionsChange(preview);
+        // A paused read-aloud holds chunks in the old text's coordinates:
+        // end it, so the reader's next Play speaks the corrected article
+        // from their place (spec #68 story 9).
+        stopReadAloud();
         setCorrections(preview.corrections);
         invalidateLibrarySnapshot();
         setCorrectionAnnouncement(
@@ -1914,7 +1918,7 @@ export function ArticleView({
         setCorrectionBusy(false);
       }
     },
-    [originalArticle, correctionsResult],
+    [originalArticle, correctionsResult, stopReadAloud],
   );
   useEffect(() => {
     if (!correctionToggleHandlerRef) return;

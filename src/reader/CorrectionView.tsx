@@ -44,7 +44,6 @@ import {
   type CorrectionViewBlock,
   type CorrectionViewModel,
 } from "../content/correctionView";
-import { findScrollTarget, queryBlocks } from "./restoreLocation";
 import { isFormField } from "./PageTurnControls";
 
 /** Header band height — the same line the reading anchors measure from. */
@@ -135,13 +134,16 @@ export const CorrectionView = forwardRef<CorrectionViewHandle, CorrectionViewPro
       ? model.viewOffsetFor
       : undefined;
 
-    const blockAt = useCallback(
+    // The top-level frame holding a view offset — from the model, never
+    // from DOM text (the frames' type labels are text the article lacks).
+    const frameAt = useCallback(
       (offset: number): HTMLElement | null => {
         const root = bodyRef.current;
-        if (!root) return null;
-        return findScrollTarget(article, queryBlocks(root), offset);
+        if (!root || blocks.length === 0) return null;
+        const block = blocks.find((b) => offset <= b.viewEnd) ?? blocks[blocks.length - 1]!;
+        return root.querySelector<HTMLElement>(`[data-correction-id="${block.id}"]`);
       },
-      [article],
+      [blocks],
     );
 
     // Land the entry passage under the header and give it focus, before
@@ -149,8 +151,7 @@ export const CorrectionView = forwardRef<CorrectionViewHandle, CorrectionViewPro
     const readerFocusedRef = useRef(false);
     const entryFrameRef = useRef<HTMLElement | null>(null);
     useLayoutEffect(() => {
-      const target = blockAt(entryOffset);
-      const landed = frameOf(target);
+      const landed = frameAt(entryOffset);
       entryFrameRef.current = landed;
       if (!landed) return;
       const top = landed.getBoundingClientRect().top + window.scrollY - LANDING_LINE_PX;
