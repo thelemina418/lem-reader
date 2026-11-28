@@ -40,6 +40,7 @@ import {
   seedRows,
   settingsStatus,
 } from "./_portability";
+import { BUNDLE_WRITER_VERSION } from "../../../src/portability/bundle";
 
 const ARTICLE_ID = "article-note-rt-e2e";
 const NOTE_ID = "article-note-rt-e2e-1";
@@ -107,7 +108,7 @@ test.describe("article notes ride the export/import workflow (issue #211)", () =
 
     // ── Node-side envelope inspection ─────────────────────────────────────
     const { bundle: bundleJson } = readBundleJson(bundlePath!);
-    expect(bundleJson.schemaVersion).toBe(11); // #41 moved the writer version
+    expect(bundleJson.schemaVersion).toBe(BUNDLE_WRITER_VERSION); // #41 moved the writer version
     const exportedNotes = bundleJson.articleNotes as Array<Record<string, unknown>>;
     expect(exportedNotes).toHaveLength(1);
     // Identity, timestamps, plain text, tags, and the article association —

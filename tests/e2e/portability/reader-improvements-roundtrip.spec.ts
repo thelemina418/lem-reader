@@ -40,6 +40,7 @@ import {
   seedRows,
   settingsStatus,
 } from "./_portability";
+import { BUNDLE_WRITER_VERSION } from "../../../src/portability/bundle";
 
 const DATED_ARTICLE = ArticleSchema.parse({
   ...makeArticle({
@@ -201,7 +202,7 @@ test("RI-RT — reader-improvements fields survive the real export → import jo
 
     // ── Node-side: the v6 writer carries every new field verbatim ─────────
     const { bundle } = readBundleJson(bundlePath!);
-    expect(bundle.schemaVersion).toBe(11); // #41 moved the writer version
+    expect(bundle.schemaVersion).toBe(BUNDLE_WRITER_VERSION); // #41 moved the writer version
     // The export orders subscriptions by feedUrl — compare as an id-keyed
     // map so the assertion is order-independent.
     expect(

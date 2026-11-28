@@ -633,6 +633,14 @@ export function SettingsPanel({ open, onClose }: SettingsPanelProps) {
           "collections",
         )} ${plan.localCollectionsBrokenByImport === 1 ? "now points" : "now point"} at readings this import changed.`;
       }
+      // Spec #68 / #77 — imported corrections that don't fit their winning
+      // original are kept as not applied (the engine gives each its reason),
+      // never stripped — and admitted here.
+      if (plan.correctionsNotApplied > 0) {
+        message += ` ${counted(plan.correctionsNotApplied, "correction", "corrections")} didn't fit and ${
+          plan.correctionsNotApplied === 1 ? "was" : "were"
+        } kept as not applied.`;
+      }
       setDataMessage(message);
     } catch {
       // The Dexie transaction rolled back — local data is unchanged.

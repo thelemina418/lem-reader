@@ -34,6 +34,8 @@ import { loadAllSubscriptions } from "../persistence/subscriptionsStore";
 import { listBooks } from "../persistence/booksStore";
 import { listCollections, sameCollectionTarget } from "../persistence/collectionsStore";
 import { loadAllCompletions } from "../persistence/completionsStore";
+import { loadAllCorrections } from "../persistence/correctionsStore";
+import { applyCorrections } from "../content/corrections/engine";
 import { db } from "../persistence/db";
 import { normalizeFeedUrl } from "../discover/feedUrl";
 import { bundledFixtures } from "../fixtures";
@@ -55,6 +57,7 @@ import type {
   Collection,
   CollectionActiveEntry,
   CompletionRecord,
+  CorrectionsRecord,
   HighlightRecord,
   LocationRecord,
   NoteRecord,
@@ -481,6 +484,25 @@ export interface ResolvedImportPlan {
    * and the row is never destroyed or rewritten. The breakage is ADMITTED
    * here for the post-import status, never left silent. */
   localCollectionsBrokenByImport: number;
+  /** Spec #68 / issue #77 — the incoming corrections records that follow
+   * their article (no ConflictKind — the assets ride-along precedent):
+   *   - the incoming article is WRITTEN (new or winning) → its incoming
+   *     corrections record replaces the local one with it;
+   *   - the LOCAL article wins and has its own corrections → those stay
+   *     untouched and nothing is written;
+   *   - the local article wins and has NO corrections → the incoming ones
+   *     are adopted on top of the local original (nothing local to lose);
+   *   - the article is nowhere after import → nothing is written.
+   * A bundle without a record for an article never deletes local
+   * corrections (older bundles import unchanged). Every written record is
+   * re-applied to its WINNING original through the engine; corrections
+   * that don't fit are kept, in order — never stripped, never trusted. */
+  correctionsToWrite: CorrectionsRecord[];
+  /** Spec #68 / issue #77 — how many written corrections the engine could
+   * not apply to their winning original (kept as not applied; the engine
+   * gives each its reason). Admitted in the post-import status, never
+   * silent. */
+  correctionsNotApplied: number;
   preferences?: ReaderSettings;
   applyPreferences: boolean;
   starterRemoved?: boolean;
@@ -1171,6 +1193,8 @@ export async function resolveImportPlan(
     completionsToWrite: [],
     collectionActiveEntriesToWrite: [],
     localCollectionsBrokenByImport: 0,
+    correctionsToWrite: [],
+    correctionsNotApplied: 0,
     applyPreferences,
     starterRemoved: bundle.starterRemoved,
     idRewrites: new Map<string, string>(),
@@ -1375,6 +1399,29 @@ export async function resolveImportPlan(
   for (const asset of importAssets) {
     if (ridingArticleIds.has(asset.articleId)) {
       plan.assetsToWrite.push(asset);
+    }
+  }
+
+  // ── Spec #68 / issue #77: corrections follow their article (the rule on
+  // ResolvedImportPlan.correctionsToWrite). Pure planning: the engine is a
+  // pure function, so re-application happens HERE, never inside the
+  // apply transaction. The first record per article wins (an
+  // over-determined bundle never double-writes).
+  if ((bundle.corrections ?? []).length > 0) {
+    const localCorrections = await loadAllCorrections();
+    const writtenById = new Map(plan.articlesToWrite.map((a) => [a.id, a]));
+    const seen = new Set<string>();
+    for (const record of bundle.corrections ?? []) {
+      if (seen.has(record.articleId)) continue;
+      seen.add(record.articleId);
+      const written = writtenById.get(record.articleId);
+      const local = localArticleById.get(record.articleId);
+      const winner =
+        written ?? (local && !localCorrections.has(record.articleId) ? local : undefined);
+      if (winner === undefined) continue;
+      const { outcomes } = applyCorrections(winner, record.corrections);
+      plan.correctionsNotApplied += outcomes.filter((o) => o.status === "not-applied").length;
+      plan.correctionsToWrite.push(record);
     }
   }
 

@@ -31,6 +31,7 @@ import { computeManifest } from "../../../src/portability/manifest";
 import { sampleBundle } from "./bundle-schema.test";
 import fakeIndexedDB, { IDBKeyRange } from "fake-indexeddb";
 import { Dexie } from "dexie";
+import { BUNDLE_WRITER_VERSION } from "../../../src/portability/bundle";
 
 // Dexie 4 captures `indexedDB` + `IDBKeyRange` on `Dexie.dependencies` at
 // dexie-module-load time — the documented Dexie + Node test pattern.
@@ -193,7 +194,7 @@ describe("buildBundle — v5 session emission (issue #37)", () => {
       readingSessions?: ReadingSessionRecord[];
     };
 
-    expect(bundleJson.schemaVersion).toBe(11); // #41 moved the writer version
+    expect(bundleJson.schemaVersion).toBe(BUNDLE_WRITER_VERSION); // #41 moved the writer version
     expect(bundleJson.readingSessions).toEqual(visits);
   });
 
@@ -209,7 +210,7 @@ describe("buildBundle — v5 session emission (issue #37)", () => {
     };
     // The field's presence is the v5 write contract (the books/assets
     // precedent — presence-is-the-contract).
-    expect(bundleJson.schemaVersion).toBe(11); // #41 moved the writer version
+    expect(bundleJson.schemaVersion).toBe(BUNDLE_WRITER_VERSION); // #41 moved the writer version
     expect(bundleJson.readingSessions).toEqual([]);
   });
 
@@ -224,7 +225,7 @@ describe("buildBundle — v5 session emission (issue #37)", () => {
     const result = await validateBundle(new File([new Uint8Array(bytes)], "x.zip"));
     expect(result.ok).toBe(true);
     if (result.ok) {
-      expect(result.bundle.schemaVersion).toBe(11); // #41 moved the writer version
+      expect(result.bundle.schemaVersion).toBe(BUNDLE_WRITER_VERSION); // #41 moved the writer version
       expect(result.bundle.readingSessions).toHaveLength(1);
       expect(result.bundle.readingSessions?.[0]?.id).toBe("visit-a");
     }
@@ -312,7 +313,7 @@ describe("union read + forward refusal (issue #37)", () => {
     expect(v6.success).toBe(true);
     const v12 = ExportBundleSchema.safeParse({
       ...sampleBundle(),
-      schemaVersion: 12,
+      schemaVersion: BUNDLE_WRITER_VERSION + 1,
     });
     expect(v12.success).toBe(false);
   });
@@ -323,7 +324,7 @@ describe("union read + forward refusal (issue #37)", () => {
     // (v9 parses since issue #236 — structure-capable bundles read).
     const damaged: Record<string, unknown> = {
       ...sampleBundle(),
-      schemaVersion: 12,
+      schemaVersion: BUNDLE_WRITER_VERSION + 1,
       articles: "not-an-array",
     };
     const result = await validateBundle(
@@ -336,7 +337,7 @@ describe("union read + forward refusal (issue #37)", () => {
     if (!result.ok) {
       expect(result.refusal).toEqual({
         kind: "newer-schema-version",
-        bundleVersion: 12,
+        bundleVersion: BUNDLE_WRITER_VERSION + 1,
       });
     }
   });

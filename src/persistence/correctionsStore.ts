@@ -80,6 +80,20 @@ export async function loadAllCorrections(): Promise<ReadonlyMap<string, readonly
   return out;
 }
 
+/** Every valid corrections RECORD (articleId, ordered list, updatedAt), for
+ * export (#77). A corrupt row is dropped (STATE-04, never coerced); an
+ * empty list has nothing to carry. Never throws. */
+export async function loadAllCorrectionRecords(): Promise<CorrectionsRecord[]> {
+  try {
+    return (await db.corrections.toArray()).flatMap((row) => {
+      const parsed = CorrectionsRecordSchema.safeParse(row);
+      return parsed.success && parsed.data.corrections.length > 0 ? [parsed.data] : [];
+    });
+  } catch {
+    return [];
+  }
+}
+
 export type CorrectionHighlightOutcome = "confident" | "ambiguous" | "orphan" | "hidden";
 
 export interface CorrectionHighlightConsequence {

@@ -76,6 +76,7 @@ import {
   readBundleJson,
   settingsStatus,
 } from "./_portability";
+import { BUNDLE_WRITER_VERSION } from "../../../src/portability/bundle";
 
 /** The DEV pagination hook's committed shape (corpus-spec precedent). */
 interface PaginationDev {
@@ -222,7 +223,7 @@ test("ACPT-06 — ingest .md, read, highlight, export, re-import: nothing lost a
     // this writer-emit site surfaced in the honest full-suite gate run.)
     const { bundle: bundleJson, entries } = readBundleJson(bundlePath!);
     expect(entries["manifest.json"]).toBeDefined();
-    expect(bundleJson.schemaVersion).toBe(11); // #41 moved the writer version
+    expect(bundleJson.schemaVersion).toBe(BUNDLE_WRITER_VERSION); // #41 moved the writer version
     expect(bundleJson.books).toEqual([]);
     expect((bundleJson.articles as Array<{ id: string }>).map((a) => a.id)).toEqual([articleId]);
 

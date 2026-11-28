@@ -104,6 +104,7 @@ import {
   seedRows,
   settingsStatus,
 } from "./_portability";
+import { BUNDLE_WRITER_VERSION } from "../../../src/portability/bundle";
 
 /** The seeded finished article's discriminating tag (search + chip filter). */
 const SEED_TAG = "harbor-voyage";
@@ -556,7 +557,7 @@ test("ACPT-07 — the v2.1 core flow as one unbroken journey: nothing lost acros
 
     // ── Node side: v5 envelope + the asset entry's byte truth ────────────
     const { bundle: bundleJson, entries } = readBundleJson(bundlePath!);
-    expect(bundleJson.schemaVersion).toBe(11); // #41 moved the writer version
+    expect(bundleJson.schemaVersion).toBe(BUNDLE_WRITER_VERSION); // #41 moved the writer version
     expect((bundleJson.articles as Array<{ id: string }>).map((a) => a.id).sort()).toEqual(
       [articleId, chapterId, FINISHED_ID, UNREAD_ID].sort(),
     );

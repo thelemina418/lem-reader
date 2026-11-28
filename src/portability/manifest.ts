@@ -41,7 +41,8 @@ export type Manifest = {
     | "starterRemoved"
     | "collections"
     | "completions"
-    | "collectionActiveEntries",
+    | "collectionActiveEntries"
+    | "corrections",
     string
   >;
 };
@@ -82,6 +83,11 @@ export type Manifest = {
 // JSON.stringify(bundle.collections ?? []) and twins; v1..v9 claimed
 // manifests predate the keys and are read as the empty-array hash (the
 // articleNotes precedent).
+//
+// Issue #77: the `corrections` block joins on the same shape —
+// JSON.stringify(bundle.corrections ?? []); v1..v11 claimed manifests
+// predate the key and are read as the empty-array hash (the collections
+// precedent).
 
 /** The hash of an ABSENT block — `sha256("[]")`, the single derivation
  * both fallbacks share: computeManifest's `block ?? []` arms and
@@ -112,6 +118,7 @@ export async function computeManifest(bundle: ExportBundle): Promise<Manifest> {
       collections: await entry(bundle.collections ?? []),
       completions: await entry(bundle.completions ?? []),
       collectionActiveEntries: await entry(bundle.collectionActiveEntries ?? []),
+      corrections: await entry(bundle.corrections ?? []),
     },
   };
 }
