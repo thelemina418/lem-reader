@@ -127,6 +127,15 @@ async function importFile(file: File, overrides: Overrides = ALL_SKIP) {
   return plan;
 }
 
+/** The dry-run preview of a bundle file (nothing written). */
+async function previewFile(file: File) {
+  const { validateBundle } = await import("../../../src/portability/ExportImportService");
+  const { detectImportPreview } = await import("../../../src/portability/conflicts");
+  const validated = await validateBundle(file);
+  if (!validated.ok) throw new Error(`bundle refused: ${JSON.stringify(validated.refusal)}`);
+  return detectImportPreview(validated.bundle, []);
+}
+
 /** A hand-built bundle at `schemaVersion` (the corrections block only when given). */
 async function bundleFile(
   schemaVersion: number,
@@ -305,11 +314,17 @@ describe("corrections follow their article", () => {
     const first = [hideOf(incoming, [1])];
     const corrections = [...first, hideOf(incoming, [3], first)];
 
-    const plan = await importFile(
-      await bundleFile(BUNDLE_WRITER_VERSION, [incoming], [incomingRecord(corrections)]),
-    );
+    const file = await bundleFile(BUNDLE_WRITER_VERSION, [incoming], [incomingRecord(corrections)]);
+    // The preview already says how many won't fit (keep-local default).
+    expect((await previewFile(file)).corrections).toEqual({
+      incoming: 2,
+      notApplied: 1,
+      setAside: 0,
+    });
+    const plan = await importFile(file);
 
     expect(plan.correctionsNotApplied).toBe(1);
+    expect(plan.correctionsSetAside).toBe(0);
     expect(await storedArticle(local.id)).toEqual(local);
     // Never stripped: both are kept, in order.
     const kept = await storedCorrections(local.id);
@@ -344,11 +359,21 @@ describe("corrections follow their article", () => {
     const mine = [hideOf(local, [3])];
     await saveCorrections(local.id, mine);
 
-    const plan = await importFile(
-      await bundleFile(BUNDLE_WRITER_VERSION, [article()], [incomingRecord([hideOf(local, [1])])]),
+    const file = await bundleFile(
+      BUNDLE_WRITER_VERSION,
+      [article()],
+      [incomingRecord([hideOf(local, [1])])],
     );
+    // Set aside, and said so: before (preview) and after (the plan's count).
+    expect((await previewFile(file)).corrections).toEqual({
+      incoming: 1,
+      notApplied: 0,
+      setAside: 1,
+    });
+    const plan = await importFile(file);
 
     expect(plan.correctionsToWrite).toEqual([]);
+    expect(plan.correctionsSetAside).toBe(1);
     expect(await storedCorrections(local.id)).toEqual(mine);
   });
 

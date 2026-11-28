@@ -81,6 +81,7 @@ function samplePreview(applyPreferencesDefault: boolean): ImportPreviewData {
     conflictingCollections: 0, // issue #248/#249 — no kept-local conflicts in this base preview
     collectionConflicts: [], // issue #249 — no per-collection choice rows in this base preview
     detachedArticleNotes: 0, // issue #211 — no detached-note skips in this base preview
+    corrections: { incoming: 0, notApplied: 0, setAside: 0 }, // spec #68 — none in this base preview
   };
 }
 
@@ -238,6 +239,34 @@ describe("ImportPreviewDialog — preview copy + override plumbing (D9-11)", () 
     ).toBeTruthy();
   });
 
+  // Spec #68 / issue #77 — the bundle's corrections, admitted up front.
+  it("says how many imported corrections won't fit, and which are set aside", () => {
+    renderDialog({
+      preview: {
+        ...samplePreview(false),
+        corrections: { incoming: 5, notApplied: 2, setAside: 1 },
+      },
+    });
+    expect(
+      screen.getByText("2 corrections won't fit their article and will be kept as not applied."),
+    ).toBeTruthy();
+    expect(
+      screen.getByText(
+        "Corrections for 1 article will be set aside: the copy on this device keeps its own corrections.",
+      ),
+    ).toBeTruthy();
+  });
+
+  it("says nothing about corrections when every one fits", () => {
+    renderDialog({
+      preview: {
+        ...samplePreview(false),
+        corrections: { incoming: 3, notApplied: 0, setAside: 0 },
+      },
+    });
+    expect(screen.queryByText(/correction/i)).toBeNull();
+  });
+
   it("renders no collection warnings when the boundary refused and conflicted nothing", () => {
     renderDialog(); // samplePreview: both counts 0
     expect(screen.queryByText(/collection will be skipped|collections will be skipped/)).toBeNull();
@@ -382,6 +411,7 @@ function sampleMetadataPreview(): ImportPreviewData {
     conflictingCollections: 0, // issue #248
     collectionConflicts: [], // issue #249
     detachedArticleNotes: 0, // issue #211 — no detached-note skips in this preview
+    corrections: { incoming: 0, notApplied: 0, setAside: 0 }, // spec #68
   };
 }
 
