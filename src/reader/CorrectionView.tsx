@@ -15,9 +15,12 @@
 // from reading coordinates into the view's (hidden blocks spend view
 // offsets only).
 //
-// Commands (#71): Hide / Unhide act on the current block — the focused
-// frame (or the last one focused). The X key and the command bar's button
-// run it; an unavailable command says why instead of doing nothing.
+// Commands (#71, #75): Hide / Unhide (X), Split at the caret (S) and Merge
+// with the next block (J) act on the current block — the frame holding the
+// caret, else the focused frame (or the last one focused). Each key and the
+// command bar's buttons run them; an unavailable command says why instead
+// of doing nothing. Split needs a caret: a collapsed selection in the block
+// (or the moving end of a selection — where Shift+arrow keys leave it).
 //
 // Position: the owner passes the entry offset (view coordinates); on mount
 // the view lands that block under the header and focuses it. The owner
@@ -45,6 +48,9 @@ import {
   type CorrectionViewModel,
 } from "../content/correctionView";
 import { isFormField } from "./PageTurnControls";
+import { domPointToIntraBlockGraphemeOffset } from "../annotations/capture";
+import { blockNormalizedText, graphemeClusters } from "../content/normalizeText";
+import type { Block } from "../content/types";
 
 /** Header band height — the same line the reading anchors measure from. */
 const HEADER_PX = 48;
@@ -56,22 +62,32 @@ export interface CorrectionViewHandle {
   captureOffset(): number;
 }
 
+export type BlockAction = "hide" | "unhide" | "split" | "merge";
+
 /** What the command bar offers for a block (computed by the owner). */
 export interface BlockCommand {
-  readonly action: "hide" | "unhide";
+  readonly action: BlockAction;
+  /** The button's words, e.g. "Hide block". */
+  readonly label: string;
+  /** The single-letter shortcut (plain key, no modifiers), e.g. "X". */
+  readonly shortcut: string;
   readonly available: boolean;
   /** Why it is unavailable (shown and announced). */
   readonly reason?: string;
 }
 
+/** The caret inside the current block: an offset into the block's own
+ * normalized text, or null when the caret isn't in it. */
+export type BlockCaret = number | null;
+
 interface CorrectionViewProps {
   model: CorrectionViewModel;
   /** Where the reader was on entry, in view coordinates. */
   entryOffset: number;
-  /** The Hide / Unhide command for a block; absent → no command bar. */
-  commandFor?: (block: CorrectionViewBlock) => BlockCommand;
-  /** Run the command for a block (the owner previews, applies, announces). */
-  onCommand?: (block: CorrectionViewBlock, command: BlockCommand) => void;
+  /** The block commands for a block; absent → no command bar. */
+  commandsFor?: (block: CorrectionViewBlock, caret: BlockCaret) => readonly BlockCommand[];
+  /** Run a command for a block (the owner previews, applies, announces). */
+  onCommand?: (block: CorrectionViewBlock, command: BlockCommand, caret: BlockCaret) => void;
   /** True while a command is being applied. */
   busy?: boolean;
 }
@@ -80,13 +96,52 @@ function frameOf(el: Element | null): HTMLElement | null {
   return (el?.closest?.(".correction-block") as HTMLElement | null) ?? null;
 }
 
+/** The block at `path` in the view article. */
+function blockAtPath(model: CorrectionViewModel, path: readonly number[]): Block | undefined {
+  let block: Block | undefined = model.article.blocks[path[0]!];
+  for (const i of path.slice(1))
+    block = block?.kind === "blockquote" ? block.children[i] : undefined;
+  return block;
+}
+
+/** Where the selection's moving end sits: its innermost frame and the
+ * offset into that frame's block text. Null when outside every frame. */
+function caretInFrames(
+  root: HTMLElement,
+  model: CorrectionViewModel,
+): { id: string; offset: number } | null {
+  const selection = window.getSelection();
+  if (!selection || selection.rangeCount === 0 || !selection.focusNode) return null;
+  const node = selection.focusNode;
+  const frameEl = frameOf(
+    node.nodeType === Node.ELEMENT_NODE ? (node as Element) : node.parentElement,
+  );
+  if (!frameEl || !root.contains(frameEl)) return null;
+  const entry = model.blockById(frameEl.dataset.correctionId ?? "");
+  // The frame's block element: its last child (the type label comes first).
+  const blockEl = frameEl.lastElementChild as HTMLElement | null;
+  const block = entry && blockAtPath(model, entry.path);
+  if (!entry || !block || !blockEl || !blockEl.contains(node)) return null;
+  const norm = graphemeClusters(blockNormalizedText(block), model.article.lang);
+  return {
+    id: entry.id,
+    offset: domPointToIntraBlockGraphemeOffset(
+      blockEl,
+      node,
+      selection.focusOffset,
+      model.article.lang,
+      norm,
+    ),
+  };
+}
+
 function inViewport(el: HTMLElement): boolean {
   const r = el.getBoundingClientRect();
   return r.bottom > HEADER_PX && r.top < window.innerHeight;
 }
 
 export const CorrectionView = forwardRef<CorrectionViewHandle, CorrectionViewProps>(
-  function CorrectionView({ model, entryOffset, commandFor, onCommand, busy = false }, ref) {
+  function CorrectionView({ model, entryOffset, commandsFor, onCommand, busy = false }, ref) {
     const headingId = useId();
     const reasonId = useId();
     const bodyRef = useRef<HTMLDivElement>(null);
@@ -204,29 +259,57 @@ export const CorrectionView = forwardRef<CorrectionViewHandle, CorrectionViewPro
       [model, entryOffset],
     );
 
-    const current = currentId !== null ? model.blockById(currentId) : undefined;
-    const command = current && commandFor ? commandFor(current) : undefined;
-    const run = useCallback(() => {
-      if (!current || !command || busy) return;
-      onCommand?.(current, command);
-    }, [current, command, busy, onCommand]);
-    const runRef = useRef(run);
-    runRef.current = run;
-
-    // X — Hide / Unhide the current block. Plain X only (Ctrl/Cmd+X stays
-    // cut), never from form fields or dialogs (the isFormField contract).
+    // The caret: where the selection's moving end sits, tracked so the
+    // command bar's availability follows it. A caret in a frame makes that
+    // frame's block the current one.
+    const [caret, setCaret] = useState<{ id: string; offset: number } | null>(null);
     useEffect(() => {
-      if (!commandFor) return;
+      if (!commandsFor) return;
+      const onSelection = () => {
+        const root = bodyRef.current;
+        const at = root ? caretInFrames(root, model) : null;
+        setCaret((was) => (was?.id === at?.id && was?.offset === at?.offset ? was : at));
+        if (at) setCurrentId(at.id);
+      };
+      document.addEventListener("selectionchange", onSelection);
+      return () => document.removeEventListener("selectionchange", onSelection);
+    }, [commandsFor, model]);
+
+    const current = currentId !== null ? model.blockById(currentId) : undefined;
+    const caretOffset = current && caret?.id === current.id ? caret.offset : null;
+    const commands = current && commandsFor ? commandsFor(current, caretOffset) : [];
+    // The reason last asked for (an unavailable command tried), shown until
+    // the current block or the caret moves.
+    const [asked, setAsked] = useState<BlockAction | null>(null);
+    useEffect(() => setAsked(null), [currentId, caretOffset, model]);
+    const run = useCallback(
+      (command: BlockCommand) => {
+        if (!current || busy) return;
+        if (!command.available) setAsked(command.action);
+        onCommand?.(current, command, caretOffset);
+      },
+      [current, busy, onCommand, caretOffset],
+    );
+    const runRef = useRef({ run, commands });
+    runRef.current = { run, commands };
+
+    // X / S / J — the current block's commands. Plain keys only (Ctrl/Cmd+X
+    // stays cut), never from form fields or dialogs (the isFormField
+    // contract).
+    useEffect(() => {
+      if (!commandsFor) return;
       const onKey = (event: KeyboardEvent) => {
         if (event.ctrlKey || event.metaKey || event.altKey) return;
         if (isFormField(event.target)) return;
-        if (event.key !== "x" && event.key !== "X") return;
+        const key = event.key.toUpperCase();
+        const command = runRef.current.commands.find((c) => c.shortcut === key);
+        if (!command) return;
         event.preventDefault();
-        runRef.current();
+        runRef.current.run(command);
       };
       window.addEventListener("keydown", onKey);
       return () => window.removeEventListener("keydown", onKey);
-    }, [commandFor]);
+    }, [commandsFor]);
 
     // Block-by-block movement: ArrowDown / ArrowUp on a focused block move
     // focus to the neighbouring block (Tab works too — each block is a stop).
@@ -245,7 +328,7 @@ export const CorrectionView = forwardRef<CorrectionViewHandle, CorrectionViewPro
       next.focus();
     };
 
-    const commandLabel = command?.action === "unhide" ? "Unhide block" : "Hide block";
+    const askedReason = commands.find((c) => c.action === asked && !c.available)?.reason;
 
     return (
       <section className="correction-view" aria-labelledby={headingId}>
@@ -256,30 +339,49 @@ export const CorrectionView = forwardRef<CorrectionViewHandle, CorrectionViewPro
           <p className="correction-view-article">{effectiveTitle(article)}</p>
           <p className="correction-view-help">
             Each block shows its outline and type. Move between blocks with Tab or the arrow keys.
-            {commandFor ? " Press X to hide or unhide the current block." : null} Press C, or the
-            Correction view button, to go back to reading.
+            {commandsFor
+              ? " Press X to hide or unhide the current block, S to split it at the caret, J to merge it with the next block."
+              : null}{" "}
+            Press C, or the Correction view button, to go back to reading.
           </p>
         </header>
-        {commandFor && (
+        {commandsFor && (
           <div className="correction-commands" role="toolbar" aria-label="Block commands">
             <span className="correction-commands-current">
               {current
                 ? `Current block: ${current.label}${current.hidden ? ", hidden" : ""}`
                 : null}
             </span>
-            <button
-              type="button"
-              className="correction-command"
-              aria-disabled={!command?.available || busy ? "true" : undefined}
-              aria-describedby={command && !command.available ? reasonId : undefined}
-              aria-keyshortcuts="X"
-              onClick={run}
-            >
-              {commandLabel} <kbd>X</kbd>
-            </button>
-            {command && !command.available && command.reason ? (
-              <span id={reasonId} className="correction-commands-reason">
-                {command.reason}
+            {commands.map((command) => (
+              <button
+                key={command.action}
+                type="button"
+                className="correction-command"
+                data-action={command.action}
+                aria-disabled={!command.available || busy ? "true" : undefined}
+                aria-describedby={
+                  !command.available && command.reason ? `${reasonId}-${command.action}` : undefined
+                }
+                aria-keyshortcuts={command.shortcut}
+                onClick={() => run(command)}
+              >
+                {command.label} <kbd>{command.shortcut}</kbd>
+              </button>
+            ))}
+            {commands.map((command) =>
+              !command.available && command.reason ? (
+                <span
+                  key={command.action}
+                  id={`${reasonId}-${command.action}`}
+                  className="visually-hidden"
+                >
+                  {command.reason}
+                </span>
+              ) : null,
+            )}
+            {askedReason ? (
+              <span className="correction-commands-reason" aria-hidden="true">
+                {askedReason}
               </span>
             ) : null}
           </div>

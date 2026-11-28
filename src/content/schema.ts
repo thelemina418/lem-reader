@@ -1211,9 +1211,33 @@ export const UnhideCorrectionSchema = z.object({
   target: BlockTargetSchema,
 });
 
+/** Split a block in two at a block-internal separator (#75). `at` is the
+ * grapheme offset, into the target block's normalized text, of the
+ * whitespace (a space; a line break in a code block) that becomes the
+ * boundary between the two blocks. The target is found by its whole text,
+ * so the offset is relative to text that matched exactly. */
+export const SplitCorrectionSchema = z.object({
+  kind: z.literal("split"),
+  ...correctionBase,
+  target: BlockTargetSchema,
+  at: z.number().int().min(1),
+});
+
+/** Merge a block with the one after it (#75). `next` is the block merged
+ * in, found by text too: a merge applies only when the block that now
+ * follows the target is still the one the reader merged. */
+export const MergeCorrectionSchema = z.object({
+  kind: z.literal("merge"),
+  ...correctionBase,
+  target: BlockTargetSchema,
+  next: BlockTargetSchema,
+});
+
 export const CorrectionSchema = z.discriminatedUnion("kind", [
   HideCorrectionSchema,
   UnhideCorrectionSchema,
+  SplitCorrectionSchema,
+  MergeCorrectionSchema,
 ]);
 export type Correction = z.infer<typeof CorrectionSchema>;
 

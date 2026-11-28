@@ -157,8 +157,13 @@ import {
   applyCorrections,
   blockCorrection,
   hideAvailability,
+  mergeAvailability,
+  mergeCorrection,
+  splitAvailability,
+  splitCorrection,
   unhideAvailability,
   REASONS as CORRECTION_REASONS,
+  type Availability,
 } from "../content/corrections/engine";
 import { storedOffsetInShown } from "../content/corrections/positions";
 import type { Correction } from "../content/schema";
@@ -172,6 +177,8 @@ import {
 import { CorrectionConsequencesDialog } from "../reader/CorrectionConsequencesDialog";
 import {
   CorrectionView,
+  type BlockAction,
+  type BlockCaret,
   type BlockCommand,
   type CorrectionViewHandle,
 } from "../reader/CorrectionView";
@@ -449,6 +456,34 @@ function AssignmentEndNav({
 
 /** Issue #57 — keys that scroll the page (reading on from the notes). */
 const SCROLL_KEYS = new Set(["ArrowDown", "ArrowUp", "PageDown", "PageUp", " ", "Home", "End"]);
+
+/** Spec #68 — each block command's words: its button, its consequences
+ * dialog title, and what the status region says once it is done. */
+const CORRECTION_COPY: Record<
+  BlockAction,
+  { label: string; title: string; done: (label: string) => string }
+> = {
+  hide: {
+    label: "Hide block",
+    title: "Hide this block?",
+    done: (label) => `${label} hidden. It stays here, dimmed; press X to unhide it.`,
+  },
+  unhide: {
+    label: "Unhide block",
+    title: "Unhide this block?",
+    done: (label) => `${label} unhidden.`,
+  },
+  split: {
+    label: "Split block",
+    title: "Split this block?",
+    done: (label) => `${label} split in two. Press J on the first part to merge it back.`,
+  },
+  merge: {
+    label: "Merge with next",
+    title: "Merge these blocks?",
+    done: (label) => `${label} merged with the next block. Press S at the join to split it again.`,
+  },
+};
 
 /** Spec #68 / #71 — a stable empty corrections list (the pass-through). */
 const NO_CORRECTIONS: readonly Correction[] = Object.freeze([]);
@@ -1856,30 +1891,43 @@ export function ArticleView({
   // one with consequences (a highlight in a hidden block, a chapter a
   // completion or collection refers to) opens the consequences dialog
   // first, and Cancel leaves everything untouched.
-  const correctionCommandFor = useCallback(
-    (block: CorrectionViewBlock): BlockCommand => {
-      if (!correctionsResult) return { action: "hide", available: false };
-      const availability = block.hidden
-        ? unhideAvailability(block)
-        : hideAvailability(correctionsResult, block);
-      const action = block.hidden ? "unhide" : "hide";
-      return availability.available
-        ? { action, available: true }
-        : { action, available: false, reason: availability.reason };
+  // #75 adds Split at the caret (S) and Merge with the next block (J).
+  const correctionCommandsFor = useCallback(
+    (block: CorrectionViewBlock, caret: BlockCaret): readonly BlockCommand[] => {
+      if (!correctionsResult) return [];
+      const command = (
+        action: BlockAction,
+        shortcut: string,
+        availability: Availability,
+      ): BlockCommand => ({
+        action,
+        label: CORRECTION_COPY[action].label,
+        shortcut,
+        ...(availability.available
+          ? { available: true }
+          : { available: false, reason: availability.reason }),
+      });
+      return [
+        block.hidden
+          ? command("unhide", "X", unhideAvailability(block))
+          : command("hide", "X", hideAvailability(correctionsResult, block)),
+        command("split", "S", splitAvailability(correctionsResult, block, caret)),
+        command("merge", "J", mergeAvailability(correctionsResult, block)),
+      ];
     },
     [correctionsResult],
   );
   const [pendingCorrection, setPendingCorrection] = useState<{
     preview: CorrectionsPreview;
     block: CorrectionViewBlock;
-    action: BlockCommand["action"];
+    action: BlockAction;
   } | null>(null);
   const [pendingCorrectionError, setPendingCorrectionError] = useState("");
   const commitCorrection = useCallback(
     async (
       preview: CorrectionsPreview,
       block: CorrectionViewBlock,
-      action: BlockCommand["action"],
+      action: BlockAction,
       acceptConsequences: boolean,
     ) => {
       await applyCorrectionsChange(preview, { acceptConsequences });
@@ -1889,11 +1937,7 @@ export function ArticleView({
       stopReadAloud();
       setCorrections(preview.corrections);
       invalidateLibrarySnapshot();
-      setCorrectionAnnouncement(
-        action === "hide"
-          ? `${block.label} hidden. It stays here, dimmed; press X to unhide it.`
-          : `${block.label} unhidden.`,
-      );
+      setCorrectionAnnouncement(CORRECTION_COPY[action].done(block.label));
     },
     [stopReadAloud],
   );
@@ -1902,16 +1946,19 @@ export function ArticleView({
       ? error.message
       : "The correction couldn't be saved. Nothing was changed.";
   const handleCorrectionCommand = useCallback(
-    async (block: CorrectionViewBlock, command: BlockCommand) => {
+    async (block: CorrectionViewBlock, command: BlockCommand, caret: BlockCaret) => {
       if (!command.available) {
         setCorrectionAnnouncement(command.reason ?? "That isn't available here.");
         return;
       }
       if (!originalArticle || !correctionsResult) return;
-      const correction = blockCorrection(command.action, correctionsResult, block, {
-        id: crypto.randomUUID(),
-        createdAt: new Date().toISOString(),
-      });
+      const meta = { id: crypto.randomUUID(), createdAt: new Date().toISOString() };
+      const correction =
+        command.action === "split"
+          ? splitCorrection(correctionsResult, block, caret, meta)
+          : command.action === "merge"
+            ? mergeCorrection(correctionsResult, block, meta)
+            : blockCorrection(command.action, correctionsResult, block, meta);
       if (!correction) {
         setCorrectionAnnouncement(CORRECTION_REASONS.noText);
         return;
@@ -3870,18 +3917,14 @@ export function ArticleView({
                 ref={correctionViewRef}
                 model={correctionModel}
                 entryOffset={correctionEntry.viewOffset}
-                commandFor={correctionCommandFor}
+                commandsFor={correctionCommandsFor}
                 onCommand={handleCorrectionCommand}
                 busy={correctionBusy || pendingCorrection !== null}
               />
               <CorrectionConsequencesDialog
                 preview={pendingCorrection?.preview ?? null}
-                title={
-                  pendingCorrection?.action === "unhide" ? "Unhide this block?" : "Hide this block?"
-                }
-                confirmLabel={
-                  pendingCorrection?.action === "unhide" ? "Unhide block" : "Hide block"
-                }
+                title={CORRECTION_COPY[pendingCorrection?.action ?? "hide"].title}
+                confirmLabel={CORRECTION_COPY[pendingCorrection?.action ?? "hide"].label}
                 busy={correctionBusy}
                 error={pendingCorrectionError}
                 onConfirm={() => void handleConfirmPendingCorrection()}
