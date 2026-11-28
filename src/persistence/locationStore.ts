@@ -30,6 +30,7 @@ import { classifyStorageError } from "./errors";
 import { getCompletion, recordCompletion } from "./completionsStore";
 import { articleCompletionFinished } from "../content/completion";
 import { endPinOffset, fromLegacyEndPin, inNotesOffset } from "../reader/readingPosition";
+import { textStamp } from "../content/sameText";
 
 /**
  * Discriminated result of loading a reading location from Dexie.
@@ -182,7 +183,7 @@ export async function setArticleReadState(article: CanonicalArticle, read: boole
   await saveLocation({
     schemaVersion: 1,
     articleId: article.id,
-    revision: article.revision,
+    ...textStamp(article),
     // Spec #66 — the end pin (the main-text end), never the notes end.
     graphemeOffset: Math.max(1, endPinOffset(article)),
     savedAt: new Date().toISOString(),

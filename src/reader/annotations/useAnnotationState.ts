@@ -82,6 +82,7 @@ import type { HighlightSlotPreset } from "../../annotations/highlightSlots";
 import type { HighlightSlot } from "../../content/schema";
 import { normalizeTags } from "../../ingestion/library/tagText";
 import { classifyStorageError } from "../../persistence/errors";
+import { textStamp } from "../../content/sameText";
 
 /** D5-02 tri-state — drives Plan 05-04 ambiguous/orphan surfacing. */
 export type HighlightStatus = "confident" | "ambiguous" | "orphan";
@@ -447,7 +448,7 @@ export function useAnnotationState(
         schemaVersion: 1,
         id,
         articleId: article.id,
-        revision: article.revision,
+        ...textStamp(article),
         position,
         quote,
         createdAt: new Date().toISOString(),

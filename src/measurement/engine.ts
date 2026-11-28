@@ -66,6 +66,7 @@ import { footnoteRows } from "../content/normalizeText";
 import type { RuntimeDriftGuard } from "./driftGuard";
 import { fontStringFor, measureParagraphHeight } from "./textMeasurer";
 import { COMMITTED_FINGERPRINT } from "./fingerprint";
+import { textStamp } from "../content/sameText";
 
 /**
  * Default per-block drift tolerance for the dispatch's agreement gate.
@@ -286,7 +287,7 @@ export class MeasurementEngine {
           ? {
               scope: {
                 articleId: this.opts.article.id,
-                revision: this.opts.article.revision,
+                ...textStamp(this.opts.article),
                 ...this.opts.blockWindow,
               },
             }

@@ -38,6 +38,7 @@ import {
 } from "./schema";
 import { articleGraphemeIndex, normalizeRunText } from "./normalizeText";
 import { blockSliceBoundary, classifyBlock } from "../pagination/splitBlock";
+import { isSameText, textStamp } from "./sameText";
 
 /** Bumped only when the derivation algorithm itself changes. Existing
  * snapshots stay frozen at their established boundaries; only records
@@ -538,7 +539,7 @@ export function deriveWorkStructure(
   return WorkStructureSchema.parse({
     schemaVersion: WORK_STRUCTURE_SCHEMA_VERSION,
     generatorVersion: STRUCTURE_GENERATOR_VERSION,
-    revision: source.revision,
+    ...textStamp(source),
     destinations,
   });
 }
@@ -567,7 +568,7 @@ export function validateWorkStructure(
   const parsed = WorkStructureSchema.safeParse(candidate);
   if (!parsed.success) return null;
   const structure = parsed.data;
-  if (structure.revision !== article.revision) return null;
+  if (!isSameText(structure, article)) return null;
 
   const index = articleGraphemeIndex(article);
   const { blockStartOffsets, perBlockLengths, totalGraphemes } = index;
