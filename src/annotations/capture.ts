@@ -144,7 +144,7 @@ function absoluteRawGraphemeOffset(
  * passed `normClusters` window (the caller adds the window's start offset
  * back — the D5-08 slice math below).
  */
-function domPointToIntraBlockGraphemeOffset(
+export function domPointToIntraBlockGraphemeOffset(
   blockEl: HTMLElement,
   node: Node,
   offset: number,

@@ -36,6 +36,7 @@ import { findAllOccurrences, matchesContext } from "../../annotations/resolution
 import { footnoteRefOf } from "../footnoteReferences";
 import {
   articleGraphemeIndex,
+  blockNormalizedText,
   deriveQuoteSelector,
   graphemeClusters,
   resolveQuoteSelector,
@@ -48,10 +49,21 @@ import type { Block, CanonicalArticle, InlineRun } from "../types";
 import {
   blockPathKey,
   buildCorrectionView,
+  correctionBlockId,
   correctionViewFromArticle,
   type CorrectionViewBlock,
   type CorrectionViewModel,
 } from "../correctionView";
+import {
+  mergeBlocks,
+  mergeRefusal,
+  nextSibling,
+  replaceAt,
+  shiftHidden,
+  splitBlockAt,
+  splitPoint,
+  SPLIT_MERGE_REASONS,
+} from "./splitMerge";
 
 export type CorrectionOutcome =
   { readonly status: "applied" } | { readonly status: "not-applied"; readonly reason: string };
@@ -245,7 +257,62 @@ const KINDS: { [K in Correction["kind"]]: Handler<K> } = {
     hidden.delete(found.key);
     return { ok: true, state: { article: state.article, hidden } };
   },
+  // #75 — split at a separator inside the block (./splitMerge.ts).
+  split(state, correction) {
+    const found = resolveBlockTarget(state.article, correction.target);
+    if (found === "orphan") return { ok: false, reason: REASONS.notFound };
+    if (found === "ambiguous") return { ok: false, reason: REASONS.ambiguous };
+    if (isHiddenAt(state.hidden, found.path)) {
+      return { ok: false, reason: SPLIT_MERGE_REASONS.hiddenBlock };
+    }
+    const halves = splitBlockAt(found.block, correction.at, state.article.lang);
+    if (!halves) return { ok: false, reason: SPLIT_MERGE_REASONS.splitChanged };
+    const parent = found.path.slice(0, -1);
+    const index = found.path[found.path.length - 1]!;
+    return {
+      ok: true,
+      state: {
+        article: replaceAt(state.article, found.path, 1, halves),
+        hidden: shiftHidden(state.hidden, parent, index + 1, 1),
+      },
+    };
+  },
+  // #75 — merge with the next block, which must still be the one merged.
+  merge(state, correction) {
+    const found = resolveBlockTarget(state.article, correction.target);
+    if (found === "orphan") return { ok: false, reason: REASONS.notFound };
+    if (found === "ambiguous") return { ok: false, reason: REASONS.ambiguous };
+    if (isHiddenAt(state.hidden, found.path)) {
+      return { ok: false, reason: SPLIT_MERGE_REASONS.hiddenBlock };
+    }
+    const next = nextSibling(state.article, found.path);
+    if (
+      next === null ||
+      next.block.kind !== correction.next.kind ||
+      blockNormalizedText(next.block) !== correction.next.quote.exact
+    ) {
+      return { ok: false, reason: SPLIT_MERGE_REASONS.mergeNextChanged };
+    }
+    const refusal = mergeRefusal(found.block, next.block, isHiddenAt(state.hidden, next.path));
+    if (refusal) return { ok: false, reason: refusal };
+    const merged = mergeBlocks(found.block, next.block);
+    if (!merged) return { ok: false, reason: SPLIT_MERGE_REASONS.mergeKind };
+    const parent = found.path.slice(0, -1);
+    const index = found.path[found.path.length - 1]!;
+    return {
+      ok: true,
+      state: {
+        article: replaceAt(state.article, found.path, 2, [merged]),
+        hidden: shiftHidden(state.hidden, parent, index + 2, -1),
+      },
+    };
+  },
 };
+
+/** Hidden itself or inside a hidden quotation. */
+function isHiddenAt(hidden: ReadonlySet<string>, path: readonly number[]): boolean {
+  return hidden.has(blockPathKey(path)) || isHiddenUnder(hidden, path);
+}
 
 /** Engine-level validity of hiding `block` (holds for re-application too). */
 function hideRefusal(state: EngineState, block: LaidBlock): string | null {
@@ -448,6 +515,92 @@ export function unhideAvailability(block: CorrectionViewBlock): Availability {
   if (block.hiddenDirectly) return { available: true };
   if (block.hidden) return { available: false, reason: REASONS.insideHidden };
   return { available: false, reason: REASONS.notHidden };
+}
+
+/** The view block's laid entry when it is targetable: present, with text,
+ * and found again uniquely by that text. A string is the reason not. */
+function targetableLaid(result: CorrectionsResult, block: CorrectionViewBlock): LaidBlock | string {
+  const laid = laidFor(result, block);
+  if (!laid) return REASONS.notFound;
+  if (laid.end <= laid.start) return REASONS.noText;
+  const target = blockTargetFor(result.view.article, block.path);
+  if (!target || resolveBlockTarget(result.view.article, target) !== laid) {
+    return REASONS.ambiguous;
+  }
+  return laid;
+}
+
+/** Can the reader split this block at `caret` (an offset into the block's
+ * own normalized text; null = no caret in it)? (#75) */
+export function splitAvailability(
+  result: CorrectionsResult,
+  block: CorrectionViewBlock,
+  caret: number | null,
+): Availability {
+  if (block.hidden) return { available: false, reason: SPLIT_MERGE_REASONS.hiddenBlock };
+  const laid = targetableLaid(result, block);
+  if (typeof laid === "string") return { available: false, reason: laid };
+  const at = splitPoint(laid.block, caret, result.view.article.lang);
+  if (typeof at === "string") return { available: false, reason: at };
+  if (!splitBlockAt(laid.block, at, result.view.article.lang)) {
+    return { available: false, reason: SPLIT_MERGE_REASONS.splitMidWord };
+  }
+  return { available: true };
+}
+
+/** Can the reader merge this block with the next one? (#75) */
+export function mergeAvailability(
+  result: CorrectionsResult,
+  block: CorrectionViewBlock,
+): Availability {
+  if (block.hidden) return { available: false, reason: SPLIT_MERGE_REASONS.hiddenBlock };
+  const laid = targetableLaid(result, block);
+  if (typeof laid === "string") return { available: false, reason: laid };
+  const next = nextSibling(result.view.article, laid.path);
+  const nextHidden =
+    next !== null && result.view.blockById(correctionBlockId(next.path))?.hidden === true;
+  const refusal = mergeRefusal(laid.block, next?.block ?? null, nextHidden);
+  if (refusal) return { available: false, reason: refusal };
+  if (
+    !next ||
+    !blockTargetFor(result.view.article, next.path) ||
+    !mergeBlocks(laid.block, next.block)
+  ) {
+    return { available: false, reason: SPLIT_MERGE_REASONS.mergeKind };
+  }
+  return { available: true };
+}
+
+/** Build the split correction for a view block at `caret` (null when it
+ * isn't available there). */
+export function splitCorrection(
+  result: CorrectionsResult,
+  block: CorrectionViewBlock,
+  caret: number | null,
+  meta: { id: string; createdAt: string },
+): Correction | null {
+  if (!splitAvailability(result, block, caret).available) return null;
+  const target = blockTargetFor(result.view.article, block.path);
+  const laid = laidFor(result, block);
+  if (!target || !laid) return null;
+  const at = splitPoint(laid.block, caret, result.view.article.lang);
+  if (typeof at === "string") return null;
+  return { kind: "split", id: meta.id, createdAt: meta.createdAt, target, at };
+}
+
+/** Build the merge-with-next correction for a view block (null when it
+ * isn't available). */
+export function mergeCorrection(
+  result: CorrectionsResult,
+  block: CorrectionViewBlock,
+  meta: { id: string; createdAt: string },
+): Correction | null {
+  if (!mergeAvailability(result, block).available) return null;
+  const target = blockTargetFor(result.view.article, block.path);
+  const next = nextSibling(result.view.article, block.path);
+  const nextTarget = next && blockTargetFor(result.view.article, next.path);
+  if (!target || !nextTarget) return null;
+  return { kind: "merge", id: meta.id, createdAt: meta.createdAt, target, next: nextTarget };
 }
 
 /** Build the hide / unhide correction for a view block (the caller checked
