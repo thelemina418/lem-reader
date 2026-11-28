@@ -125,10 +125,21 @@ export function AnnotationsDrawer({
   // Chromium/Firefox/Linux-WebKit run no such late restore). Two frames put
   // our trigger restore last in every engine; the open guard keeps a stale
   // callback from stealing focus from a fast reopen.
+  //
+  // The restore only RECOVERS focus: it runs when focus was dropped to
+  // <body> or is still inside the closed dialog. A close that hands focus
+  // to a destination (navigate-back focuses the highlight's <mark> once
+  // its jump settles) keeps it. Under load the two frames can outlast that
+  // settle, and the trigger used to take focus back from the <mark> (Linux
+  // WebKit, lem-reader #2 attempt 5, core-reading-flow).
   const restoreFocusAfterClose = useCallback(() => {
     requestAnimationFrame(() => {
       requestAnimationFrame(() => {
-        if (!ref.current?.open) triggerRef.current?.focus();
+        const dlg = ref.current;
+        if (dlg?.open) return;
+        const active = document.activeElement;
+        const focusLost = !active || active === document.body || !!dlg?.contains(active);
+        if (focusLost) triggerRef.current?.focus();
       });
     });
   }, []);
