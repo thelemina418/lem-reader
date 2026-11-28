@@ -516,12 +516,12 @@ export async function applyCorrectionsChange(
       for (const [id, position] of positions) {
         const row = await db.highlights.get(id);
         if (!row) continue;
-        const { corrections: _old, ...rest } = row;
+        const { fingerprint: _old, ...rest } = row;
         void _old;
         await db.highlights.put({
           ...rest,
           position,
-          ...(stamp.corrections !== undefined ? { corrections: stamp.corrections } : {}),
+          ...(stamp.fingerprint !== undefined ? { fingerprint: stamp.fingerprint } : {}),
         });
       }
 
@@ -536,7 +536,7 @@ export async function applyCorrectionsChange(
           revision: stamp.revision,
           graphemeOffset: fresh.position.offset,
           savedAt: location.savedAt,
-          ...(stamp.corrections !== undefined ? { corrections: stamp.corrections } : {}),
+          ...(stamp.fingerprint !== undefined ? { fingerprint: stamp.fingerprint } : {}),
         });
       }
     },

@@ -211,7 +211,7 @@ describe("round trip", () => {
       revision: stamp.revision,
       graphemeOffset: 20,
       savedAt: "2026-11-27T11:00:00.000Z",
-      ...(stamp.corrections !== undefined ? { corrections: stamp.corrections } : {}),
+      ...(stamp.fingerprint !== undefined ? { fingerprint: stamp.fingerprint } : {}),
     });
 
     const entries = await exportedEntries();
@@ -228,7 +228,7 @@ describe("round trip", () => {
     expect(normalizeText(again)).not.toContain("Share this article");
     // The saved position still names the corrected substrate it was saved on.
     const [location] = await db.location.toArray();
-    expect(location).toMatchObject({ graphemeOffset: 20, corrections: stamp.corrections });
+    expect(location).toMatchObject({ graphemeOffset: 20, fingerprint: stamp.fingerprint });
   });
 });
 

@@ -55,7 +55,7 @@ export function storedOffsetInShown(
   stored: {
     readonly graphemeOffset: number;
     readonly revision: number;
-    readonly corrections?: string;
+    readonly fingerprint?: string;
   },
   original: CanonicalArticle,
   corrections: readonly Correction[],

@@ -204,7 +204,7 @@ describe("undoing one correction", () => {
     ]);
     const row = await db.highlights.get("h-gulls");
     expect(row!.position).toEqual(position);
-    expect(row!.corrections).toBeUndefined();
+    expect(row!.fingerprint).toBeUndefined();
   });
 });
 

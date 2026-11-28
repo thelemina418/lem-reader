@@ -260,6 +260,15 @@ export const StructureDestinationSchema = z.object({
 });
 export type StructureDestination = z.infer<typeof StructureDestinationSchema>;
 
+
+/** Spec #68 — the text-stamp fingerprint a stored record's coordinates
+ * were saved against (src/content/sameText.ts): the applied corrections, or
+ * a PDF repair of the original (#78). Absent = the original as ingested —
+ * so rows saved against an unchanged original stay byte-identical. One
+ * fragment for every record that carries it (the work-structure snapshot,
+ * reading positions, highlights). */
+export const TextFingerprintSchema = z.string().min(1).optional();
+
 export const WorkStructureSchema = z.object({
   schemaVersion: z.literal(WORK_STRUCTURE_SCHEMA_VERSION), // STATE-04 migration hook
   /** Derivation algorithm stamp. An ESTABLISHED snapshot is frozen — readers
@@ -270,10 +279,7 @@ export const WorkStructureSchema = z.object({
    * any snapshot whose revision or ranges do not match the row's canonical
    * content. */
   revision: z.number().int().min(1),
-  /** Spec #68 — the corrections fingerprint of the substrate these
-   * coordinates refer to (src/content/sameText.ts). Absent = the original
-   * as ingested (no corrections) — so uncorrected rows stay byte-identical. */
-  corrections: z.string().min(1).optional(),
+  fingerprint: TextFingerprintSchema,
   /** Ordered destinations tiling [0, totalGraphemes) exactly — no gaps, no
    * overlaps, source order. */
   destinations: z.array(StructureDestinationSchema).min(1),
@@ -1076,10 +1082,7 @@ export const LocationRecordSchema = z.object({
   revision: z.number().int().min(1), // D-06 monotonic
   graphemeOffset: z.number().int().min(0), // D-05 offset into normalizeText
   savedAt: z.string().datetime(), // ISO-8601 — used for last-write-wins tiebreak
-  /** Spec #68 — the corrections fingerprint of the substrate these
-   * coordinates refer to (src/content/sameText.ts). Absent = the original
-   * as ingested (no corrections) — so uncorrected rows stay byte-identical. */
-  corrections: z.string().min(1).optional(),
+  fingerprint: TextFingerprintSchema,
 });
 export type LocationRecord = z.infer<typeof LocationRecordSchema>;
 
@@ -1118,10 +1121,7 @@ export const HighlightRecordSchema = z.object({
   id: z.string(),
   articleId: z.string().regex(/^[a-z0-9-]+$/), // reuse LocationRecord regex (D-06)
   revision: z.number().int().min(1), // revision AT CREATION TIME (orphan detection)
-  /** Spec #68 — the corrections fingerprint of the substrate these
-   * coordinates refer to (src/content/sameText.ts). Absent = the original
-   * as ingested (no corrections) — so uncorrected rows stay byte-identical. */
-  corrections: z.string().min(1).optional(),
+  fingerprint: TextFingerprintSchema,
   position: TextPositionSelectorSchema, // D5-03: grapheme range (primary anchor)
   quote: TextQuoteSelectorSchema, // D5-03: prefix/exact/suffix (recovery substrate)
   createdAt: z.string().datetime(), // ISO-8601

@@ -130,7 +130,7 @@ describe("hide", () => {
     const article = chrome();
     const result = applyCorrections(article, [hide(article, [2])]);
     expect(result.fingerprint).toMatch(/^c/);
-    expect(textStamp(result.article)).toEqual({ revision: 1, corrections: result.fingerprint });
+    expect(textStamp(result.article)).toEqual({ revision: 1, fingerprint: result.fingerprint });
     expect(isSameText(textStamp(article), result.article)).toBe(false);
     expect(isSameText(textStamp(result.article), result.article)).toBe(true);
   });
