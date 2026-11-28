@@ -167,7 +167,9 @@ import {
   CorrectionsRefusal,
   loadCorrections,
   previewAddCorrection,
+  type CorrectionsPreview,
 } from "../persistence/correctionsStore";
+import { CorrectionConsequencesDialog } from "../reader/CorrectionConsequencesDialog";
 import {
   CorrectionView,
   type BlockCommand,
@@ -1846,32 +1848,59 @@ export function ArticleView({
     saveLocationNow,
   ]);
 
-  // Spec #68 / issue #71 — Hide / Unhide on the current block. Availability
-  // comes from the correction engine (one place for every "unavailable
-  // because…"); applying goes through the corrections store's preview +
-  // one-transaction apply, which re-anchors stored highlights and the
-  // reading position. A preview with consequences (chapters a collection
-  // or completion refers to) is not applied in this slice (#72 adds the
-  // consequences dialog) — the reader is told why.
+  // Spec #68 / issues #71, #72 — Hide / Unhide on the current block.
+  // Availability comes from the correction engine (one place for every
+  // "unavailable because…"); applying goes through the corrections store's
+  // preview + one-transaction apply, which re-anchors stored highlights and
+  // the reading position. A preview with no consequences applies at once;
+  // one with consequences (a highlight in a hidden block, a chapter a
+  // completion or collection refers to) opens the consequences dialog
+  // first, and Cancel leaves everything untouched.
   const correctionCommandFor = useCallback(
     (block: CorrectionViewBlock): BlockCommand => {
       if (!correctionsResult) return { action: "hide", available: false };
-      if (block.hidden) {
-        const availability = unhideAvailability(block);
-        return availability.available
-          ? { action: "unhide", available: true }
-          : { action: "unhide", available: false, reason: availability.reason };
-      }
-      const highlights = (highlightApiRef.current?.highlights ?? []).flatMap((h) =>
-        h.resolvedPosition ? [h.resolvedPosition] : [],
-      );
-      const availability = hideAvailability(correctionsResult, block, { highlights });
+      const availability = block.hidden
+        ? unhideAvailability(block)
+        : hideAvailability(correctionsResult, block);
+      const action = block.hidden ? "unhide" : "hide";
       return availability.available
-        ? { action: "hide", available: true }
-        : { action: "hide", available: false, reason: availability.reason };
+        ? { action, available: true }
+        : { action, available: false, reason: availability.reason };
     },
     [correctionsResult],
   );
+  const [pendingCorrection, setPendingCorrection] = useState<{
+    preview: CorrectionsPreview;
+    block: CorrectionViewBlock;
+    action: BlockCommand["action"];
+  } | null>(null);
+  const [pendingCorrectionError, setPendingCorrectionError] = useState("");
+  const commitCorrection = useCallback(
+    async (
+      preview: CorrectionsPreview,
+      block: CorrectionViewBlock,
+      action: BlockCommand["action"],
+      acceptConsequences: boolean,
+    ) => {
+      await applyCorrectionsChange(preview, { acceptConsequences });
+      // A paused read-aloud holds chunks in the old text's coordinates:
+      // end it, so the reader's next Play speaks the corrected article
+      // from their place (spec #68 story 9).
+      stopReadAloud();
+      setCorrections(preview.corrections);
+      invalidateLibrarySnapshot();
+      setCorrectionAnnouncement(
+        action === "hide"
+          ? `${block.label} hidden. It stays here, dimmed; press X to unhide it.`
+          : `${block.label} unhidden.`,
+      );
+    },
+    [stopReadAloud],
+  );
+  const correctionFailure = (error: unknown) =>
+    error instanceof CorrectionsRefusal
+      ? error.message
+      : "The correction couldn't be saved. Nothing was changed.";
   const handleCorrectionCommand = useCallback(
     async (block: CorrectionViewBlock, command: BlockCommand) => {
       if (!command.available) {
@@ -1891,35 +1920,36 @@ export function ArticleView({
       try {
         const preview = await previewAddCorrection(originalArticle.id, correction);
         if (!preview.clean) {
-          setCorrectionAnnouncement(
-            "This block can't be hidden yet: hiding it would change chapters that your collections or progress refer to. Nothing was changed.",
-          );
+          setPendingCorrectionError("");
+          setPendingCorrection({ preview, block, action: command.action });
           return;
         }
-        await applyCorrectionsChange(preview);
-        // A paused read-aloud holds chunks in the old text's coordinates:
-        // end it, so the reader's next Play speaks the corrected article
-        // from their place (spec #68 story 9).
-        stopReadAloud();
-        setCorrections(preview.corrections);
-        invalidateLibrarySnapshot();
-        setCorrectionAnnouncement(
-          command.action === "hide"
-            ? `${block.label} hidden. It stays here, dimmed; press X to unhide it.`
-            : `${block.label} unhidden.`,
-        );
+        await commitCorrection(preview, block, command.action, false);
       } catch (error) {
-        setCorrectionAnnouncement(
-          error instanceof CorrectionsRefusal
-            ? error.message
-            : "The correction couldn't be saved. Nothing was changed.",
-        );
+        setCorrectionAnnouncement(correctionFailure(error));
       } finally {
         setCorrectionBusy(false);
       }
     },
-    [originalArticle, correctionsResult, stopReadAloud],
+    [originalArticle, correctionsResult, commitCorrection],
   );
+  const handleConfirmPendingCorrection = useCallback(async () => {
+    if (!pendingCorrection) return;
+    const { preview, block, action } = pendingCorrection;
+    setCorrectionBusy(true);
+    try {
+      await commitCorrection(preview, block, action, true);
+      setPendingCorrection(null);
+    } catch (error) {
+      setPendingCorrectionError(correctionFailure(error));
+    } finally {
+      setCorrectionBusy(false);
+    }
+  }, [pendingCorrection, commitCorrection]);
+  const handleCancelPendingCorrection = useCallback(() => {
+    setPendingCorrection(null);
+    setCorrectionAnnouncement("Nothing was changed.");
+  }, []);
   useEffect(() => {
     if (!correctionToggleHandlerRef) return;
     correctionToggleHandlerRef.current = handleToggleCorrectionView;
@@ -3835,14 +3865,29 @@ export function ArticleView({
             // Spec #68 / issue #70 — the Correction view replaces the reading
             // surface: no reading <article>, no selection toolbar, no
             // annotation panel (highlights render as inert tints inside it).
-            <CorrectionView
-              ref={correctionViewRef}
-              model={correctionModel}
-              entryOffset={correctionEntry.viewOffset}
-              commandFor={correctionCommandFor}
-              onCommand={handleCorrectionCommand}
-              busy={correctionBusy}
-            />
+            <>
+              <CorrectionView
+                ref={correctionViewRef}
+                model={correctionModel}
+                entryOffset={correctionEntry.viewOffset}
+                commandFor={correctionCommandFor}
+                onCommand={handleCorrectionCommand}
+                busy={correctionBusy || pendingCorrection !== null}
+              />
+              <CorrectionConsequencesDialog
+                preview={pendingCorrection?.preview ?? null}
+                title={
+                  pendingCorrection?.action === "unhide" ? "Unhide this block?" : "Hide this block?"
+                }
+                confirmLabel={
+                  pendingCorrection?.action === "unhide" ? "Unhide block" : "Hide block"
+                }
+                busy={correctionBusy}
+                error={pendingCorrectionError}
+                onConfirm={() => void handleConfirmPendingCorrection()}
+                onCancel={handleCancelPendingCorrection}
+              />
+            </>
           ) : (
             <>
               {/* Plan 13-09 (G4 — stable first paint): the pinned paginated frame
