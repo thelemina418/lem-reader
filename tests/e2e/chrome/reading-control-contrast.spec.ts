@@ -184,7 +184,9 @@ test.describe("reading-control contrast (issue #192)", () => {
     // divergence is the established a11y.spec tabOrder precedent — its
     // keyboard-operation claim is the focus+Enter path above).
     if (test.info().project.name !== "webkit") {
-      await drawerTrigger(page).focus();
+      // Spec #68 (#70): the Correction view toggle sits between the drawer
+      // trigger and the mode toggle, so the adjacent trigger is that toggle.
+      await page.getByRole("button", { name: "Correction view", exact: true }).focus();
       await page.keyboard.press("Tab");
       await expect(toggle).toBeFocused();
       const ring = await page.evaluate(() => {

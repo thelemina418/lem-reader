@@ -1784,10 +1784,8 @@ dialog.correction-consequences {
   line-height: 1.5;
   overflow-wrap: anywhere;
 }
-.correction-consequences-inner label {
-  display: flex;
-  gap: var(--space-sm);
-  align-items: baseline;
+.correction-consequences-inner input[type="checkbox"] {
+  margin-inline-end: var(--space-sm);
 }
 .correction-consequences-error {
   color: var(--destructive);

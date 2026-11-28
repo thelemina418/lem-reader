@@ -3676,8 +3676,6 @@ export function ArticleView({
             pattern). Both this and the two regions below are the ONE
             StatusRegion primitive (issue #98) in its visually-hidden variant. */}
         <StatusRegion className="visually-hidden">{annotationAnnouncement}</StatusRegion>
-        {/* Issue #70 — the Correction view's enter/leave announcement. */}
-        <StatusRegion className="visually-hidden">{correctionCommands.announcement}</StatusRegion>
         {/* Plan 09-05 (D9-06, PORT-03): a SECOND visually-hidden polite
             region for the per-article highlights-export result ("Exported N
             highlights for this article." / "Export didn't complete."). Kept
@@ -3698,6 +3696,10 @@ export function ArticleView({
         {/* Issue #246 — the completion-write failure announce: one polite
             atomic phrase on its own region (the issue #98 discipline). */}
         <StatusRegion className="visually-hidden">{completionSaveAnnouncement}</StatusRegion>
+        {/* Spec #68 (#70/#73) — the Correction view's enter/leave and command
+            announcements, on their own region (the issue #98 discipline).
+            Appended LAST so the established regions keep their DOM order. */}
+        <StatusRegion className="visually-hidden">{correctionCommands.announcement}</StatusRegion>
         {/* Phase 18 Plan 18-03 (ORNT-06, D18-05/08): the passive restoration
             marker mounts ONLY when a reopen-restore genuinely landed (the
             restorationMarker state above is set exclusively inside the
