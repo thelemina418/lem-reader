@@ -572,7 +572,11 @@ export function ReviewView({
   const reviewBases = useMemo(() => highlightBases(settings), [settings]);
   // Render-body aliases over the snapshot (the LibraryView discipline):
   // the old per-field article/highlight/note/tag states are deleted.
-  const articles = snapshot.articles;
+  // Spec #68 / #71 — highlights resolve against the article AS READ.
+  const articles = useMemo(
+    () => snapshot.articles.map((a) => snapshot.readingArticleById?.get(a.id) ?? a),
+    [snapshot],
+  );
   const highlights = snapshot.highlights;
   const notes = snapshot.notes;
   // Issue #210 — the review's second row kind (saved article notes).

@@ -37,6 +37,10 @@ export interface LocationRecordRow {
   revision: number;
   graphemeOffset: number;
   savedAt: string;
+  /** Spec #68 / #71 — the corrections fingerprint of the substrate the
+   * offset refers to (src/content/sameText.ts); absent = the original.
+   * Non-indexed: no version bump. */
+  corrections?: string;
 }
 
 /** Shape of a row in the `highlights` store (Phase 5 — ANNO-05/06/07, STATE-03).
@@ -54,6 +58,8 @@ export interface HighlightRecordRow {
   id: string;
   articleId: string;
   revision: number;
+  /** Spec #68 / #71 — the substrate `position` refers to (absent = original). */
+  corrections?: string;
   position: { start: number; end: number };
   quote: { prefix: string; exact: string; suffix: string };
   createdAt: string;
@@ -161,6 +167,11 @@ export class LemReaderDB extends Dexie {
   // Local recovery snapshots are independent of ordinary article writes and
   // export/import. One unconsumed repair per work; never evicted implicitly.
   pdfRepairs!: Table<{ articleId: string; value: unknown }, string>;
+  // Spec #68 / issue #71 (ADR 0014): the corrections table — ONE row per
+  // article, keyed by articleId, holding the ordered corrections list
+  // (CorrectionsRecordSchema, validated on every read by correctionsStore).
+  // Never written into the article row; deleted with the article.
+  corrections!: Table<{ articleId: string } & Record<string, unknown>, string>;
   articleNotes!: Table<ArticleNote, string>;
   articleNoteDrafts!: Table<ArticleNote, string>;
   settings!: Table<SettingsRecord, string>;
@@ -527,6 +538,13 @@ export class LemReaderDB extends Dexie {
     });
     this.version(14).stores({
       pdfRepairs: "articleId",
+    });
+    // Spec #68 / issue #71 — the corrections store: primary key `articleId`
+    // (1:1 with the article), no secondary index. Delta declaration, NO
+    // `.upgrade()` callback — a new store that starts EMPTY; every existing
+    // row survives untouched (tests/unit/persistence/corrections-migration.spec.ts).
+    this.version(15).stores({
+      corrections: "articleId",
     });
   }
 }

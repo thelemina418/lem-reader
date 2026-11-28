@@ -1,0 +1,452 @@
+// src/content/corrections/engine.ts
+// Spec #68 / issue #71 — THE correction engine (ADR 0014: corrections are a
+// layer over the preserved original). One pure function: the original
+// article plus its ordered corrections in; out come
+//   - the corrected article — a valid canonical article for reading (hidden
+//     blocks absent), the coordinate substrate for everything the reader sees;
+//   - the correction-view model — every block, hidden ones present and
+//     marked, each with its type and a stable identity;
+//   - an outcome per correction — applied, or not applied with a reason.
+//
+// Every consumer derives the corrected article through `applyCorrections`;
+// no consumer re-implements correction logic. Per-kind validity lives HERE
+// (`KINDS`), so the Correction view's "unavailable because…" and
+// re-application's "not applied because…" come from one place.
+//
+// Targets are found by TEXT, never by block index alone: a block target is
+// a quote selector whose `exact` is the block's whole normalized text over
+// the view article as of the corrections before it (ordered application),
+// narrowed by block kind + depth and then by prefix/suffix context. Only a
+// confident match applies — the fuzzy prefix/suffix-only fallback that
+// highlights use for changed words is deliberately NOT used (phase-1
+// corrections never change words, so an exact match always exists when the
+// target is still there).
+//
+// Pass-through: no applied corrections → the corrected article IS the
+// original object (every grapheme/footnote cache hits, byte-identical
+// behavior, no fingerprint). Results are memoized per (original,
+// corrections) identity so the engine runs once per corrections change,
+// never per layout pass.
+//
+// Adding a kind (#72–#76): add its schema member in src/content/schema.ts,
+// a handler in `KINDS` (validity + state change), and — when it changes the
+// view article's blocks — produce the new view article in the handler.
+
+import { findAllOccurrences, matchesContext } from "../../annotations/resolution";
+import { footnoteRefOf } from "../footnoteReferences";
+import { articleGraphemeIndex, deriveQuoteSelector, graphemeClusters } from "../normalizeText";
+import type { BlockTarget, Correction } from "../schema";
+import { registerCorrectionsFingerprint } from "../sameText";
+import type { Block, CanonicalArticle, InlineRun } from "../types";
+import {
+  blockPathKey,
+  buildCorrectionView,
+  correctionViewFromArticle,
+  type CorrectionViewBlock,
+  type CorrectionViewModel,
+} from "../correctionView";
+
+export type CorrectionOutcome =
+  { readonly status: "applied" } | { readonly status: "not-applied"; readonly reason: string };
+
+export interface CorrectionsResult {
+  /** The corrected article (hidden blocks absent). The original object when
+   * nothing applies. */
+  readonly article: CanonicalArticle;
+  /** The correction-view model (every block, hidden ones marked). */
+  readonly view: CorrectionViewModel;
+  /** One outcome per input correction, in order. */
+  readonly outcomes: readonly CorrectionOutcome[];
+  /** Substrate fingerprint (src/content/sameText.ts); undefined = original. */
+  readonly fingerprint: string | undefined;
+}
+
+// ── Engine state ────────────────────────────────────────────────────────────
+
+interface EngineState {
+  /** The view article: every block, hidden ones included. Hide/unhide never
+   * change it; later kinds (split, merge, move words…) do. */
+  readonly article: CanonicalArticle;
+  /** Path keys (into `article`) of directly hidden blocks. */
+  readonly hidden: ReadonlySet<string>;
+}
+
+type Step = { ok: true; state: EngineState } | { ok: false; reason: string };
+
+// ── Calm reasons (shared by availability and re-application) ───────────────
+
+export const REASONS = {
+  notFound: "Its text is no longer in this article.",
+  ambiguous: "Its text now appears in more than one place, so it can't be placed with confidence.",
+  noText: "This block has no text to find it by, so the change couldn't be kept reliably.",
+  alreadyHidden: "This block is already hidden.",
+  insideHidden: "The quotation around this block is hidden. Unhide the quotation instead.",
+  notHidden: "This block isn't hidden.",
+  lastBlock: "Hiding this would leave nothing to read.",
+  footnoteReference:
+    "This block holds a footnote reference, and its note needs somewhere to return to.",
+  // Temporary limits (#71), lifted when the consequences step lands (#72).
+  heading: "Headings can't be hidden yet, because hiding one would change the chapters.",
+  highlight: "This block holds a highlight, so it can't be hidden yet.",
+} as const;
+
+// ── Block layout of the view article (memoized per article object) ─────────
+
+interface LaidBlock {
+  readonly block: Block;
+  readonly path: readonly number[];
+  readonly key: string;
+  readonly depth: number;
+  readonly start: number;
+  readonly end: number;
+}
+
+const layouts = new WeakMap<CanonicalArticle, readonly LaidBlock[]>();
+
+function layoutOf(article: CanonicalArticle): readonly LaidBlock[] {
+  let laid = layouts.get(article);
+  if (laid) return laid;
+  // The pass-through view model already walks every block with D-05 offsets.
+  const view = correctionViewFromArticle(article);
+  const blockAt = (path: readonly number[]): Block => {
+    let block = article.blocks[path[0]!]!;
+    for (const i of path.slice(1)) {
+      if (block.kind !== "blockquote") break;
+      block = block.children[i]!;
+    }
+    return block;
+  };
+  laid = view.allBlocks.map((b) => ({
+    block: blockAt(b.path),
+    path: b.path,
+    key: blockPathKey(b.path),
+    depth: b.depth,
+    start: b.viewStart,
+    end: b.viewEnd,
+  }));
+  layouts.set(article, laid);
+  return laid;
+}
+
+/** Find a block target in `article` by text. */
+function resolveBlockTarget(
+  article: CanonicalArticle,
+  target: BlockTarget,
+): LaidBlock | "orphan" | "ambiguous" {
+  const { clusters } = articleGraphemeIndex(article);
+  const exact = graphemeClusters(target.quote.exact, article.lang);
+  const laid = layoutOf(article);
+  const candidates: LaidBlock[] = [];
+  for (const start of findAllOccurrences(clusters, exact)) {
+    const end = start + exact.length;
+    const block = laid.find(
+      (b) =>
+        b.start === start &&
+        b.end === end &&
+        b.block.kind === target.kind &&
+        b.depth === target.depth,
+    );
+    if (block) candidates.push(block);
+  }
+  if (candidates.length === 0) return "orphan";
+  if (candidates.length === 1) return candidates[0]!;
+  const narrowed = candidates.filter((b) =>
+    matchesContext(clusters, b.start, exact.length, target.quote, article.lang),
+  );
+  return narrowed.length === 1 ? narrowed[0]! : "ambiguous";
+}
+
+/** The text target for the block at `path` in `article`; null when the
+ * block has no text to be found by (a figure with no alt or caption). */
+export function blockTargetFor(
+  article: CanonicalArticle,
+  path: readonly number[],
+): BlockTarget | null {
+  const key = blockPathKey(path);
+  const laid = layoutOf(article).find((b) => b.key === key);
+  if (!laid || laid.end <= laid.start) return null;
+  return {
+    quote: deriveQuoteSelector(article, { start: laid.start, end: laid.end }),
+    kind: laid.block.kind,
+    depth: laid.depth,
+  };
+}
+
+function runsHoldReference(runs: readonly InlineRun[]): boolean {
+  return runs.some((run) => footnoteRefOf(run) !== undefined);
+}
+
+/** Does this block hold a footnote reference (inline or legacy block)? */
+function holdsFootnoteReference(block: Block): boolean {
+  switch (block.kind) {
+    case "heading":
+    case "paragraph":
+      return runsHoldReference(block.content);
+    case "blockquote":
+      return block.children.some(holdsFootnoteReference);
+    case "bulleted-list":
+    case "numbered-list":
+      return block.items.some((item) => item.content.some(holdsFootnoteReference));
+    case "figure":
+      return runsHoldReference(block.caption);
+    case "footnote-reference":
+      return true;
+    case "code-block":
+    case "unsupported":
+      return false;
+  }
+}
+
+function isHiddenUnder(hidden: ReadonlySet<string>, path: readonly number[]): boolean {
+  for (let n = 1; n < path.length; n++) {
+    if (hidden.has(blockPathKey(path.slice(0, n)))) return true;
+  }
+  return false;
+}
+
+/** Would the article still have a block to read with `hidden`? */
+function anythingLeftToRead(article: CanonicalArticle, hidden: ReadonlySet<string>): boolean {
+  return buildCorrectedBlocks(article.blocks, [], hidden).length > 0;
+}
+
+// ── Per-kind handlers: validity + state change ─────────────────────────────
+
+type Handler<K extends Correction["kind"]> = (
+  state: EngineState,
+  correction: Extract<Correction, { kind: K }>,
+) => Step;
+
+const KINDS: { [K in Correction["kind"]]: Handler<K> } = {
+  hide(state, correction) {
+    const found = resolveBlockTarget(state.article, correction.target);
+    if (found === "orphan") return { ok: false, reason: REASONS.notFound };
+    if (found === "ambiguous") return { ok: false, reason: REASONS.ambiguous };
+    const reason = hideRefusal(state, found);
+    if (reason) return { ok: false, reason };
+    const hidden = new Set(state.hidden);
+    hidden.add(found.key);
+    return { ok: true, state: { article: state.article, hidden } };
+  },
+  unhide(state, correction) {
+    const found = resolveBlockTarget(state.article, correction.target);
+    if (found === "orphan") return { ok: false, reason: REASONS.notFound };
+    if (found === "ambiguous") return { ok: false, reason: REASONS.ambiguous };
+    if (!state.hidden.has(found.key)) {
+      return {
+        ok: false,
+        reason: isHiddenUnder(state.hidden, found.path) ? REASONS.insideHidden : REASONS.notHidden,
+      };
+    }
+    const hidden = new Set(state.hidden);
+    hidden.delete(found.key);
+    return { ok: true, state: { article: state.article, hidden } };
+  },
+};
+
+/** Engine-level validity of hiding `block` (holds for re-application too). */
+function hideRefusal(state: EngineState, block: LaidBlock): string | null {
+  if (state.hidden.has(block.key) || isHiddenUnder(state.hidden, block.path)) {
+    return REASONS.alreadyHidden;
+  }
+  if (holdsFootnoteReference(block.block)) return REASONS.footnoteReference;
+  const hidden = new Set(state.hidden);
+  hidden.add(block.key);
+  if (!anythingLeftToRead(state.article, hidden)) return REASONS.lastBlock;
+  return null;
+}
+
+// ── Building the corrected article ─────────────────────────────────────────
+
+function buildCorrectedBlocks(
+  blocks: readonly Block[],
+  prefix: readonly number[],
+  hidden: ReadonlySet<string>,
+): Block[] {
+  const out: Block[] = [];
+  blocks.forEach((block, i) => {
+    const path = [...prefix, i];
+    if (hidden.has(blockPathKey(path))) return;
+    if (block.kind === "blockquote") {
+      const children = buildCorrectedBlocks(block.children, path, hidden);
+      // A quotation with every child hidden is absent from reading.
+      if (children.length === 0) return;
+      const unchanged =
+        children.length === block.children.length &&
+        children.every((c, j) => c === block.children[j]);
+      out.push(unchanged ? block : { ...block, children });
+      return;
+    }
+    out.push(block);
+  });
+  return out;
+}
+
+/** A short, stable fingerprint of a string (cyrb53 — not cryptographic). */
+function fingerprintText(text: string): string {
+  let h1 = 0xdeadbeef;
+  let h2 = 0x41c6ce57;
+  for (let i = 0; i < text.length; i++) {
+    const ch = text.charCodeAt(i);
+    h1 = Math.imul(h1 ^ ch, 2654435761);
+    h2 = Math.imul(h2 ^ ch, 1597334677);
+  }
+  h1 = Math.imul(h1 ^ (h1 >>> 16), 2246822507) ^ Math.imul(h2 ^ (h2 >>> 13), 3266489909);
+  h2 = Math.imul(h2 ^ (h2 >>> 16), 2246822507) ^ Math.imul(h1 ^ (h1 >>> 13), 3266489909);
+  return (4294967296 * (2097151 & h2) + (h1 >>> 0)).toString(36);
+}
+
+function finish(
+  original: CanonicalArticle,
+  state: EngineState,
+  outcomes: CorrectionOutcome[],
+): CorrectionsResult {
+  if (state.article === original && state.hidden.size === 0) {
+    return {
+      article: original,
+      view: correctionViewFromArticle(original),
+      outcomes,
+      fingerprint: undefined,
+    };
+  }
+  const blocks = buildCorrectedBlocks(state.article.blocks, [], state.hidden);
+  // The corrected article never carries the original's frozen structure
+  // snapshot: its chapters are derived from the corrected blocks (and the
+  // snapshot is never written back onto the original row — ADR 0014).
+  const { structure: _frozen, ...rest } = state.article;
+  void _frozen;
+  const article: CanonicalArticle = { ...rest, blocks };
+  // The fingerprint is a function of the corrected substrate itself, so two
+  // correction lists that read the same (hide then unhide) share a stamp.
+  const fingerprint = `c${fingerprintText(JSON.stringify(blocks))}`;
+  registerCorrectionsFingerprint(article, fingerprint);
+  return {
+    article,
+    view: buildCorrectionView(state.article, state.hidden),
+    outcomes,
+    fingerprint,
+  };
+}
+
+function run(original: CanonicalArticle, corrections: readonly Correction[]): CorrectionsResult {
+  let state: EngineState = { article: original, hidden: new Set() };
+  const outcomes: CorrectionOutcome[] = [];
+  for (const correction of corrections) {
+    const handler = KINDS[correction.kind] as Handler<typeof correction.kind>;
+    const step = handler(state, correction as never);
+    if (step.ok) {
+      state = step.state;
+      outcomes.push({ status: "applied" });
+    } else {
+      outcomes.push({ status: "not-applied", reason: step.reason });
+    }
+  }
+  return finish(original, state, outcomes);
+}
+
+const memo = new WeakMap<
+  CanonicalArticle,
+  { corrections: readonly Correction[]; result: CorrectionsResult }
+>();
+const EMPTY: readonly Correction[] = [];
+
+/**
+ * THE engine: the original article plus its ordered corrections → the
+ * corrected article, the correction-view model and an outcome per
+ * correction. Pure; memoized on (original, corrections) identity.
+ */
+export function applyCorrections(
+  original: CanonicalArticle,
+  corrections: readonly Correction[] = EMPTY,
+): CorrectionsResult {
+  const cached = memo.get(original);
+  if (
+    cached &&
+    (cached.corrections === corrections ||
+      (corrections.length === 0 && cached.corrections.length === 0))
+  ) {
+    return cached.result;
+  }
+  const result = run(original, corrections);
+  memo.set(original, { corrections, result });
+  return result;
+}
+
+/** Convenience: just the corrected article. */
+export function correctedArticle(
+  original: CanonicalArticle,
+  corrections: readonly Correction[] | undefined,
+): CanonicalArticle {
+  if (!corrections || corrections.length === 0) return original;
+  return applyCorrections(original, corrections).article;
+}
+
+// ── Command availability (the Correction view's Hide / Unhide) ─────────────
+
+export type Availability =
+  { readonly available: true } | { readonly available: false; readonly reason: string };
+
+export interface AvailabilityContext {
+  /** Highlight ranges in READING coordinates (the corrected article). */
+  readonly highlights?: readonly { readonly start: number; readonly end: number }[];
+}
+
+function engineStateOf(result: CorrectionsResult): EngineState {
+  const hidden = new Set<string>();
+  for (const b of result.view.allBlocks) if (b.hiddenDirectly) hidden.add(blockPathKey(b.path));
+  return { article: result.view.article, hidden };
+}
+
+function laidFor(result: CorrectionsResult, block: CorrectionViewBlock): LaidBlock | undefined {
+  const key = blockPathKey(block.path);
+  return layoutOf(result.view.article).find((b) => b.key === key);
+}
+
+/** Can the reader hide this block now? (Engine validity + #71's temporary
+ * limits: no headings, no blocks holding a highlight — lifted by #72.) */
+export function hideAvailability(
+  result: CorrectionsResult,
+  block: CorrectionViewBlock,
+  context: AvailabilityContext = {},
+): Availability {
+  const laid = laidFor(result, block);
+  if (!laid) return { available: false, reason: REASONS.notFound };
+  if (laid.end <= laid.start) return { available: false, reason: REASONS.noText };
+  const state = engineStateOf(result);
+  const refusal = hideRefusal(state, laid);
+  if (refusal) return { available: false, reason: refusal };
+  const holdsHeading = (b: Block): boolean =>
+    b.kind === "heading" || (b.kind === "blockquote" && b.children.some(holdsHeading));
+  if (holdsHeading(laid.block)) return { available: false, reason: REASONS.heading };
+  if (block.readingStart !== null && block.readingEnd !== null) {
+    const { readingStart: start, readingEnd: end } = block;
+    if ((context.highlights ?? []).some((h) => h.start < end && h.end > start)) {
+      return { available: false, reason: REASONS.highlight };
+    }
+  }
+  // The target must be findable again: unique by text in this article.
+  const target = blockTargetFor(result.view.article, block.path);
+  if (!target || resolveBlockTarget(result.view.article, target) !== laid) {
+    return { available: false, reason: REASONS.ambiguous };
+  }
+  return { available: true };
+}
+
+/** Can the reader unhide this block now? */
+export function unhideAvailability(block: CorrectionViewBlock): Availability {
+  if (block.hiddenDirectly) return { available: true };
+  if (block.hidden) return { available: false, reason: REASONS.insideHidden };
+  return { available: false, reason: REASONS.notHidden };
+}
+
+/** Build the hide / unhide correction for a view block (the caller checked
+ * availability). Null when the block has no text to target. */
+export function blockCorrection(
+  kind: "hide" | "unhide",
+  result: CorrectionsResult,
+  block: CorrectionViewBlock,
+  meta: { id: string; createdAt: string },
+): Correction | null {
+  const target = blockTargetFor(result.view.article, block.path);
+  if (!target) return null;
+  return { kind, id: meta.id, createdAt: meta.createdAt, target };
+}

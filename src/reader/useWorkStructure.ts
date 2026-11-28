@@ -88,6 +88,10 @@ export function useWorkStructure(article: CanonicalArticle | null): WorkStructur
     // Bundled fixtures are read-only samples: no Dexie row exists, and a
     // structure row for a fixture id would be a phantom.
     if (bundledFixtures.some((f) => f.id === article.id)) return;
+    // Spec #68 / #71 (ADR 0014) — a corrected article's structure is derived
+    // from the corrected blocks and never written onto the original row (the
+    // snapshot there describes the original as ingested).
+    if (textStamp(article).corrections !== undefined) return;
     let cancelled = false;
     void saveWorkStructure(article.id, textStamp(article).revision, structure).then((outcome) => {
       if (cancelled) return;

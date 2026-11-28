@@ -237,6 +237,7 @@ export class DexieLibrarySource implements ArticleRepository {
         db.collections,
         db.completions,
         db.pdfRepairs,
+        db.corrections,
       ],
       async () => {
         // Issue #245 — the collection-reference strip runs FIRST, inside
@@ -266,6 +267,8 @@ export class DexieLibrarySource implements ArticleRepository {
         await db.articleNoteDrafts.where("articleId").equals(id).delete();
         await db.articles.delete(id);
         await db.pdfRepairs.delete(id);
+        // Spec #68 / #71 — the article's corrections go with it (ADR 0014).
+        await db.corrections.delete(id);
         if (id === STARTER_ARTICLE_ID) {
           await db.settings.put({ key: STARTER_CHOICE_KEY, value: true });
         }

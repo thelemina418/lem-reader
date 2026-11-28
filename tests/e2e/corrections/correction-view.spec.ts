@@ -202,7 +202,12 @@ test.describe("Correction view (#70)", () => {
     const second = await page
       .locator(".correction-block:focus")
       .getAttribute("data-correction-block");
-    expect(Number(second)).toBe(Number(first) + 1);
+    // Frames in document order (#71: blocks inside a quotation are framed
+    // too, keyed by their path "3.0").
+    const order = await correctionView(page)
+      .locator(".correction-block")
+      .evaluateAll((els) => els.map((el) => el.getAttribute("data-correction-block")));
+    expect(order.indexOf(second)).toBe(order.indexOf(first) + 1);
     await page.keyboard.press("ArrowUp");
     await expect(page.locator(".correction-block:focus")).toHaveAttribute(
       "data-correction-block",
@@ -213,10 +218,12 @@ test.describe("Correction view (#70)", () => {
     await expect(correctionView(page)).toBeVisible();
     // Move focus well ahead; the focused block becomes the reading position.
     for (let i = 0; i < 4; i++) await page.keyboard.press("ArrowDown");
-    const chosen = Number(
-      await page.locator(".correction-block:focus").getAttribute("data-correction-block"),
-    );
-    expect(chosen).toBe(Number(first) + 4);
+    const chosenKey = await page
+      .locator(".correction-block:focus")
+      .getAttribute("data-correction-block");
+    expect(order.indexOf(chosenKey)).toBe(order.indexOf(first) + 4);
+    // The top-level block holding it (a quotation child's path starts there).
+    const chosen = Number((chosenKey ?? "").split(".")[0]);
     await leaveView(page);
     // Focus is never stranded on <body>: it returns to the header toggle.
     await expect(correctionToggle(page)).toBeFocused();

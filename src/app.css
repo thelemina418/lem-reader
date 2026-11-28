@@ -7753,6 +7753,76 @@ dialog.reprocess-book {
 .correction-block[data-hidden="true"] {
   border-style: dashed;
 }
+/* Issue #71 — "Hidden" is real text in the label (never dimming alone). */
+.correction-block-hidden {
+  font-weight: 600;
+  color: var(--ink);
+}
+/* Quotation children are framed inside their quotation's frame. */
+.correction-block .correction-block {
+  margin-inline: 0;
+}
+/* Issue #71 — the block command bar: acts on the current block. Fixed at
+   the bottom of the viewport, OUT of flow, so its content changing as focus
+   moves never shifts the column (stable orientation); the view reserves room
+   for it, and focus scrolling keeps the focused block clear of it. It wraps
+   (never overflows) at 320px. No motion. */
+.correction-commands {
+  position: fixed;
+  inset-inline: 0;
+  bottom: 0;
+  z-index: 2;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: center;
+  gap: var(--space-xs) var(--space-sm);
+  padding: var(--space-xs) var(--space-md);
+  border-top: 1px solid var(--hairline);
+  background: var(--surface-raised);
+  font-family: var(--font-ui);
+  font-size: 0.875rem;
+  min-width: 0;
+}
+.correction-view:has(.correction-commands) {
+  padding-block-end: 10rem;
+}
+:root:has(.correction-commands) {
+  scroll-padding-block-end: 10rem;
+}
+.correction-commands-current {
+  overflow-wrap: anywhere;
+}
+.correction-command {
+  min-height: 44px;
+  padding-inline: var(--space-sm);
+  font: inherit;
+  color: var(--ink);
+  background: var(--surface);
+  border: 1px solid var(--hairline-strong, var(--hairline));
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+}
+.correction-command[aria-disabled="true"] {
+  color: var(--ink-soft);
+  cursor: not-allowed;
+}
+.correction-command kbd {
+  font: inherit;
+  font-size: 0.75rem;
+  padding-inline: 0.25em;
+  border: 1px solid var(--hairline);
+  border-radius: 3px;
+}
+.correction-command:focus-visible {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: 2px;
+}
+.correction-commands-reason {
+  flex-basis: 100%;
+  text-align: center;
+  color: var(--ink-soft);
+}
 /* Block content keeps its reading typography; the frame owns the outer
    rhythm, so the block's own first/last margins collapse into the frame. */
 .correction-block > [data-block-index] {
@@ -7772,8 +7842,16 @@ dialog.reprocess-book {
 }
 @media (forced-colors: active) {
   .correction-block,
-  .correction-view-header {
+  .correction-view-header,
+  .correction-commands,
+  .correction-command {
     border-color: CanvasText;
+  }
+  .correction-commands {
+    border-top-color: CanvasText;
+  }
+  .correction-command[aria-disabled="true"] {
+    color: GrayText;
   }
   .correction-block-label {
     color: CanvasText;

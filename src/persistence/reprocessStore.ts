@@ -144,14 +144,16 @@ function everyRevision<T, K>(table: Table<T, K>, articleId: string): Collection<
 
 /** Everything apply reads, serialized in a stable order. */
 async function snapshotOf(articleId: string): Promise<string> {
-  const [row, highlights, locations, completions, collections] = await Promise.all([
+  const [row, highlights, locations, completions, collections, corrections] = await Promise.all([
     db.articles.get(articleId),
     everyRevision(db.highlights, articleId).toArray(),
     everyRevision(db.location, articleId).toArray(),
     db.completions.toArray(),
     db.collections.toArray(),
+    // Spec #68 / #71 — a correction made between preview and apply is a change.
+    db.corrections.get(articleId),
   ]);
-  return JSON.stringify({ row, highlights, locations, completions, collections });
+  return JSON.stringify({ row, highlights, locations, completions, collections, corrections });
 }
 
 function adoptCandidate(saved: CanonicalArticle, fresh: CanonicalArticle): CanonicalArticle {
@@ -492,6 +494,7 @@ export async function applyReprocess(
       db.completions,
       db.collections,
       db.collectionActiveEntries,
+      db.corrections,
     ],
     async () => {
       if ((await snapshotOf(preview.articleId)) !== preview.snapshot)
@@ -582,6 +585,7 @@ async function bookSnapshotOf(bookId: string): Promise<string> {
       highlights: await everyRevision(db.highlights, id).toArray(),
       locations: await everyRevision(db.location, id).toArray(),
       notes: await db.articleNotes.where("articleId").equals(id).toArray(),
+      corrections: await db.corrections.get(id),
     });
   }
   return JSON.stringify({
@@ -747,6 +751,7 @@ export async function applyBookReprocess(
       db.completions,
       db.collections,
       db.collectionActiveEntries,
+      db.corrections,
     ],
     async () => {
       let stale = (await bookSnapshotOf(preview.bookId)) !== preview.snapshot;
@@ -776,6 +781,8 @@ export async function applyBookReprocess(
         await db.articleNoteDrafts.where("articleId").equals(articleId).delete();
         await db.assets.where("articleId").equals(articleId).delete();
         await db.readingSessions.where("articleId").equals(articleId).delete();
+        // Spec #68 / #71 — a dropped chapter's corrections go with it.
+        await db.corrections.delete(articleId);
         await db.articles.delete(articleId);
       }
       const bookRow = { bookId: preview.bookId };

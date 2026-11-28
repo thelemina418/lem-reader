@@ -280,6 +280,7 @@ export async function removeBook(id: string): Promise<void> {
       db.readingSessions,
       db.collections,
       db.completions,
+      db.corrections,
     ],
     async () => {
       const book = await db.books.get(id);
@@ -345,6 +346,8 @@ export async function removeBook(id: string): Promise<void> {
           .delete();
         await db.assets.where("articleId").equals(chapterId).delete();
         await db.readingSessions.where("articleId").equals(chapterId).delete();
+        // Spec #68 / #71 — each chapter's corrections go with it.
+        await db.corrections.delete(chapterId);
       }
 
       // Notes: cascade through the collected highlight ids.

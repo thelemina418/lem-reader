@@ -442,6 +442,11 @@ export function CollectionDetailView({
   // The memo keeps the array identity stable across announcement re-renders
   // (the progress useMemo below lists it — the exhaustive-deps rule).
   const entries = useMemo(() => collection?.entries ?? [], [collection]);
+  // Spec #68 / #71 — the chapter picker offers the chapters as READ.
+  const readingStandalone = useMemo(
+    () => snapshot.standaloneArticles.map((a) => snapshot.readingArticleById?.get(a.id) ?? a),
+    [snapshot],
+  );
 
   // ── Shared completion (issue #246) ────────────────────────────────────
   // The progress metric is finished ENTRIES over total entries (the AC's
@@ -755,7 +760,7 @@ export function CollectionDetailView({
           <AddReadingDialog
             open={addOpen}
             collection={collection}
-            articles={snapshot.standaloneArticles}
+            articles={readingStandalone}
             books={snapshot.books}
             chaptersByBook={snapshot.chaptersByBook}
             onOutcome={(outcome) => {

@@ -1,0 +1,171 @@
+import { articleGraphemeIndex, BLOCK_SEPARATOR, graphemeClusters, normalizeRunText, } from "../content/normalizeText";
+/** Scoped bodies retain source coordinates even when preceding blocks are
+ * absent. An explicit start also accounts for an intra-block projection.
+ * Unindexed element stubs retain the legacy full-body accumulation. */
+function sourceStart(article, el, fallback) {
+    if (el.dataset.sourceStart !== undefined)
+        return Number(el.dataset.sourceStart);
+    if (el.dataset.blockIndex !== undefined) {
+        return (articleGraphemeIndex(article).blockStartOffsets[Number(el.dataset.blockIndex)] ?? fallback);
+    }
+    return fallback;
+}
+/**
+ * The rendered top-level article blocks in document order. The
+ * [data-block-index] selector matches EXACTLY the top-level blocks — not
+ * (a) the article header's <p class="meta"> provenance paragraph (not an
+ * article block), and (b) blockquote child <p> elements (a <blockquote> and
+ * its child <p> both matched "p, blockquote"). The extra elements shifted
+ * the grapheme offsets computed by computeTopVisibleOffset so they no longer
+ * matched the article-global offsets from pageStartGlobalOffset (which walks
+ * article.blocks via blockNormalizedText). [data-block-index] aligns the
+ * scrolling-mode anchor with the paginated-mode page boundaries.
+ *
+ * Lives here (not in the route) because every offset↔DOM consumer shares it:
+ * useScrollSave, the D4-10 anchor capture, the read-aloud follower's scroll
+ * target — one selector, one contract.
+ */
+export function queryBlocks(articleEl) {
+    return Array.from(articleEl.querySelectorAll("[data-block-index]"));
+}
+/**
+ * Issue #58 — the rendered notes region's top edge (viewport-relative px),
+ * or null when the article renders no notes. The hidden measurement
+ * projection never counts (it is not the reader's document).
+ */
+export function notesRegionTop(articleEl) {
+    for (const section of articleEl.querySelectorAll('section[aria-label="Footnotes"]')) {
+        if (section.closest(".article-body-measurement"))
+            continue;
+        return section.getBoundingClientRect().top;
+    }
+    return null;
+}
+const elementGraphemeLengthCache = new WeakMap();
+/**
+ * Grapheme length of one rendered element's normalized text, cached per
+ * (element, article) pair. Composes normalizeElText + graphemeClusters —
+ * the SAME substrate helpers (imported, never reimplemented) — so the cached
+ * value is byte-identical to the uncached computation.
+ */
+function elementGraphemeLength(article, el) {
+    const cached = elementGraphemeLengthCache.get(el);
+    if (cached && cached.article === article)
+        return cached.length;
+    const length = graphemeClusters(normalizeElText(el), article.lang).length;
+    elementGraphemeLengthCache.set(el, { article, length });
+    return length;
+}
+/**
+ * Normalize a single rendered DOM element's text contribution, mirroring
+ * normalizeText's per-block rules EXACTLY (D-05 contract):
+ *
+ *   - heading / paragraph: collapse ASCII whitespace on .textContent, trim
+ *   - code-block (<pre>): .textContent VERBATIM (whitespace is readable code)
+ *   - footnote-reference (<sup><a>): the visible marker (e.g. "[1]")
+ *   - figure caption / blockquote / list-item: collapse ASCII whitespace on
+ *     the direct .textContent (these compound blocks contribute a single
+ *     normalized run each under the simplified DOM-element model)
+ *
+ * The DOM renderer (BlockRenderer.tsx) maps each block kind to a distinct
+ * semantic element. We key off the tagName + a `data-kind` hint when present
+ * so code-block verbatim behavior is preserved (the load-bearing divergence
+ * from normalizeText's whitespace-collapse rule).
+ *
+ * NOTE: this helper is intentionally a simplified projection — the rendered
+ * DOM may carry nested elements (e.g. inline marks inside a paragraph). We
+ * rely on HTMLElement.textContent to flatten those into the visible reading
+ * text, which is the same thing a screen-reader announces. The block-level
+ * granularity is sufficient for location restore (Pattern 5: best-effort
+ * block-level target, not exact-character re-anchoring).
+ */
+export function normalizeElText(el) {
+    const kind = el.dataset.kind;
+    const tag = el.tagName.toLowerCase();
+    // Code blocks: .textContent VERBATIM (whitespace is part of the code).
+    // The renderer wraps code-block source in <pre><code>; .textContent on the
+    // <pre> returns the raw source including internal whitespace and newlines.
+    if (tag === "pre" || kind === "code-block") {
+        return el.textContent ?? "";
+    }
+    // Everything else: collapse ASCII whitespace runs and trim, matching
+    // normalizeText's normalizeRunText rule for inline-run blocks.
+    return normalizeRunText(el.textContent ?? "");
+}
+/**
+ * Resolve a saved grapheme offset to the DOM block whose normalized-text
+ * range contains it. Walks `blocks` in document order, accumulating each
+ * block's grapheme contribution plus one BLOCK_SEPARATOR between blocks
+ * (matching normalizeText's `blocks.join(BLOCK_SEPARATOR)` rule).
+ *
+ * Returns:
+ *   - the block whose [consumed, consumed + blockLen] range contains `offset`
+ *   - the LAST block if `offset` overshoots the article (clamp — corpus
+ *     changed since save; calm nearest-block fallback, never null)
+ *   - null if `blocks` is empty (nothing to scroll to)
+ *
+ * The caller calls `element.scrollIntoView({ block: "start" })` on the
+ * result. Under prefers-reduced-motion the global CSS gate sets
+ * scroll-behavior: auto, so the restore is instant; otherwise a single calm
+ * scroll lands the block at the viewport top.
+ */
+export function findScrollTarget(article, blocks, offset) {
+    if (blocks.length === 0)
+        return null;
+    let consumed = 0;
+    let last = null;
+    for (const el of blocks) {
+        last = el;
+        consumed = sourceStart(article, el, consumed);
+        const len = elementGraphemeLength(article, el);
+        // Offset falls in [consumed, consumed + len] → this block contains it.
+        // (offset <= consumed + len handles the boundary case offset == consumed.)
+        if (offset <= consumed + len) {
+            return el;
+        }
+        consumed += len + BLOCK_SEPARATOR.length; // +1 for the "\n" separator
+    }
+    // Offset overshoots the article's total length — clamp to the last block.
+    // This is the "corpus changed since save" fallback (D-06 revision mismatch
+    // is normally caught by the [articleId+revision] key, but defensive clamp
+    // keeps restore calm under any drift).
+    return last;
+}
+/**
+ * Compute the article-global grapheme offset of the topmost visible block,
+ * mirroring findScrollTarget's accumulation in the forward direction. Reuses
+ * normalizeElText + graphemeClusters so the offset round-trips exactly with
+ * the restored target on reopen.
+ *
+ * Phase 4 Plan 04-04 (D4-10 anchor): ArticleView calls this to capture the
+ * reader's current scrolling position before switching to paginated mode, so
+ * the paginated surface can render the page containing the same passage.
+ * useScrollSave (scroll-position persistence) also calls this — both consumers
+ * share ONE implementation (no fork — Pattern 5).
+ *
+ * @param article   The canonical article (lang drives grapheme segmentation).
+ * @param blocks    The rendered block elements in document order (from
+ *                  ArticleView.queryBlocks — same selector useScrollSave uses).
+ * @param headerPx  Approximate header height in CSS px. A block whose top has
+ *                  scrolled to (or past) this line marks the reader's current
+ *                  section. Defaults to 48 (the .app-header min-height).
+ */
+export function computeTopVisibleOffset(article, blocks, headerPx = 48) {
+    if (blocks.length === 0)
+        return 0;
+    let consumed = 0;
+    let offset = sourceStart(article, blocks[0], 0);
+    for (const el of blocks) {
+        consumed = sourceStart(article, el, consumed);
+        const len = elementGraphemeLength(article, el);
+        // A block whose top has scrolled to (or past) the header line marks the
+        // reader's current section. Capture its STARTING offset (not mid-block)
+        // so the anchor lands at the block top — calm and predictable (Pattern 5:
+        // best-effort block-level target).
+        if (el.getBoundingClientRect().top <= headerPx + 8) {
+            offset = consumed;
+        }
+        consumed += len + BLOCK_SEPARATOR.length;
+    }
+    return offset;
+}

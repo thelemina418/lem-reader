@@ -1,0 +1,1235 @@
+// src/content/schema.ts
+// Frozen Zod document model for Lem Reader (D-04 inline marks, D-06 identity,
+// D-05 coordinate substrate). Lifted from 01-RESEARCH.md §Code Examples
+// "Normalized Block Schema" with the locked design choices enforced.
+//
+// Security boundaries (Pitfall 5): every URL field carries a scheme allow-list
+// refinement so javascript:/data:/file:/vbscript: hrefs are rejected at parse
+// time, before they can reach the renderer.
+//
+// Recursive types (Pitfall 7): BlockquoteBlock.children and ListItem.content
+// reference Block recursively. Zod's getter form handles runtime laziness, but
+// TS cannot infer a self-referential const without a type annotation. We use
+// the Zod-documented two-pass pattern: hand-write the recursive Block union,
+// then annotate `BlockSchema: z.ZodType<Block>`. The hand-written type mirrors
+// the discriminatedUnion below and is validated by tests/unit/schema.test.ts.
+import { z } from "zod";
+// ── URL scheme allow-lists (Pitfall 5 — stored XSS defense at the boundary) ──
+/** http/https/mailto — for clickable link hrefs (mailto is valid in articles). */
+const linkableUrl = z
+    .string()
+    .url()
+    .refine((u) => /^(https?|mailto):$/i.test(new URL(u).protocol), {
+    message: "Only http, https, mailto schemes allowed",
+});
+/** http/https only — for figure sources and provenance sourceUrl (no mailto/data).
+ * Exported so `src/ingestion/types.ts` can reuse the SAME refinement (single
+ * source of truth for the URL-safety refinement — the Phase 7 ingestion
+ * envelope imports this rather than re-declaring it inline). */
+export const httpUrl = z
+    .string()
+    .url()
+    .refine((u) => /^https?:$/i.test(new URL(u).protocol), {
+    message: "Only http and https schemes allowed",
+});
+// ── D-04: locked inline mark set (link, code, strong, em + footnote-ref #55) ──
+export const LinkMark = z.object({
+    type: z.literal("link"),
+    href: linkableUrl, // Security: scheme allow-list (Pitfall 5)
+    title: z.string().optional(),
+});
+export const CodeMark = z.object({ type: z.literal("code") });
+export const StrongMark = z.object({ type: z.literal("strong") });
+export const EmMark = z.object({ type: z.literal("em") });
+/** Spec #66 / issue #55 — the inline Footnote reference (the fifth member of
+ * the locked mark set). The run's text is the publisher's marker ("1",
+ * "[12]", "†") and stays in the D-05 stream; `footnoteId` names the note in
+ * the controlled `fn-<n>` format (DOM-clobbering guard, Pitfall 4), and
+ * `occurrence` (1-based, document order per note) gives each reference its
+ * own controlled anchor identity — see src/content/footnoteReferences.ts. */
+export const FootnoteRefMark = z.object({
+    type: z.literal("footnote-ref"),
+    footnoteId: z.string().regex(/^fn-\d+$/),
+    occurrence: z.number().int().min(1).default(1),
+});
+export const Mark = z.union([LinkMark, CodeMark, StrongMark, EmMark, FootnoteRefMark]);
+export const InlineRun = z.object({
+    text: z.string().min(1),
+    marks: z.array(Mark).default([]),
+});
+// ── Block kinds — discriminated union (O(1) parse + clean TS narrowing) ─────
+export const HeadingBlock = z.object({
+    kind: z.literal("heading"),
+    level: z.union([
+        z.literal(1),
+        z.literal(2),
+        z.literal(3),
+        z.literal(4),
+        z.literal(5),
+        z.literal(6),
+    ]), // Pitfall 10 — heading-order guard at parse time
+    content: z.array(InlineRun),
+});
+export const ParagraphBlock = z.object({
+    kind: z.literal("paragraph"),
+    content: z.array(InlineRun),
+});
+export const BulletedListBlock = z.object({
+    kind: z.literal("bulleted-list"),
+    items: z.array(z.object({
+        // recursive: a list item contains blocks (getter form — Pitfall 7)
+        get content() {
+            return z.array(BlockSchema);
+        },
+    })),
+});
+export const NumberedListBlock = z.object({
+    kind: z.literal("numbered-list"),
+    items: z.array(z.object({
+        get content() {
+            return z.array(BlockSchema);
+        },
+    })),
+    start: z.number().int().min(1).default(1),
+});
+/** Phase 20 (D20-12) — the local-asset reference arm of FigureBlock.src.
+ * `asset:img-<12 lowercase hex>`: the img- prefix is the D7-07 shortHash
+ * locality precedent; the regex-locked shape means the union can never
+ * smuggle a javascript:/data: URI through this arm (Pitfall 5 discipline
+ * survives at parse time). Exported for the asset-id construction contract
+ * (server/fetchImageAsset.ts) and renderer discrimination. */
+export const assetRef = z.string().regex(/^asset:img-[a-z0-9]{12}$/);
+/** Phase 20 (20-RESEARCH Pattern 2) — the three figure states, all ONE block
+ * kind (D20-06 — no new block kinds):
+ *   - legacy row:  src = remote httpUrl (hydration-only; the renderer NEVER
+ *     fetches it — IMG-03 for pre-v2.1 articles)
+ *   - accepted:    src = asset:img-… (+ optional originalSrc/width/height)
+ *   - refused:     src omitted (alt + caption render with the placeholder)
+ * `width`/`height` are the D20-13 orientation-corrected intrinsic pixels the
+ * pagination reserved box consumes; `originalSrc` is provenance/diagnostic
+ * (D20-12) — where the bytes came from, never a fetch target. alt + caption
+ * are byte-identical in every state (D-05 substrate; D19-01 caption marks). */
+export const FigureBlock = z.object({
+    kind: z.literal("figure"),
+    alt: z.string(), // required for accessibility
+    // D20-12 + D20-02: union has NO arm for data: URIs (one no-exceptions
+    // media boundary, Pitfall 5) and no arm for javascript:/file:/vbscript:.
+    src: z.union([httpUrl, assetRef]).optional(), // refused figures omit src
+    originalSrc: httpUrl.optional(), // provenance only (D20-12)
+    width: z.number().int().min(1).optional(), // D20-13 intrinsic px
+    height: z.number().int().min(1).optional(), // D20-13 intrinsic px
+    caption: z.array(InlineRun).default([]),
+});
+export const CodeBlock = z.object({
+    kind: z.literal("code-block"),
+    language: z.string().optional(), // e.g. "ts", "py" — for future highlighting
+    source: z.string(),
+});
+export const FootnoteReferenceBlock = z.object({
+    kind: z.literal("footnote-reference"),
+    footnoteId: z.string().regex(/^fn-\d+$/), // controlled id format (Pitfall 4)
+    marker: z.string(), // visible text, e.g. "[1]"
+});
+export const UnsupportedBlock = z.object({
+    kind: z.literal("unsupported"),
+    originalKind: z.string(), // internal, for diagnostics
+    plainDescription: z.string().min(1), // human-written, user-facing
+});
+export const BlockquoteBlock = z.object({
+    kind: z.literal("blockquote"),
+    // recursive: a blockquote contains blocks (getter form — Pitfall 7)
+    get children() {
+        return z.array(BlockSchema);
+    },
+});
+export const BlockSchema = z.discriminatedUnion("kind", [
+    HeadingBlock,
+    ParagraphBlock,
+    BlockquoteBlock,
+    BulletedListBlock,
+    NumberedListBlock,
+    FigureBlock,
+    CodeBlock,
+    FootnoteReferenceBlock,
+    UnsupportedBlock,
+]);
+// ── Footnote bodies — participate in the coordinate stream at the footnotes region ──
+// Issue #59 — a Footnote can hold several paragraphs. `content` is the note's
+// FIRST paragraph (a stored single-content note parses as a one-paragraph
+// note, byte-identically); `laterParagraphs` carries the rest and is ABSENT
+// for a one-paragraph note, so single-paragraph rows and exports are
+// unchanged. Read a note's paragraphs through `footnoteParagraphs`
+// (src/content/footnoteBody.ts), never the fields directly.
+export const FootnoteBody = z.object({
+    id: z.string().regex(/^fn-\d+$/), // Pitfall 4 — DOM clobbering guard
+    content: z.array(InlineRun),
+    laterParagraphs: z.array(z.array(InlineRun)).min(1).optional(),
+});
+// ── Work structure (issue #236 — stable chapter/reading-part destinations) ──
+// An OPTIONAL versioned content-division snapshot on the article record. It
+// is a destination map over the canonical source — never page layout: page
+// counts change with typography, structural destinations do not. Destinations
+// are revision-scoped source ranges (block span + optional intra-block
+// grapheme bounds + canonical D-05 offsets), so duplicate headings stay
+// distinct and page indices are never identity. Generated reading parts are
+// honest subdivisions (`titleSource: "generated"`, title "Part N") and are
+// never conflated with chapters; publisher-authored evidence and heading-
+// derived sections are the only chapter title sources.
+export const WORK_STRUCTURE_SCHEMA_VERSION = 1;
+export const StructureDestinationSchema = z.object({
+    /** Deterministic range-encoded id — `ch-<startBlock>.<g|b>` /
+     * `pt-<startBlock>.<g|b>` ("b" = block start). Unique within one structure
+     * because destinations tile the source exactly; stable across typography,
+     * reloads, and devices because the range is. Titles/ordinals are NEVER
+     * identity. */
+    id: z.string().regex(/^(?:ch|pt)-\d+\.(?:b|\d+)$/),
+    kind: z.enum(["chapter", "part"]),
+    title: z.string().min(1),
+    /** Where the title came from: publisher outline evidence or a canonical
+     * heading for chapters; generated parts always say "generated". */
+    titleSource: z.enum(["publisher", "heading", "generated"]),
+    /** Parts carved out of a chapter point at that chapter's id. Absent on
+     * chapters and on work-level parts (a headingless work has no chapters —
+     * its parts stand alone rather than inventing one). */
+    parentChapterId: z.string().optional(),
+    /** Body block range [startBlock, endBlock) — endBlock EXCLUSIVE, the
+     * BlockWindow semantics. */
+    startBlock: z.number().int().nonnegative(),
+    endBlock: z.number().int().positive(),
+    /** Intra-block D-05 start within blocks[startBlock]; absent = block start. */
+    startGrapheme: z.number().int().nonnegative().optional(),
+    /** Intra-block D-05 exclusive end within blocks[endBlock - 1]; absent =
+     * full block. */
+    endGrapheme: z.number().int().positive().optional(),
+    /** Canonical D-05 offsets — startOffset inclusive, endOffset exclusive.
+     * The LAST destination's endOffset is exactly the work's totalGraphemes,
+     * so trailing text, zero-text visual blocks, separators, and footnote
+     * bodies stay covered (coordinate glue belongs to the earlier range). */
+    startOffset: z.number().int().nonnegative(),
+    endOffset: z.number().int().positive(),
+});
+export const WorkStructureSchema = z.object({
+    schemaVersion: z.literal(WORK_STRUCTURE_SCHEMA_VERSION), // STATE-04 migration hook
+    /** Derivation algorithm stamp. An ESTABLISHED snapshot is frozen — readers
+     * never re-derive over it (a future generator bump must not renumber an
+     * existing work's parts). */
+    generatorVersion: z.number().int().min(1),
+    /** The article revision the ranges were derived from. Validation refuses
+     * any snapshot whose revision or ranges do not match the row's canonical
+     * content. */
+    revision: z.number().int().min(1),
+    /** Spec #68 — the corrections fingerprint of the substrate these
+     * coordinates refer to (src/content/sameText.ts). Absent = the original
+     * as ingested (no corrections) — so uncorrected rows stay byte-identical. */
+    corrections: z.string().min(1).optional(),
+    /** Ordered destinations tiling [0, totalGraphemes) exactly — no gaps, no
+     * overlaps, source order. */
+    destinations: z.array(StructureDestinationSchema).min(1),
+});
+// ── Provenance ───────────────────────────────────────────────────────────────
+export const Provenance = z.object({
+    // D7-08 + Pitfall 9: sourceUrl is `.optional()` so paste-HTML articles
+    // (ING-02) — which have no canonical source URL — can omit it. Existing v1.0
+    // fixtures always supply it, so they parse identically (additive change,
+    // source-compatible). The renderer's "open original" affordance hides when
+    // sourceUrl is absent (07-06). originalHtmlHash still provides traceability
+    // for paste-sourced articles.
+    sourceUrl: httpUrl.optional(), // scheme-allow-listed when present (Pitfall 5)
+    sourceAliases: z.array(httpUrl).optional(), // resolved input URLs; additive local metadata
+    title: z.string().min(1),
+    author: z.string().optional(),
+    publishedAt: z.string().datetime().optional(),
+    retrievedAt: z.string().datetime(),
+    originalHtmlHash: z.string(), // SHA-256 of source HTML, for traceability
+    license: z.string().optional(),
+});
+// ── Article ──────────────────────────────────────────────────────────────────
+// ── Phase 7 ingestion metadata (D7-02, D7-08) ───────────────────────────────
+// Additive sub-schemas introduced by Phase 7. Backward-compatible with v1.0
+// fixtures by construction: ArticleSchema.ingestionMeta is `.optional()`, so a
+// v1.0 fixture (which omits the field) hydrates to `undefined` on read — the
+// Pitfall 9 `.optional()`/`.default()` migration mechanism mirroring
+// ReaderSettingsSchema.readingMode at L233-237. The compositeLibraryRepository
+// (07-06) synthesizes { source: "fixture" } for display only; the canonical
+// v1.0 row never carries ingestionMeta.
+/** ArticleSourceSchema — D7-08 + D8-15 + D8-16 origin discriminator. The enum
+ * is CLOSED; future phases widen it additively ("pdf" Phase 11, "epub-chapter"
+ * Phase 12). Phase 8 adds "markdown" (D8-16 — `.md` upload via
+ * markdownToBlocks) and "html-upload" (D8-15 — `.html` file-upload reuses the
+ * paste path but carries a distinct badge per D8-02). Both widenings are
+ * anticipated by ARCHITECTURE.md L390 and are forward-compatible. */
+export const ArticleSourceSchema = z.enum([
+    "fixture",
+    "url",
+    "paste",
+    "markdown", // Phase 8 — D8-16 (.md upload via markdownToBlocks)
+    "html-upload", // Phase 8 — D8-15 (.html file-upload; paste textarea stays as "paste")
+    "pdf", // Phase 11 — ING-04 (.pdf upload via pdfToBlocks)
+    "epub-chapter", // Phase 12 — ING-05 (.epub upload via epubToBooks; one article per chapter, Option A)
+    "youtube", // Issue #39 — transcript-as-article (InnerTube captions via server/youtubeTranscript.ts)
+]);
+// ── Issue #39 (decision #26) — transcript block-keyed timing metadata ────────
+/** YOUTUBE_VIDEO_ID_REGEX — the canonical 11-character YouTube video id
+ * alphabet (A-Za-z0-9_-). Lives HERE (not in src/ingestion/youtube.ts, which
+ * re-exports it) because TranscriptMetaSchema below validates videoId with it
+ * and the /src→ingestion import direction is forbidden — ingestion imports
+ * content, never the reverse (the httpUrl single-source-of-truth precedent
+ * above). Server/youtubeTranscript.ts keeps consuming it via the re-export. */
+export const YOUTUBE_VIDEO_ID_REGEX = /^[A-Za-z0-9_-]{11}$/;
+/** BCP47_LANGUAGE_TAG_REGEX — a pragmatic BCP-47 language-tag shape:
+ * language subtag (2-3 alpha), optional script (4 alpha), optional region
+ * (2 alpha or 3 digits — "en", "pt-BR", "zh-Hans", "zh-Hant-TW", "es-419"),
+ * optional variant subtags (5-8 alphanumerics). Deliberately NOT the full
+ * RFC 5646 grammar (grandfathered and private-use primary subtags excluded)
+ * — the boundary's job is refusing junk strings, not certifying compliance.
+ * Decision #26: captionLanguage carries the chosen track's FULL code here,
+ * so it is validated as a language tag, not merely min(1). */
+export const BCP47_LANGUAGE_TAG_REGEX = /^[A-Za-z]{2,3}(-[A-Za-z]{4})?(-(?:[A-Za-z]{2}|\d{3}))?(-[A-Za-z0-9]{5,8})*$/;
+/** TranscriptSegmentAnchorSchema — ONE block-keyed timestamp: `blockIndex`
+ * indexes the article's persisted `blocks` array (stable per revision — the
+ * same stability the pagination annotations depend on; any future change that
+ * re-derives blocks must re-derive `segments` with them), `startMs` is the
+ * block's start time. START-only granularity (decision #26): a block's end
+ * time is derivable from the next mapped block's start (the last ends at
+ * `durationSeconds`). Timestamps are metadata — NEVER rendered, never part of
+ * normalizeText — so selectors, highlights, and reading position are
+ * untouched. */
+export const TranscriptSegmentAnchorSchema = z.object({
+    blockIndex: z.number().int().min(0),
+    startMs: z.number().int().min(0),
+});
+/** TranscriptMetaSchema — the cohesive optional `ingestionMeta.transcript`
+ * object (decision #26). Block-keyed metadata on the additive bag, NOT new
+ * block fields: the block unions stay untouched (D20-06 — no new block
+ * kinds). `captionSource` distinguishes human tracks from auto-generated ASR
+ * (which forces `extractionConfidence: "low"` — never a silent upgrade to
+ * trusted); "pasted" marks a transcript the reader pasted manually (the
+ * youtube-bot-check fallback) — it ALSO forces "low" (unverified provenance).
+ * `captionLanguage` is the chosen track's full BCP-47 code (the article's
+ * `lang` carries its base language); "und" is the honest value when the
+ * paste's language is unknowable. Nothing here is Dexie-indexed — the
+ * bookId/chapterIndex additive precedent (no schema bump). */
+export const TranscriptMetaSchema = z.object({
+    videoId: z.string().regex(YOUTUBE_VIDEO_ID_REGEX),
+    durationSeconds: z.number().int().min(0),
+    captionSource: z.enum(["manual", "asr", "pasted"]),
+    captionLanguage: z.string().regex(BCP47_LANGUAGE_TAG_REGEX), // decision #26: BCP-47, validated at the boundary
+    segments: z.array(TranscriptSegmentAnchorSchema),
+});
+/** IngestionMetaSchema — derived per-article metadata written at ingest time.
+ * Shape per 07-RESEARCH.md §IngestionMeta/ArticleSource Schema L566-574.
+ * `extractionConfidence` is two-state "high" | "low" (ADR-0003): readable
+ * text is never refused — thin/imperfect extraction admits flagged "low";
+ * the only content-based web refusal left is ZERO extracted blocks (the
+ * client sees that as the failure envelope reason `extraction-unsupported`). */
+export const IngestionMetaSchema = z.object({
+    source: ArticleSourceSchema,
+    // D7-08 + D8-15: origin discriminator widens additively. "upload" covers
+    // BOTH markdown + html-upload (both come from the file picker); the
+    // `source` field carries the format distinction. Hides "open original"
+    // for paste + upload (neither has a canonical sourceUrl).
+    origin: z.enum(["url", "paste", "upload"]).optional(),
+    sourceUrl: httpUrl.optional(), // D7-08: Provenance.sourceUrl mirror (present for url; absent for paste/upload)
+    originalHtmlHash: z.string(), // SHA-256 of fetched/pasted/uploaded source bytes — traceability
+    fetchedAt: z.string().datetime().optional(), // ISO-8601 (present for url; absent for paste/upload)
+    extractionConfidence: z.enum(["high", "low"]), // the derived signal; two-state per ADR-0003 ("low" = admitted flagged)
+    extractionWarnings: z.array(z.string()).default([]), // e.g. "3 unsupported blocks omitted"
+    // ADR-0003 — true when the round-trip anchor probe found ambiguous samples:
+    // the text is fully readable, but highlight anchoring may be unreliable on
+    // it. The reader sees "Highlights may be unreliable on this article."
+    // Additive-optional (Pitfall 9): absent = false, existing rows unchanged.
+    annotationsDegraded: z.boolean().optional(),
+    // Phase 12 (Plan 12-01 Task 2) — ARCHITECTURE L401-402: epub-chapter
+    // articles carry their book + position within it. Additive-optional;
+    // existing rows parse unchanged (absent fields — Pitfall 9 backward-compat,
+    // the same mechanism as `source`-era widenings above).
+    bookId: z
+        .string()
+        .regex(/^[a-z0-9-]+$/)
+        .optional(), // FK → BookSchema.id (grouping reads key on this)
+    chapterIndex: z.number().int().min(0).optional(), // position within BookSchema.chapterArticleIds (admitted order — D12-10/D12-11 numbering)
+    // Issue #39 (decision #26) — block-keyed transcript timing for youtube
+    // articles. Additive-optional (Pitfall 9 — every non-youtube row omits the
+    // field and hydrates to `undefined`, the bookId/chapterIndex mechanism
+    // above); timestamps live HERE, never in blocks, never rendered.
+    transcript: TranscriptMetaSchema.optional(),
+});
+export const ArticleSchema = z.object({
+    id: z.string().regex(/^[a-z0-9-]+$/), // stable slug; never the source URL (D-06)
+    revision: z.number().int().min(1), // monotonic (D-06)
+    lang: z.string().min(2), // BCP-47, e.g. "en", "en-US", "ja" — drives Intl.Segmenter locale
+    provenance: Provenance,
+    blocks: z.array(BlockSchema).min(1),
+    footnotes: z.array(FootnoteBody).default([]),
+    // Phase 7 — additive. v1.0 fixtures omit this field and parse to `undefined`
+    // (Pitfall 9 backward-compat). Ingester path (07-05) always supplies it.
+    ingestionMeta: IngestionMetaSchema.optional(),
+    // Phase 8 — D8-05..D8-08 + RESEARCH §Pattern 2: document tags denormalized
+    // on the article row. Additive; v1.0 fixtures + Phase 7 rows omit the field
+    // and hydrate to `[]` via `.default([])` (Pitfall 9 backward-compat — same
+    // migration mechanism as `ingestionMeta` above + readingMode at L280).
+    // Plan 02 builds the tag store + the `*tags` Dexie multi-entry index on top
+    // of this field; Plan 01 only lands the schema field so Plan 02 is additive.
+    tags: z.array(z.string().min(1)).default([]).optional(),
+    // Phase 17 (META-01..04, D17-12/D17-04) — reader-owned display overrides.
+    // Additive-optional so existing rows parse unchanged (Pitfall 9 hydration,
+    // the same mechanism as ingestionMeta above + tags); overrides travel
+    // INSIDE the article record (D17-12), never a separate table or bundle
+    // block. min(1) makes the empty-string override UNREPRESENTABLE (D17-04):
+    // no override can ever produce an untitled article (canonical
+    // provenance.title is min(1)), and an empty author field means
+    // no-author-override, not an empty-string override.
+    readerTitle: z.string().min(1).optional(),
+    readerAuthor: z.string().min(1).optional(),
+    // Reader-owned display overrides for the provenance date and source link
+    // (the readerTitle/readerAuthor mechanism extended: same additive-optional
+    // Pitfall 9 hydration, same min-guard discipline — a blank publishedAt or
+    // sourceUrl is unrepresentable, and clearing an override means the key is
+    // omitted from the whole-row put). readerPublishedAt stays ISO datetime so
+    // every consumer can feed it to the shared formatters unchanged; the edit
+    // dialog converts a date-only input to UTC-noon ISO (the reader knows the
+    // day, not the clock time). readerSourceUrl is httpUrl like its canonical
+    // mirror — it corrects the "Originally published at {domain}" link only.
+    readerPublishedAt: z.string().datetime().optional(),
+    readerSourceUrl: httpUrl.optional(),
+    // Issue #236 — the OPTIONAL versioned structural snapshot (chapters and
+    // generated reading parts) over this article's canonical content. Rides the
+    // row (the readerTitle mechanism — never a separate table or bundle block),
+    // so backup round trips preserve structural destinations with no new
+    // envelope block. Additive-optional (Pitfall 9): legacy rows, bundled
+    // fixtures, and pre-#236 bundles omit the field and derive the structure
+    // from canonical content instead. Persistence is lazy and revision-guarded
+    // (structureStore.saveWorkStructure — a partial row update that can never
+    // clobber a concurrent reader-metadata edit), and import validates
+    // revision/range compatibility against the winning row before accepting a
+    // snapshot (an invalid snapshot is stripped, never trusted as structure).
+    structure: WorkStructureSchema.optional(),
+    // Issue #114 — the IMMUTABLE added-to-library stamp (Recently added is the
+    // trustworthy default order for the mixed article+book list). Stamped ONCE
+    // at the save seams (DexieLibrarySource.save / saveBook) the moment the row
+    // first enters the library, never updated afterwards; it rides the export/
+    // import bundle via ArticleSchema composition, so the date survives a round
+    // trip. Additive-optional (Pitfall 9): legacy rows and bundled fixtures
+    // omit the field and hydrate to `undefined` — NO historical date is ever
+    // invented; undated rows follow dated ones in stable relative order (the
+    // libraryOrder policy). Not a conflict dimension (metadataDiffers reads
+    // only the reader-override keys), and the v3 Dexie `addedAt` index
+    // (db.ts) already reserved the slot.
+    addedAt: z.string().datetime().optional(),
+});
+// ── Book (Phase 12 — ING-05, Option A: one article per chapter + thin record) ─
+/** BookSchema — the thin book record grouping epub-chapter articles
+ * (ARCHITECTURE Pattern 4; shape per 12-RESEARCH.md L565-577 lifted verbatim
+ * PLUS two planner additions the sketch omitted: `tags` (D12-04 — tags live
+ * on the Book record, mirroring the ArticleSchema.tags Phase 8 mechanism)
+ * and `addedAt` (library default-sort + continue-strip ordering)).
+ * `chapterArticleIds` is ORDERED — the book's own TOC per D12-06: "Chapter
+ * N of M" numbering runs over this list, and `skippedChapterCount` is
+ * disclosed additively (D12-11) rather than renumbering it. `source` is the
+ * literal "epub-upload" (the only book-producing source in Phase 12). */
+export const BookSchema = z.object({
+    id: z.string().regex(/^[a-z0-9-]+$/), // `epub-<12hex>` — content-hash, dedupe-refuse (D7-07 precedent)
+    title: z.string().min(1), // OPF dc:title (spec-REQUIRED; fallback filename)
+    authors: z.array(z.string()).default([]), // dc:creator (repeatable; all kept)
+    language: z.string().min(2), // OPF dc:language (spec-REQUIRED)
+    chapterArticleIds: z.array(z.string().regex(/^[a-z0-9-]+$/)), // ordered — the book's TOC (D12-06)
+    publisher: z.string().optional(), // dc:publisher
+    publishedDate: z.string().optional(), // dc:date (raw OPF string; publisher formats vary — not datetime-refined)
+    identifier: z.string().optional(), // dc:identifier (ISBN/UUID — traceability only)
+    skippedChapterCount: z.number().int().min(0).default(0), // D12-11 disclosure derives from this
+    source: z.literal("epub-upload"),
+    originalFileHash: z.string(), // sha256 of the EPUB bytes
+    tags: z.array(z.string().min(1)).default([]).optional(), // D12-04 — tags live on the Book record
+    addedAt: z.string().datetime(), // library default-sort + continue-strip ordering stamp
+});
+// ── Collections (issue #242 — non-owning arrangements of whole readings) ─────
+// A collection is a reader-named, ORDERED grouping of references (ADR 0011):
+// it never owns its readings, never clones their content, positions,
+// annotations, or completion, and never introduces a second saved passage
+// position (ADR 0001 — the collection's remembered context is navigation
+// state, not location). ONE row per collection with the ordered entries
+// riding the record (the BookSchema.chapterArticleIds ordered-array
+// precedent): a collection is small (a reading plan), order is intrinsic to
+// the row, and the single-row put makes every membership write atomic.
+// Entry targets are WHOLE readings (issue #242: whole articles and whole
+// books) plus CHAPTER targets (issue #244 — the additive union arms below,
+// the Pitfall 9 discipline: new `kind` literals keep v1 rows parse-
+// unchanged). Chapter targets are only the STABLE chapter identities:
+// existing EPUB chapter articles (`book-chapter`) and chapter destinations
+// of an article's established work structure (`work-chapter`). Generated
+// reading parts (`pt-*` ids) and arbitrary passage ranges are
+// unrepresentable — the work-chapter destinationId regex admits `ch-*`
+// only, and the store seam re-validates every target against the live
+// library before a write lands.
+export const COLLECTION_SCHEMA_VERSION = 1;
+/** The WORK_STRUCTURE destination-id grammar restricted to CHAPTERS —
+ * `ch-<startBlock>.<b|grapheme>`. Generated reading parts carry `pt-*` ids
+ * (StructureDestinationSchema) and are deliberately UNREPRESENTABLE here:
+ * generated parts are not collection targets (issue #244 AC), so a part id
+ * fails the shape itself (`invalid-target`), before any library lookup. */
+export const WORK_CHAPTER_DESTINATION_ID_REGEX = /^ch-\d+\.(?:b|\d+)$/;
+/** Where one collection entry points: a whole standalone article, a whole
+ * book/works (the issue #242 slice), or a particular chapter (issue #244 —
+ * an existing EPUB chapter article, or a chapter destination of a saved
+ * web work's structure). The id charsets match the validated record
+ * grammars (article/book ids `^[a-z0-9-]+$`; destination ids the
+ * StructureDestinationSchema rule restricted to chapters), so a record id
+ * from any side of the library parses unchanged. */
+export const CollectionEntryTargetSchema = z.discriminatedUnion("kind", [
+    z.object({ kind: z.literal("article"), articleId: z.string().regex(/^[a-z0-9-]+$/) }),
+    z.object({ kind: z.literal("book"), bookId: z.string().regex(/^[a-z0-9-]+$/) }),
+    // Issue #244 — one EXISTING chapter article of one EPUB book. Both ids
+    // are stored so the write seam can verify the membership (the article's
+    // ingestionMeta.bookId must equal bookId) and the detail view can resolve
+    // the chapter title without re-deriving the book's TOC.
+    z.object({
+        kind: z.literal("book-chapter"),
+        bookId: z.string().regex(/^[a-z0-9-]+$/),
+        articleId: z.string().regex(/^[a-z0-9-]+$/),
+    }),
+    // Issue #244 — one chapter destination of a saved web work's structural
+    // snapshot. `destinationId` is the range-encoded StructureDestination id —
+    // stable across typography and reloads because the RANGE is (issue #236);
+    // the store seam re-validates it against the article's live structure.
+    z.object({
+        kind: z.literal("work-chapter"),
+        articleId: z.string().regex(/^[a-z0-9-]+$/),
+        destinationId: z.string().regex(WORK_CHAPTER_DESTINATION_ID_REGEX),
+    }),
+]);
+/** One place in a collection's order. `id` is the STABLE entry identity
+ * (crypto.randomUUID) — later slices (#243 reorder/remove, #247 continue)
+ * address entries by it, never by array position alone. */
+export const CollectionEntrySchema = z.object({
+    id: z.string().regex(/^[a-z0-9-]+$/),
+    target: CollectionEntryTargetSchema,
+    addedAt: z.string().datetime(), // membership order is array order; addedAt is the audit stamp
+});
+/** The whole collection record. `name` is min(1) AFTER the store seam trims
+ * (an unnamed collection is unrepresentable — the readerTitle min(1)
+ * discipline). `entries` is the ordered arrangement; array order IS the
+ * collection order. `updatedAt` drives the collections-list recency sort. */
+export const CollectionSchema = z.object({
+    schemaVersion: z.literal(COLLECTION_SCHEMA_VERSION),
+    id: z.string().regex(/^[a-z0-9-]+$/), // crypto.randomUUID()
+    name: z.string().min(1),
+    entries: z.array(CollectionEntrySchema),
+    createdAt: z.string().datetime(),
+    updatedAt: z.string().datetime(),
+});
+// ── Completion (issue #246 — shared work/chapter completion) ────────────────
+// ONE persisted completion truth per READING TARGET (ADR 0011 — collections
+// reference rather than own, so completion lives on the TARGET, never on a
+// membership): a record is written by a valid chapter-reading transition in
+// the reader (source "reading") or by an explicit reader correction (source
+// "reader") — never derived from a legacy saved position or end pin (issue
+// #246 AC: a later offset does not prove skipped chapters were read). There
+// is no completion HISTORY: the row is an upsert per target (the correction
+// replaces the earlier state — one truth, no log), and the canonical passage
+// position is untouched by every write here (ADR 0001).
+//
+// The record's primary key (`targetKey`) is the COMPUTED target identity
+// (content/completion.ts's completionTargetKey — the same normalization that
+// makes a book-chapter target and its chapter article ONE reading), carried
+// on the row so Dexie can key it; every read verifies key === computed
+// (content/completion.ts), and a mismatching row is corrupt (dropped calmly,
+// the STATE-04 discipline).
+export const COMPLETION_SCHEMA_VERSION = 1;
+/** Where a completion record's truth came from. "reading" — a valid
+ * chapter-reading transition observed by the reader (traversing past a
+ * chapter's end, finishing a chapter assignment by page, scroll, or ear);
+ * "reader" — the explicit finished/unfinished correction control. The
+ * source rides the row for honesty (a correction and a traversal are
+ * different assertions) — no behavior branches on it today. */
+export const CompletionRecordSchema = z.object({
+    schemaVersion: z.literal(COMPLETION_SCHEMA_VERSION),
+    targetKey: z.string().min(1), // the computed completionTargetKey — the row's primary key
+    target: CollectionEntryTargetSchema, // the structured target (display + validation)
+    finished: z.boolean(),
+    source: z.enum(["reading", "reader"]),
+    updatedAt: z.string().datetime(), // the arbitration stamp against newer reading signals
+});
+// ── Collection active entry (issue #247 — remembered navigation context) ────
+// ONE row per collection: the remembered ACTIVE entry the Continue collection
+// action resumes. The record carries an entry ID and NOTHING else — never a
+// passage offset, never a separate reading attempt (ADR 0011's deferred
+// decision: "their remembered active entry is navigation context only"; ADR
+// 0001's single canonical location stays untouched). The entry id is the
+// STABLE CollectionEntry identity, so reorders and membership edits cannot
+// invalidate it by shifting positions — the collection's CURRENT entries
+// decide validity at Continue time (a removed/deleted/completed remembered
+// entry falls back safely; the selection algebra owns that, not the row).
+export const COLLECTION_ACTIVE_ENTRY_SCHEMA_VERSION = 1;
+export const CollectionActiveEntrySchema = z.object({
+    schemaVersion: z.literal(COLLECTION_ACTIVE_ENTRY_SCHEMA_VERSION),
+    collectionId: z.string().regex(/^[a-z0-9-]+$/), // the collection whose memory this is — the row's primary key
+    entryId: z.string().regex(/^[a-z0-9-]+$/), // the STABLE CollectionEntry id — never an array position
+    updatedAt: z.string().datetime(), // the last remember write (no behavior reads it today; upsert, never history)
+});
+// ── Reader settings (Phase 2 — READ-02/03, STATE-02/04) ──────────────────────
+// Single composite record under Dexie key "reader-prefs" (D2 discretion /
+// 02-RESEARCH.md Pattern 3). Closed-set enums + literal schemaVersion so any
+// persisted value outside the contract is rejected at the read boundary
+// (T-02-01 — Tampering V5). applyTheme consumes the inferred type directly.
+// No recursion here — Pitfall 7 (the two-pass recursive Block pattern above)
+// does NOT apply.
+// Issue #120 — ONE record shape shared by both custom slots (the issue #86
+// customTheme record): baseTheme names the preset the slot was seeded from /
+// resets to, and the reader-editable tokens. Kept module-private (the #86
+// discipline — unexported until a real shape consumer appears); the inferred
+// types below are the public surface.
+// Issue #146 — the surface extends ADDITIVELY with the four Wayfinder chrome
+// tokens (board / boardText / lit / brass — issue #86's five seeds plus the
+// Reading Room's enamel band, its lit current-location board, and its metal
+// rules). OPTIONAL fields: a pre-#146 record (five tokens, no chrome fields)
+// parses byte-unchanged — NO schemaVersion bump. An absent chrome token is
+// DERIVED at apply time (src/settings/customTheme.ts, derive-until-edited);
+// only an edited token is stored.
+const CustomThemeRecordSchema = z.object({
+    baseTheme: z.enum(["sepia", "light", "dark"]),
+    tokens: z.object({
+        surface: z.string().regex(/^#[0-9a-fA-F]{6}$/),
+        surfaceRaised: z.string().regex(/^#[0-9a-fA-F]{6}$/),
+        ink: z.string().regex(/^#[0-9a-fA-F]{6}$/),
+        accent: z.string().regex(/^#[0-9a-fA-F]{6}$/),
+        hairline: z.string().regex(/^#[0-9a-fA-F]{6}$/),
+        board: z
+            .string()
+            .regex(/^#[0-9a-fA-F]{6}$/)
+            .optional(),
+        boardText: z
+            .string()
+            .regex(/^#[0-9a-fA-F]{6}$/)
+            .optional(),
+        lit: z
+            .string()
+            .regex(/^#[0-9a-fA-F]{6}$/)
+            .optional(),
+        brass: z
+            .string()
+            .regex(/^#[0-9a-fA-F]{6}$/)
+            .optional(),
+    }),
+});
+// ── Reader settings (Phase 4 — STATE-04, the D-08 composite record) ──────────
+// The color vocabulary is declared HERE (above the settings object) because
+// the issue #195 highlight-slot presets compose it — the slots ride the
+// settings record, so the shared closed set must precede both consumers.
+// The Annotations section below keeps the HighlightRecord color field's
+// notes; the single source of truth stays this declaration.
+/** The named highlight-color vocabulary (issue #118): the Default fill plus
+ * exactly four named colors. The closed set is the single source of truth —
+ * the Zod enum below, the UI picker, the CSS tokens, and the custom-theme
+ * derivation all key off these literal ids. */
+export const HIGHLIGHT_COLOR_NAMES = ["default", "yellow", "green", "blue", "pink"];
+export const HighlightColorSchema = z.enum(HIGHLIGHT_COLOR_NAMES);
+// Issue #195 — the numbered highlight slots. Declared beside the color
+// vocabulary they compose (see above) and before the settings object that
+// stores them: each slot is a reusable PRESET — an editable short name, ONE
+// existing color choice, and zero or more highlight tags. Creation copies
+// the chosen slot's color + tags onto the new record; later slot edits never
+// touch historical highlights (a slot is configuration, not a live relation).
+/** Issue #41 (ADR 0012) — the slot list's bounds: an ordered list of one to
+ * ten slots. The schema's `.min/.max` contract, the editor's Add/Remove
+ * availability, and the digit vocabulary (1–9, then 0 for slot 10) all read
+ * these ONE constants. */
+export const MIN_HIGHLIGHT_SLOTS = 1;
+export const MAX_HIGHLIGHT_SLOTS = 10;
+/** Issue #41 — the identities the shipped five slots carry, and the
+ * identities the pre-parse migration gives a legacy (id-less) row's slots,
+ * by position. Deterministic so a migrated row is byte-stable across every
+ * settings-entry seam (store, mirror, import); slots the reader ADDS mint
+ * random identities (newSlotId in src/annotations/highlightSlots.ts) in a
+ * different spelling, so the two can never collide. */
+export function legacySlotId(index) {
+    return `slot-${index + 1}`;
+}
+/** One numbered highlight slot: an editable short name, ONE existing color
+ * choice, and zero or more highlight tags. Stored on ReaderSettings — a
+ * reusable preset, never a live relation to historical highlights.
+ * Issue #196 — the color choice widens from the closed named set to an
+ * ARBITRARY color: `customColor` (strict 6-digit sRGB hex — the same grammar
+ * the custom-theme tokens enforce) carries the reader-chosen color beside
+ * the named `color` fallback. Additive optional (Pitfall 9): records without
+ * the field parse unchanged. Rendering derives the readable tint from
+ * `customColor` + the ACTIVE theme; `color` stays the closed-set fallback
+ * (older clients and the named picker still speak it).
+ * Issue #222 (ADR 0008, amended) — the hex becomes a DORMANT memory:
+ * `customColorActive` says which source the slot's color choice IS right
+ * now — `true` + hex = Custom active; `false` + hex = a named fill active
+ * with the hex RETAINED (dormant until Custom is chosen again, which
+ * reactivates the remembered hex instead of re-seeding). `true` without a
+ * hex is unrepresentable — the superRefine below polices it into the
+ * honest corrupt routing. The field is REQUIRED (no hydration default) so
+ * a written v8 row round-trips byte-stably through every parse (a hydrated
+ * default would mint a key absent rows never wrote). A pre-#222 row (no
+ * key) is mapped pre-parse at every settings-entry seam by
+ * migrateReaderSettings (existing customColor ⇒ true, else false). */
+export const HighlightSlotSchema = z
+    .object({
+    // Issue #41 — the slot's STABLE identity: the default slot refers to it
+    // (never to a position), so a move never silently changes which slot
+    // plain creation uses. Required (the dormancy-key discipline): a legacy
+    // row gains identities pre-parse in migrateReaderSettings.
+    id: z
+        .string()
+        .min(1)
+        .max(64)
+        .regex(/^[A-Za-z0-9_-]+$/),
+    // Issue #41 — an EMPTY name is an unnamed slot (a freshly added one); it
+    // reads by its number and color everywhere ("Slot 6 · Neutral" —
+    // slotDisplayName).
+    name: z.string().max(40),
+    color: HighlightColorSchema,
+    customColor: z
+        .string()
+        .regex(/^#[0-9a-fA-F]{6}$/)
+        .optional(),
+    customColorActive: z.boolean(),
+    tags: z.array(z.string().min(1)),
+})
+    .superRefine((slot, ctx) => {
+    if (slot.customColorActive && slot.customColor === undefined) {
+        ctx.addIssue({
+            code: "custom",
+            path: ["customColor"],
+            message: 'customColorActive "true" requires a customColor snapshot',
+        });
+    }
+});
+/**
+ * The shipped slot set (issue #195): Default/Yellow/Green/Blue/Pink with
+ * empty tags — the exact five choices the color picker has always offered,
+ * numbered 1–5. Returns a FRESH deep copy per call: the schema's hydration
+ * default and DEFAULT_SETTINGS both use it, so no parse output ever shares
+ * an array or slot object with another settings record.
+ */
+export function defaultHighlightSlots() {
+    const shipped = [
+        { name: "Default", color: "default", customColorActive: false, tags: [] },
+        { name: "Yellow", color: "yellow", customColorActive: false, tags: [] },
+        { name: "Green", color: "green", customColorActive: false, tags: [] },
+        { name: "Blue", color: "blue", customColorActive: false, tags: [] },
+        { name: "Pink", color: "pink", customColorActive: false, tags: [] },
+    ];
+    return shipped.map((slot, i) => ({ id: legacySlotId(i), ...slot }));
+}
+const ReaderSettingsObjectSchema = z.object({
+    // STATE-04 migration hook: Phase 4 (Plan 04-02, D4-12) bumped the canonical
+    // write version from 1 → 2 when readingMode was added. Issue #40 bumps the
+    // canonical write version 2 → 3 when the read-aloud preferences (voice +
+    // rate, below) were added. Issue #115 bumps the canonical write version
+    // 3 → 4 when the library sort preference (librarySort, below) was added.
+    // Issue #120 bumps the canonical write version 4 → 5 when the ONE custom
+    // theme slot split into the TWO independent custom-light/custom-dark slots
+    // (the legacy shape itself migrates pre-parse at every settings-entry seam
+    // — src/settings/settingsMigration.ts, the D21-03 clampLegacyMeasure
+    // discipline — so no row ever fails parse for carrying the old shape).
+    // Issue #163 bumps the canonical write version 5 → 6 when the remembered
+    // "Open after adding" add-dialog preference (openAfterAdd, below) was added.
+    // Issue #195 bumps the canonical write version 6 → 7 when the FIVE numbered
+    // highlight slots (highlightSlots, below) and the explicit default-slot
+    // choice (defaultHighlightSlot, below) were added.
+    // Issue #222 bumps the canonical write version 7 → 8 when the slots' custom
+    // hex became a DORMANT memory (customColorActive on every slot — see
+    // HighlightSlotSchema; the pre-#222 shape migrates pre-parse at every
+    // settings-entry seam — src/settings/settingsMigration.ts).
+    // Issue #41 bumps the canonical write version 8 → 9 when the slots became
+    // an ordered 1..10 list with stable identities and the default became an
+    // identity (defaultHighlightSlotId) instead of a position index (the
+    // pre-#41 shape migrates pre-parse — src/settings/settingsMigration.ts).
+    // The union accepts ALL NINE literals so that an existing v1 row (no
+    // readingMode field), a v2 row (no voice/rate fields), a v3 row (no
+    // librarySort field), a v4 row (the pre-#120 custom-theme shape), a
+    // v5 row (no openAfterAdd field), a v6 row (no highlightSlots /
+    // defaultHighlightSlot fields), and a v7 row (slots without
+    // customColorActive — migrated pre-parse), and a v8 row (id-less slots +
+    // a default index — migrated pre-parse) hydrate on read — Pitfall 9 (NO
+    // Dexie store change; the settings store is key-value, Dexie is opaque to
+    // the value shape). v10 and above forward-reject (V5 boundary discipline
+    // preserved).
+    schemaVersion: z.union([
+        z.literal(1),
+        z.literal(2),
+        z.literal(3),
+        z.literal(4),
+        z.literal(5),
+        z.literal(6),
+        z.literal(7),
+        z.literal(8),
+        z.literal(9),
+    ]),
+    font: z.enum(["serif", "sans", "dyslexic"]),
+    size: z.union([z.literal(16), z.literal(18), z.literal(20), z.literal(22), z.literal(24)]),
+    // D21-01/D21-02 (POLISH-09) + issue #18 (D22-01): the union is the
+    // uniform-6 ladder [40..88] mirroring MEASURE_STEPS in
+    // src/settings/tokens.ts (default stays 64). The pre-#18 maximum 72 is
+    // still NOT a literal: a stored legacy-72 value is mapped calmly to the
+    // nearest lower step (70) PRE-parse by clampLegacyMeasure at every
+    // settings-entry seam (D21-03 — settingsStore / settingsMirror / the
+    // import preferences block); it never widens this union (T-21-02), and
+    // every other out-of-range value still fails parse → STATE-04 corrupt
+    // routing.
+    measure: z.union([
+        z.literal(40),
+        z.literal(46),
+        z.literal(52),
+        z.literal(58),
+        z.literal(64),
+        z.literal(70),
+        z.literal(76),
+        z.literal(82),
+        z.literal(88),
+    ]),
+    spacing: z.enum(["compact", "comfortable", "spacious"]),
+    // Issue #86 (decision #73) — the enum widened ADDITIVELY with "custom" (no
+    // schemaVersion bump; the readingMode/voice .default() hydration
+    // discipline: a v3 row parses unchanged). "custom" without a valid
+    // customTheme fails the superRefine below → the existing honest corrupt
+    // routing — never a silent fallback to a preset.
+    // Issue #120 — "custom" SPLITS into the two independently saved, manually
+    // selected slots "custom-light" and "custom-dark" (each seeds/resets from
+    // its MATCHING preset — light/dark — so a slot's disposition is coherent
+    // by construction; there is still NO automatic system-theme switching).
+    // The legacy "custom" literal left the enum: rows carrying it are mapped
+    // pre-parse by migrateReaderSettings at every settings-entry seam (see
+    // above), so the honest corrupt routing only ever sees canonical shapes.
+    // The specialty presets ("trans-light" / "bi-dark" — ADR 0006, and
+    // "marxism-light" / "marxism-dark" — ADR 0007) widen the enum ADDITIVELY
+    // too (the same no-bump discipline): hand-authored [data-theme]
+    // palettes in app.css — no stored token record, no superRefine rule (a
+    // preset needs nothing beyond its name).
+    theme: z.enum([
+        "sepia",
+        "light",
+        "dark",
+        "trans-light",
+        "bi-dark",
+        "marxism-light",
+        "marxism-dark",
+        "custom-light",
+        "custom-dark",
+    ]),
+    // Issue #120 — the TWO custom slots. Each is the SAME record shape issue
+    // #86 stored (baseTheme names the preset the slot was seeded from / resets
+    // to; the FIVE reader-editable tokens). Everything else in the palette is
+    // DERIVED at apply time (src/settings/customTheme.ts) and never stored.
+    // Additive optionals: records without either field parse unchanged; hex
+    // strings are strict 6-digit so derivation math and round-trips stay
+    // exact. A legacy `customTheme` record rides into its disposition slot
+    // (dark-seeded → custom-dark, otherwise custom-light) via
+    // migrateReaderSettings; the OTHER slot starts from its matching preset.
+    customLightTheme: CustomThemeRecordSchema.optional(),
+    customDarkTheme: CustomThemeRecordSchema.optional(),
+    // Additive preference: older records omit this and retain instant turns.
+    animatePageTurns: z.boolean().optional(),
+    // D4-12 — readingMode preference. PROJECT.md: "Pagination is the distinctive
+    // default experience, but it is not mandatory." .default("paginated") is the
+    // value-shape migration mechanism: a v1 row lacking this field parses with
+    // the default on read (Pitfall 9 — no data wipe, no migration script).
+    readingMode: z.enum(["paginated", "scrolling"]).default("paginated"),
+    // Issue #40 — read-aloud preferences (the v2 → v3 bump). Both are applied
+    // to playback by the read-aloud engine; the Reading-settings controls
+    // arrived with the completion ticket (issue #43).
+    //   voice: the selected SpeechSynthesisVoice.voiceURI. Optional by
+    //     contract — undefined means "the platform default voice" (never a
+    //     lie: a stale URI for an uninstalled voice resolves to the default at
+    //     play time, see src/readaloud/webSpeech.ts).
+    //   rate: the SpeechSynthesisUtterance.rate multiplier. The Web Speech
+    //     spec allows 0.1–10 but engines may constrain further; the acceptance
+    //     protocol (O8) sets the control band at roughly 0.5–3, which the
+    //     stored contract mirrors exactly ([0.5, 3], RATE_STEPS in
+    //     src/settings/tokens.ts). Engines that stall at high rates surface
+    //     through the session probe + the stall watchdog as calm, honest
+    //     refusals — never a fake "playing" state (spike 0009 F4). .default(1)
+    //     hydrates v1/v2 rows (Pitfall 9, the readingMode mechanism above).
+    // Additive defaults hydrate older settings without changing their shape version.
+    showReadAloud: z.boolean().default(true),
+    speechNoticeDismissed: z.boolean().default(false),
+    voice: z.string().min(1).optional(),
+    rate: z.number().min(0.5).max(3).default(1),
+    // Issue #115 — the library list sort preference (the v3 → v4 bump). The
+    // LibraryView toolbar's sort control writes through SettingsContext.update;
+    // the choice survives visits (Dexie + the localStorage mirror) and travels
+    // in the export/import bundle's ALWAYS-present preferences block (D9-12 —
+    // ReaderSettingsSchema composition, the voice/rate mechanism). .default(
+    // "recently-added") hydrates v1..v3 rows (Pitfall 9): the shipped pre-#115
+    // order IS Recently added (issue #114), so the default changes nothing for
+    // existing readers. Closed enum (T-02-01): an out-of-union value fails
+    // parse → the honest corrupt routing, never a silent fallback order.
+    librarySort: z.enum(["recently-added", "title", "recently-opened"]).default("recently-added"),
+    // Issue #163 — the remembered "Open after adding" add-dialog checkbox (the
+    // v5 → v6 bump). Checked: a successful ingestion opens the saved item
+    // immediately (a book at its first readable chapter). Unchecked: the add
+    // form closes back onto the library with the confirmation announced
+    // through the library's status region — the saved item stays Unread. The
+    // AddDialog's checkbox reads and writes it through SettingsContext.update,
+    // so the choice survives visits (Dexie + the localStorage mirror) and
+    // travels in the export/import bundle's ALWAYS-present preferences block
+    // (D9-12 — the voice/rate/librarySort mechanism). .default(true) hydrates
+    // v1..v5 rows (Pitfall 9): checked IS the shipped behavior a first-run
+    // reader expects (open what you just added), so the default changes
+    // nothing for existing readers until they uncheck it. Closed boolean —
+    // nothing to fall out of union (T-02-01).
+    openAfterAdd: z.boolean().default(true),
+    // Issue #195 — the FIVE numbered highlight slots (the v6 → v7 bump). Each
+    // slot is a reusable PRESET: an editable short name, ONE existing color
+    // choice, and zero or more highlight tags. Creation copies the chosen
+    // slot's color + tags onto the new record; later slot edits never touch
+    // historical highlights (a slot is configuration, not a live relation).
+    // `.default(...)` (factory — a FRESH deep copy per parse)
+    // hydrates v1..v6 rows (Pitfall 9) from Default/Yellow/Green/Blue/Pink
+    // with empty tags, so upgrading requires no setup and existing libraries
+    // and annotations stay byte-unchanged. Slot tags are plain strings here —
+    // they run through the ONE tag normalization (normalizeTags) at every use
+    // seam, exactly like record tags.
+    // Issue #41 (ADR 0012) — the slots become an ORDERED list of one to ten
+    // (the v8 → v9 bump): the reader adds, removes, and reorders them; a
+    // slot's number is its position. Out-of-band counts are malformed data
+    // and fail parse → the honest corrupt routing, never a silent reshape.
+    highlightSlots: z
+        .array(HighlightSlotSchema)
+        .min(MIN_HIGHLIGHT_SLOTS)
+        .max(MAX_HIGHLIGHT_SLOTS)
+        .default(() => defaultHighlightSlots()),
+    // Issue #195 — the EXPLICIT default-slot choice. Ordinary creation routes
+    // (H/N shortcuts, the toolbar's Enter, the completed pointer gesture) read
+    // it at creation time; applying another slot never rewrites it — a
+    // one-off choice is never silently promoted to the default.
+    // Issue #41 — the choice names a slot's IDENTITY (it replaces the v7/v8
+    // position index `defaultHighlightSlot`, mapped pre-parse by
+    // migrateReaderSettings): it follows its slot when the slot moves, and
+    // the superRefine below requires it to name an existing slot.
+    // `.default(...)` hydrates v1..v6 rows to slot 1 ("Default").
+    defaultHighlightSlotId: z
+        .string()
+        .min(1)
+        .default(() => legacySlotId(0)),
+});
+// Issue #86 (decision #73), extended by issue #120 — the cross-field rules:
+// an active custom slot REQUIRES its record (the record schema above already
+// rejects invalid hex / base themes). A "custom-light" row without
+// customLightTheme — or a "custom-dark" row without customDarkTheme — is
+// treated as corrupt at every read seam (settingsStore / settingsMirror /
+// the bundle's preferences block) — the honest routing, never a silent
+// preset fallback. The wrap is ZodEffects: every existing import site
+// safeParses THIS name (the object schema stays module-private — unexported
+// until a real shape consumer appears; speculative exports are not kept).
+export const ReaderSettingsSchema = ReaderSettingsObjectSchema.superRefine((s, ctx) => {
+    // Issue #41 — slot identities are unique, and the default names one of
+    // them (a dangling default is corrupt data, never silently re-pointed).
+    const ids = s.highlightSlots.map((slot) => slot.id);
+    if (new Set(ids).size !== ids.length) {
+        ctx.addIssue({
+            code: "custom",
+            path: ["highlightSlots"],
+            message: "highlight slot identities must be unique",
+        });
+    }
+    if (!ids.includes(s.defaultHighlightSlotId)) {
+        ctx.addIssue({
+            code: "custom",
+            path: ["defaultHighlightSlotId"],
+            message: "defaultHighlightSlotId must name an existing highlight slot",
+        });
+    }
+    if (s.theme === "custom-light" && s.customLightTheme === undefined) {
+        ctx.addIssue({
+            code: "custom",
+            path: ["customLightTheme"],
+            message: 'theme "custom-light" requires a valid customLightTheme record',
+        });
+    }
+    if (s.theme === "custom-dark" && s.customDarkTheme === undefined) {
+        ctx.addIssue({
+            code: "custom",
+            path: ["customDarkTheme"],
+            message: 'theme "custom-dark" requires a valid customDarkTheme record',
+        });
+    }
+});
+// ── Reading location (Phase 2 — STATE-01, D-05 substrate, D-06 key) ──────────
+// Persisted at the compound [articleId+revision] key. graphemeOffset is into
+// normalizeText(article) (D-05). articleId + revision reuse the exact patterns
+// from ArticleSchema above (D-06 stability contract — single source of truth).
+export const LocationRecordSchema = z.object({
+    schemaVersion: z.literal(1), // STATE-04 migration hook
+    articleId: z.string().regex(/^[a-z0-9-]+$/), // matches ArticleSchema.id (D-06)
+    revision: z.number().int().min(1), // D-06 monotonic
+    graphemeOffset: z.number().int().min(0), // D-05 offset into normalizeText
+    savedAt: z.string().datetime(), // ISO-8601 — used for last-write-wins tiebreak
+    /** Spec #68 — the corrections fingerprint of the substrate these
+     * coordinates refer to (src/content/sameText.ts). Absent = the original
+     * as ingested (no corrections) — so uncorrected rows stay byte-identical. */
+    corrections: z.string().min(1).optional(),
+});
+// ── Annotations (Phase 5 — ANNO-05/06/07, STATE-03/04) ──────────────────────
+// W3C Web Annotation selectors over the D-05 grapheme substrate, persisted as
+// part of a HighlightRecord. D5-03: persist BOTH position (O(1) primary anchor
+// for the same-revision common case) AND quote (recovery substrate for the
+// cross-revision re-anchoring path in D5-01). These schemas are the trust
+// boundary between Dexie and runtime (STATE-04) — every row is validated on
+// read. Note text is z.string() — NEVER HTML (Pitfall 8: React escapes text
+// children by default; the react/no-danger ESLint rule forbids the raw-HTML
+// injection prop; there is no URL field and no HTML parsing anywhere).
+/** Grapheme offset range into normalizeText(article); start inclusive, end exclusive.
+ * Mirrors the TextPositionSelector interface at normalizeText.ts L117-120. */
+export const TextPositionSelectorSchema = z
+    .object({
+    start: z.number().int().min(0),
+    end: z.number().int().min(0),
+})
+    .refine((s) => s.end > s.start, { message: "end must be > start" });
+/** A TextQuote selector over the normalized grapheme text (prefix/exact/suffix).
+ * Mirrors the TextQuoteSelector interface at normalizeText.ts L123-127. */
+export const TextQuoteSelectorSchema = z.object({
+    prefix: z.string(),
+    exact: z.string().min(1),
+    suffix: z.string(),
+});
+/** HighlightRecord — one durable highlight (D5-03 dual-selector persistence).
+ * schemaVersion for STATE-04 migration; id is crypto.randomUUID() at the call
+ * site (05-RESEARCH.md Open Question #2 — no collision with fn-N footnote ids). */
+export const HighlightRecordSchema = z.object({
+    schemaVersion: z.literal(1),
+    id: z.string(),
+    articleId: z.string().regex(/^[a-z0-9-]+$/), // reuse LocationRecord regex (D-06)
+    revision: z.number().int().min(1), // revision AT CREATION TIME (orphan detection)
+    /** Spec #68 — the corrections fingerprint of the substrate these
+     * coordinates refer to (src/content/sameText.ts). Absent = the original
+     * as ingested (no corrections) — so uncorrected rows stay byte-identical. */
+    corrections: z.string().min(1).optional(),
+    position: TextPositionSelectorSchema, // D5-03: grapheme range (primary anchor)
+    quote: TextQuoteSelectorSchema, // D5-03: prefix/exact/suffix (recovery substrate)
+    createdAt: z.string().datetime(), // ISO-8601
+    // Issue #116 — per-highlight annotation tags (issue #75's Q7A machinery,
+    // D8-05's per-row namespace applied to highlights). Additive: rows written
+    // before this field omit it and hydrate to `[]` via `.default([])` (Pitfall
+    // 9 — the exact ArticleSchema.tags mechanism above). Consumers still read
+    // `tags ?? []`: the field is type-optional, and in-memory records built
+    // before the hydration point may omit the key.
+    // The attached note has NO independent tag set — the note shares the
+    // highlight's tags by construction (1:1 via highlightId), so tagging never
+    // touches article or book rows.
+    tags: z.array(z.string().min(1)).default([]).optional(),
+    // Issue #118 — the named highlight color (Default + 4 named choices).
+    // Additive with the SAME Pitfall-9 discipline as tags: rows written before
+    // this field omit it and hydrate to "default" via .default("default").
+    // Deliberately NOT `.optional()` (the tags field keeps its own shipped
+    // contract): `.default()` alone makes the PARSE OUTPUT always a closed-set
+    // id — the hydrated record's type guarantees `color: HighlightColor`, so
+    // consumers read `record.color` directly and the compiler enforces the
+    // hydration invariant instead of trusting every consumer to remember
+    // `color ?? "default"`. Color is VISUAL ORGANIZATION ONLY — separate from
+    // tags and from anchor status, so it never gates editability or anchoring
+    // and never participates in selector math.
+    color: HighlightColorSchema.default("default"),
+    // Issue #196 — the custom-color SNAPSHOT copied from the creating slot (or
+    // set by a later slot application). Additive optional with the SAME
+    // Pitfall-9 discipline as tags/color above: rows written before this field
+    // omit it and parse unchanged; presence is strict 6-digit hex (the slot
+    // schema's grammar). Deliberately NOT defaulted — an absent key and an
+    // undefined value must stay indistinguishable so the JSON export → import
+    // raw-row equality holds (JSON.stringify drops undefined values). When
+    // present it WINS over `color` at every render site (the readable tint is
+    // derived from it + the active theme); a named-color pick deletes the key
+    // (direct color editing changes only color). Never touches tags or
+    // selector math — visual organization only, exactly like `color`.
+    customColor: z
+        .string()
+        .regex(/^#[0-9a-fA-F]{6}$/)
+        .optional(),
+});
+// ── Corrections (spec #68, ADR 0014 — a layer over the preserved original) ──
+// One record per article, in its own table (never on the article row). The
+// list is ORDERED: each correction applies to the result of the ones before
+// it (src/content/corrections/engine.ts). Every correction finds its target
+// by TEXT — a quote selector (the highlight shape) over the normalized text
+// of the correction-view article it was made against — never by block index
+// alone. Kinds are a discriminated union; later phase-1 kinds (#72–#76) add
+// members here and a handler in the engine.
+export const CORRECTIONS_SCHEMA_VERSION = 1;
+export const CorrectableBlockKindSchema = z.enum([
+    "heading",
+    "paragraph",
+    "blockquote",
+    "bulleted-list",
+    "numbered-list",
+    "figure",
+    "code-block",
+    "footnote-reference",
+    "unsupported",
+]);
+/** A whole block, found by its text: `quote.exact` is the block's entire
+ * normalized text, `kind` and `depth` (0 = top level, 1 = inside one
+ * quotation, …) tell apart blocks that share a range (a quotation and its
+ * only paragraph). */
+export const BlockTargetSchema = z.object({
+    quote: TextQuoteSelectorSchema,
+    kind: CorrectableBlockKindSchema,
+    depth: z.number().int().min(0),
+});
+const correctionBase = {
+    /** crypto.randomUUID() — identity for undo and the corrections list. */
+    id: z.string().min(1),
+    createdAt: z.string().datetime(),
+};
+export const HideCorrectionSchema = z.object({
+    kind: z.literal("hide"),
+    ...correctionBase,
+    target: BlockTargetSchema,
+});
+export const UnhideCorrectionSchema = z.object({
+    kind: z.literal("unhide"),
+    ...correctionBase,
+    target: BlockTargetSchema,
+});
+export const CorrectionSchema = z.discriminatedUnion("kind", [
+    HideCorrectionSchema,
+    UnhideCorrectionSchema,
+]);
+export const CorrectionsRecordSchema = z.object({
+    schemaVersion: z.literal(CORRECTIONS_SCHEMA_VERSION), // STATE-04 migration hook
+    articleId: z.string().regex(/^[a-z0-9-]+$/),
+    corrections: z.array(CorrectionSchema),
+    updatedAt: z.string().datetime(),
+});
+/** NoteRecord — one note attached to a highlight (1:1 via highlightId).
+ * text is z.string() (NEVER HTML — Pitfall 8). Empty string = no note
+ * (the caller deletes or never creates the NoteRecord per D5-10). */
+export const NoteRecordSchema = z.object({
+    schemaVersion: z.literal(1),
+    id: z.string(),
+    highlightId: z.string(), // FK → HighlightRecord.id
+    text: z.string(), // reader-authored; React-escaped; never HTML-parsed (Pitfall 8)
+    updatedAt: z.string().datetime(),
+});
+/** ArticleNote — issue #206: one independent reflection attached to an
+ * ARTICLE (not to a highlighted passage). Multiple notes per article; each
+ * editable and deletable. Deliberately NO highlightId, position, or quote
+ * selector — an article note never synthesizes a passage attachment (the
+ * parent spec's locked decision), so the schema has no such field and
+ * z.object strips any bundle-supplied key. Lives HERE next to the other
+ * record schemas (the STATE-04 trust boundary shared by the Dexie store
+ * AND the export bundle — the SubscriptionRecordSchema precedent); the
+ * store re-exports it so its call sites stay one-hop.
+ *
+ * Issue #209 — `tags` is the note's OWN zero-or-more annotation tags,
+ * separate from article tags and from every other annotation's. Additive
+ * with the exact highlight-record discipline (issue #116): rows written
+ * before the field omit it and hydrate to [] via `.default([])`; the field
+ * stays type-optional so in-memory values built before the hydration point
+ * may omit the key (consumers read `?? []`). Plain non-indexed row fields —
+ * no Dexie version bump (the tags precedent).
+ *
+ * Issue #211 — the record rides the v8 export bundle: identity (id),
+ * created/updated timestamps, plain text, tags, and the articleId
+ * association must all survive export → import verbatim. */
+export const ArticleNoteSchema = z.object({
+    schemaVersion: z.literal(1),
+    id: z.string().min(1),
+    articleId: z.string().min(1),
+    text: z.string(),
+    tags: z.array(z.string().min(1)).default([]).optional(),
+    createdAt: z.iso.datetime(),
+    updatedAt: z.iso.datetime(),
+});
+/** NoteDraftRecord — issue #178: the LOCAL-ONLY recovery draft for a note
+ * edit whose save has not landed yet (the write-through mirror of the
+ * annotation state hook's in-memory pending draft, so tab closure cannot
+ * depend on a browser unload event). Keyed by highlightId — the recovery
+ * scope is exactly the original highlight; a draft never attaches to
+ * another one. text is z.string() (NEVER HTML — Pitfall 8). updatedAt is
+ * the staleness key: a landed note write newer than the draft (e.g. an
+ * edit from the cross-library review panel) retires the draft at restore
+ * instead of resurrecting older writing over newer.
+ *
+ * Deliberately OUTSIDE the versioned export bundle: recovery is local-first
+ * device state (like the settings mirror), so the bundle schema, the
+ * manifest blocks, and the import merge are untouched. */
+export const NoteDraftRecordSchema = z.object({
+    schemaVersion: z.literal(1),
+    highlightId: z.string(), // primary key — 1:1 with the highlight (the recovery scope)
+    text: z.string(), // reader-authored; React-escaped; never HTML-parsed (Pitfall 8)
+    updatedAt: z.string().datetime(),
+});
+// ── Reading sessions (milestone "reading history & stats" — issue #34) ──────
+// ONE append-only row per visit (decision #24). History accrues only while
+// recorded, so recording ships ahead of any stats UI. startOffset/endOffset
+// are canonical grapheme offsets into normalizeText(article) (the D-05
+// substrate — never page numbers); activeSeconds is idle-capped active time
+// (the ReadingSessionRecorder accumulator). The row is keyed by a per-visit
+// uuid primary key: a visit's row is UPSERTED as its totals refine (flush
+// discipline) but never duplicated and never deleted except by the article
+// cascade (D5-12 extension — a session's lifecycle is exactly its article's,
+// the D20-15 asset precedent).
+export const ReadingSessionRecordSchema = z.object({
+    schemaVersion: z.literal(1), // STATE-04 migration hook
+    id: z.string(), // crypto.randomUUID() at session begin — the visit identity
+    articleId: z.string().regex(/^[a-z0-9-]+$/), // reuse LocationRecord regex (D-06)
+    startedAt: z.string().datetime(), // ISO-8601 — when the visit began
+    endedAt: z.string().datetime(), // ISO-8601 — last flushed moment of the visit
+    startOffset: z.number().int().min(0), // D-05 offset where the visit started
+    endOffset: z.number().int().min(0), // D-05 offset where the visit last stood
+    activeSeconds: z.number().int().min(0), // idle-capped active time (floored)
+});
+// ── Feed subscriptions (issue #121 — the Discover destination) ──────────────
+// ONE row per subscribed feed, keyed by a per-subscription uuid primary key;
+// the MERGE key at import is the NORMALIZED feed URL, never the row id (the
+// reading-sessions merge precedent — recorded data, no reader-authored
+// conflict decision). The bounded recent-item previews are PART of the
+// record: they are the subscription's local cache. The cache is captured at
+// subscribe time and re-fetched ONLY by the Discover surface's explicit
+// refresh moments (issue #123: on opening Discover and on the reader's
+// Refresh/Retry request — never a background poll). IMPORT itself still
+// never fetches — the honesty constraint "no network during import" is
+// structural because nothing in the import path fetches.
+//
+// Bounds live HERE next to the schemas that enforce them (the schema is the
+// STATE-04 trust boundary shared by the server pipeline, the Dexie store,
+// and the bundle): a hostile feed cannot smuggle unbounded text or item
+// counts into a persisted row. The server TRUNCATES to these bounds at
+// parse time; the schema refuses anything over them at every read.
+/** MAX_FEED_ITEMS — the bounded recent-preview count per subscription. The
+ * Discover surface shows recent items, not an archive; 30 covers every real
+ * feed's visible window with headroom while bounding the persisted row. */
+export const MAX_FEED_ITEMS = 30;
+/** MAX_FEED_TEXT_CHARS — the per-field text cap for feed titles,
+ * descriptions, and excerpts (and each preview's title/excerpt). Feeds
+ * routinely embed full article HTML in description/content; the excerpt is
+ * a PREVIEW, bounded here and truncated server-side at parse time. */
+export const MAX_FEED_TEXT_CHARS = 2048;
+/** FeedItemPreview — ONE bounded recent-item preview. Every field is
+ * optional-but-title except the URLs, which are httpUrl-refined (the SAME
+ * refinement as provenance sourceUrl — a `javascript:` or `data:` link
+ * never reaches a rendered anchor). The server supplies datePublished ONLY
+ * when it parses as a real date (ISO-8601; "date when supplied" — honesty). */
+export const FeedItemPreviewSchema = z.object({
+    title: z.string().min(1).max(MAX_FEED_TEXT_CHARS),
+    link: httpUrl.optional(),
+    datePublished: z.string().datetime().optional(), // ISO-8601 when supplied
+    excerpt: z.string().max(MAX_FEED_TEXT_CHARS).optional(),
+    image: httpUrl.optional(),
+});
+/** SubscriptionRecord — one saved feed subscription + its local preview
+ * cache. `feedUrl` is the NORMALIZED validated feed URL (lowercased
+ * scheme/host, default port dropped, fragment dropped — the import merge
+ * key); `subscribedAt` is the save-time stamp; `items` is the bounded cache
+ * captured at subscribe time and replaced only by an explicit refresh
+ * (issue #123). `lastFetchedAt` is the LAST SUCCESSFUL fetch stamp (set at
+ * subscribe — subscribe itself fetches — and advanced only when a refresh
+ * both returns and persists; a failed refresh never touches it, so the
+ * stale state can show the honest last-known-good time). Additive-optional
+ * (issue #123): pre-#123 rows and v1..v6 bundles parse unchanged (the
+ * readerTitle mechanism — a non-indexed additive field needs no Dexie
+ * version bump). */
+export const SubscriptionRecordSchema = z.object({
+    schemaVersion: z.literal(1), // STATE-04 migration hook
+    id: z.string(), // crypto.randomUUID() at save — the row identity
+    feedUrl: httpUrl, // normalized — the import merge key
+    title: z.string().min(1).max(MAX_FEED_TEXT_CHARS), // the feed's own name
+    description: z.string().max(MAX_FEED_TEXT_CHARS).optional(),
+    items: z.array(FeedItemPreviewSchema).max(MAX_FEED_ITEMS),
+    subscribedAt: z.string().datetime(), // ISO-8601
+    lastFetchedAt: z.string().datetime().optional(), // ISO-8601 — issue #123
+});

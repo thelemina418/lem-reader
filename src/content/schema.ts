@@ -270,6 +270,10 @@ export const WorkStructureSchema = z.object({
    * any snapshot whose revision or ranges do not match the row's canonical
    * content. */
   revision: z.number().int().min(1),
+  /** Spec #68 — the corrections fingerprint of the substrate these
+   * coordinates refer to (src/content/sameText.ts). Absent = the original
+   * as ingested (no corrections) — so uncorrected rows stay byte-identical. */
+  corrections: z.string().min(1).optional(),
   /** Ordered destinations tiling [0, totalGraphemes) exactly — no gaps, no
    * overlaps, source order. */
   destinations: z.array(StructureDestinationSchema).min(1),
@@ -1066,6 +1070,10 @@ export const LocationRecordSchema = z.object({
   revision: z.number().int().min(1), // D-06 monotonic
   graphemeOffset: z.number().int().min(0), // D-05 offset into normalizeText
   savedAt: z.string().datetime(), // ISO-8601 — used for last-write-wins tiebreak
+  /** Spec #68 — the corrections fingerprint of the substrate these
+   * coordinates refer to (src/content/sameText.ts). Absent = the original
+   * as ingested (no corrections) — so uncorrected rows stay byte-identical. */
+  corrections: z.string().min(1).optional(),
 });
 export type LocationRecord = z.infer<typeof LocationRecordSchema>;
 
@@ -1104,6 +1112,10 @@ export const HighlightRecordSchema = z.object({
   id: z.string(),
   articleId: z.string().regex(/^[a-z0-9-]+$/), // reuse LocationRecord regex (D-06)
   revision: z.number().int().min(1), // revision AT CREATION TIME (orphan detection)
+  /** Spec #68 — the corrections fingerprint of the substrate these
+   * coordinates refer to (src/content/sameText.ts). Absent = the original
+   * as ingested (no corrections) — so uncorrected rows stay byte-identical. */
+  corrections: z.string().min(1).optional(),
   position: TextPositionSelectorSchema, // D5-03: grapheme range (primary anchor)
   quote: TextQuoteSelectorSchema, // D5-03: prefix/exact/suffix (recovery substrate)
   createdAt: z.string().datetime(), // ISO-8601
@@ -1146,6 +1158,72 @@ export const HighlightRecordSchema = z.object({
     .optional(),
 });
 export type HighlightRecord = z.infer<typeof HighlightRecordSchema>;
+
+// ── Corrections (spec #68, ADR 0014 — a layer over the preserved original) ──
+// One record per article, in its own table (never on the article row). The
+// list is ORDERED: each correction applies to the result of the ones before
+// it (src/content/corrections/engine.ts). Every correction finds its target
+// by TEXT — a quote selector (the highlight shape) over the normalized text
+// of the correction-view article it was made against — never by block index
+// alone. Kinds are a discriminated union; later phase-1 kinds (#72–#76) add
+// members here and a handler in the engine.
+
+export const CORRECTIONS_SCHEMA_VERSION = 1;
+
+export const CorrectableBlockKindSchema = z.enum([
+  "heading",
+  "paragraph",
+  "blockquote",
+  "bulleted-list",
+  "numbered-list",
+  "figure",
+  "code-block",
+  "footnote-reference",
+  "unsupported",
+]);
+
+/** A whole block, found by its text: `quote.exact` is the block's entire
+ * normalized text, `kind` and `depth` (0 = top level, 1 = inside one
+ * quotation, …) tell apart blocks that share a range (a quotation and its
+ * only paragraph). */
+export const BlockTargetSchema = z.object({
+  quote: TextQuoteSelectorSchema,
+  kind: CorrectableBlockKindSchema,
+  depth: z.number().int().min(0),
+});
+export type BlockTarget = z.infer<typeof BlockTargetSchema>;
+
+const correctionBase = {
+  /** crypto.randomUUID() — identity for undo and the corrections list. */
+  id: z.string().min(1),
+  createdAt: z.string().datetime(),
+};
+
+export const HideCorrectionSchema = z.object({
+  kind: z.literal("hide"),
+  ...correctionBase,
+  target: BlockTargetSchema,
+});
+
+export const UnhideCorrectionSchema = z.object({
+  kind: z.literal("unhide"),
+  ...correctionBase,
+  target: BlockTargetSchema,
+});
+
+export const CorrectionSchema = z.discriminatedUnion("kind", [
+  HideCorrectionSchema,
+  UnhideCorrectionSchema,
+]);
+export type Correction = z.infer<typeof CorrectionSchema>;
+
+export const CorrectionsRecordSchema = z.object({
+  schemaVersion: z.literal(CORRECTIONS_SCHEMA_VERSION), // STATE-04 migration hook
+  articleId: z.string().regex(/^[a-z0-9-]+$/),
+  corrections: z.array(CorrectionSchema),
+  updatedAt: z.string().datetime(),
+});
+export type CorrectionsRecord = z.infer<typeof CorrectionsRecordSchema>;
 
 /** NoteRecord — one note attached to a highlight (1:1 via highlightId).
  * text is z.string() (NEVER HTML — Pitfall 8). Empty string = no note
