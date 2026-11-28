@@ -7860,6 +7860,57 @@ dialog.reprocess-book {
   text-align: center;
   color: var(--ink-soft);
 }
+/* Issue #76 — the corrections list: a disclosure in the view's header (in
+   flow; the consequences dialog may open over it). Wraps at 320px. */
+.corrections-list {
+  margin-block-start: var(--space-sm);
+  font-family: var(--font-ui);
+  font-size: 0.875rem;
+}
+.corrections-list-panel {
+  margin-block-start: var(--space-sm);
+  padding-block-start: var(--space-sm);
+  border-top: 1px solid var(--hairline);
+}
+.corrections-list-heading {
+  margin: 0;
+  font-size: 1rem;
+}
+.corrections-list-heading:focus-visible {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: 2px;
+}
+.corrections-list-empty {
+  margin: var(--space-xs) 0 0;
+  color: var(--ink-soft);
+}
+.corrections-list-items {
+  margin: var(--space-xs) 0 0;
+  padding-inline-start: 1.5em;
+}
+.corrections-list-item {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-xs) var(--space-sm);
+  padding-block: var(--space-xs);
+  overflow-wrap: anywhere;
+  min-width: 0;
+}
+.corrections-list-item > span:first-child {
+  flex: 1 1 12rem;
+  min-width: 0;
+}
+.corrections-list-not-applied {
+  flex-basis: 100%;
+  color: var(--ink-soft);
+}
+.corrections-list-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-xs) var(--space-sm);
+  margin-block-start: var(--space-sm);
+}
 /* Block content keeps its reading typography; the frame owns the outer
    rhythm, so the block's own first/last margins collapse into the frame. */
 .correction-block > [data-block-index] {
