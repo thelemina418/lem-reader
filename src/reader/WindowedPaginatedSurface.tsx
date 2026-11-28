@@ -39,6 +39,7 @@ import type {
   PageState,
   PageTurnResult,
 } from "./PaginatedSurface";
+import { isSameText } from "../content/sameText";
 
 const NO_HIGHLIGHTS = Object.freeze([]);
 // Issue #238 — hasPreviousWindow / hasNextWindow / onBoundaryTurn stay in
@@ -580,7 +581,7 @@ export const WindowedPaginatedSurface = forwardRef<PaginatedSurfaceHandle, Props
         </div>
         {trustedView &&
         trustedView.scope?.articleId === article.id &&
-        trustedView.scope.revision === article.revision ? (
+        isSameText(trustedView.scope, article) ? (
           <PaginatedSurface
             {...props}
             ref={child}

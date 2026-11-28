@@ -52,11 +52,12 @@ import { loadAllSubscriptions } from "../persistence/subscriptionsStore";
 import { loadAllCompletions } from "../persistence/completionsStore";
 import { listCollections } from "../persistence/collectionsStore";
 import { loadAllCollectionActiveEntries } from "../persistence/collectionActiveEntriesStore";
+import { loadAllCorrectionRecords } from "../persistence/correctionsStore";
 import { loadSettings } from "../persistence/settingsStore";
 import { MAX_ARTICLE_ASSET_BYTES, MAX_ASSET_BYTES } from "../ingestion/types";
 import { DEFAULT_SETTINGS } from "../settings/defaults";
 import { migrateReaderSettings } from "../settings/settingsMigration";
-import { ExportBundleSchema, resolveAppVersion } from "./bundle";
+import { BUNDLE_WRITER_VERSION, ExportBundleSchema, resolveAppVersion } from "./bundle";
 import type { ExportBundle, AssetExportMeta } from "./bundle";
 import { computeManifest, emptyBlockHash, sha256Hex } from "./manifest";
 import type { Manifest } from "./manifest";
@@ -116,6 +117,7 @@ export async function buildBundle(): Promise<ExportBuild> {
     collectionsResult,
     completions,
     collectionActiveEntries,
+    correctionRecords,
   ] = await Promise.all([
     dexieLibrarySource.list(), // Dexie articles ONLY — fixtures never ride
     loadAllHighlights(),
@@ -159,6 +161,9 @@ export async function buildBundle(): Promise<ExportBuild> {
     // drifted row never blocks the reader's export.
     loadAllCompletions(), // Shared target completion rides the v10 bundle.
     loadAllCollectionActiveEntries(), // Continue memories ride the v10 bundle.
+    // Spec #68 / #77 — corrections ride the v12 bundle beside their
+    // originals. Validated whole-table read with calm corrupt-row drops.
+    loadAllCorrectionRecords(),
   ]);
   const preferences = settingsResult.ok ? settingsResult.settings : DEFAULT_SETTINGS;
   // Writers ALWAYS emit the books field on v2 (empty array on a book-free
@@ -219,6 +224,10 @@ export async function buildBundle(): Promise<ExportBuild> {
       }
     }
   }
+  // Corrections ride only with an article that rides (fixtures have no row
+  // and are not correctable; a stray row for a removed article drops here —
+  // the assets minimization precedent).
+  const corrections = correctionRecords.filter((r) => articleIds.has(r.articleId));
   const fixtureIds = bundledFixtures.filter((f) => referenced.has(f.id)).map((f) => f.id);
   const collections = collectionsResult.ok ? collectionsResult.collections : [];
 
@@ -230,8 +239,9 @@ export async function buildBundle(): Promise<ExportBuild> {
     // contract books/assets precedent); versions 1–9 remain readable.
     // Version 7 preserves starter removal. Issue #41: version 11 marks the
     // preferences block's ordered slot list with stable identities (settings
-    // schemaVersion 9) — no new block.
-    schemaVersion: 11 as const,
+    // schemaVersion 9) — no new block. Issue #77: version 12 carries the
+    // corrections block (BUNDLE_WRITER_VERSION).
+    schemaVersion: BUNDLE_WRITER_VERSION,
     exportedAt: new Date().toISOString(),
     appVersion: resolveAppVersion(),
     articles,
@@ -262,6 +272,9 @@ export async function buildBundle(): Promise<ExportBuild> {
     collections,
     completions,
     collectionActiveEntries,
+    // ALWAYS present on v12 writes (empty array on a correction-free
+    // library) — the presence-is-the-contract precedent.
+    corrections,
     starterRemoved,
   });
 
@@ -381,7 +394,8 @@ export async function validateBundle(file: File): Promise<BundleValidationResult
   //    (starter-removal-capable) parse. Issue #236: > 8 → > 9 — v9 bundles
   //    (structure-snapshot-capable) parse. Issue #248: > 9 → > 10 — v10
   //    bundles (collection-capable) parse. Issue #41: > 10 → > 11 — v11
-  //    bundles (ordered-slot preferences) parse; v12+ refuses.
+  //    bundles (ordered-slot preferences) parse. Issue #77: the threshold is
+  //    BUNDLE_WRITER_VERSION (12 — corrections-capable); v13+ refuses.
   let raw: unknown;
   try {
     raw = JSON.parse(strFromU8(bundleBytes));
@@ -392,7 +406,7 @@ export async function validateBundle(file: File): Promise<BundleValidationResult
     };
   }
   const peeked = (raw as { schemaVersion?: unknown }).schemaVersion;
-  if (typeof peeked === "number" && peeked > 11) {
+  if (typeof peeked === "number" && peeked > BUNDLE_WRITER_VERSION) {
     return {
       ok: false,
       refusal: { kind: "newer-schema-version", bundleVersion: peeked },
@@ -527,6 +541,12 @@ export async function validateBundle(file: File): Promise<BundleValidationResult
   }
   if (claimedBlocks.collectionActiveEntries === undefined && parsed.data.schemaVersion < 10) {
     claimedBlocks.collectionActiveEntries = emptyHash;
+  }
+  // Issue #77: v1..v11 claimed manifests predate the corrections block —
+  // the same absent-key shim (a v12 bundle with actual corrections still
+  // mismatches — tampering stays detected).
+  if (claimedBlocks.corrections === undefined && parsed.data.schemaVersion < 12) {
+    claimedBlocks.corrections = emptyHash;
   }
   // D21-03 (POLISH-09) + issues #120/#163/#195 manifest legacy-shape
   // tolerance: when the pre-parse normalization mapped a legacy value/shape
@@ -814,6 +834,9 @@ export async function applyImport(plan: ResolvedImportPlan): Promise<void> {
         revision: location.revision,
         graphemeOffset: location.graphemeOffset,
         savedAt: location.savedAt,
+        // Spec #68 / #77 — the substrate stamp rides with the offset (a
+        // position saved on a corrected article stays trusted there).
+        ...(location.fingerprint !== undefined ? { fingerprint: location.fingerprint } : {}),
       };
       await db.location.put(row);
     }
@@ -852,15 +875,22 @@ export async function applyImport(plan: ResolvedImportPlan): Promise<void> {
     for (const activeEntry of plan.collectionActiveEntriesToWrite) {
       await db.collectionActiveEntries.put(activeEntry);
     }
+    // Spec #68 / #77: corrections follow their article — the plan already
+    // re-applied each record to its winning original through the engine
+    // (non-fitting ones kept, marked not applied by that same engine on
+    // every read). Plain puts of the CorrectionsRecord shape.
+    for (const record of plan.correctionsToWrite) {
+      await db.corrections.put(record);
+    }
     if (plan.applyPreferences && plan.preferences !== undefined) {
       await db.settings.put({ key: READER_PREFS_KEY, value: plan.preferences });
     }
   };
 
   if (plan.applyPreferences || plan.starterRemoved !== undefined) {
-    // THIRTEEN tables (articles/highlights/notes/articleNotes/location/
+    // FOURTEEN tables (articles/highlights/notes/articleNotes/location/
     // readingSessions/settings/books/assets/subscriptions/collections/
-    // completions/collectionActiveEntries) — the readonly-array overload
+    // completions/collectionActiveEntries/corrections) — the readonly-array overload
     // (the tuple overloads stop at FIVE; the 12-07 lesson, now on both
     // branches).
     await db.transaction(
@@ -879,11 +909,12 @@ export async function applyImport(plan: ResolvedImportPlan): Promise<void> {
         db.collections,
         db.completions,
         db.collectionActiveEntries,
+        db.corrections,
       ],
       applyPuts,
     );
   } else {
-    // TWELVE tables without settings — the same array-overload form.
+    // THIRTEEN tables without settings — the same array-overload form.
     await db.transaction(
       "rw",
       [
@@ -899,6 +930,7 @@ export async function applyImport(plan: ResolvedImportPlan): Promise<void> {
         db.collections,
         db.completions,
         db.collectionActiveEntries,
+        db.corrections,
       ],
       applyPuts,
     );

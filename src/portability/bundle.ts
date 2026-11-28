@@ -134,6 +134,20 @@
 //     forward-rejects (the validateBundle peek threshold moved to > 11),
 //     and writers emit schemaVersion 11.
 //
+//   - Spec #68 / issue #77 (ADR 0014 — corrections are a layer over the
+//     preserved original) — the TWELFTH application of the union
+//     discipline: schemaVersion is the 1|..|12 UNION. A v12 bundle carries
+//     the `corrections` block — one CorrectionsRecord per corrected
+//     article, in its own block (corrections live in their own table,
+//     never on the article row, so they never ride ArticleSchema). The
+//     articles block still carries the ORIGINAL. v1..v11 bundles parse
+//     exactly as before (the block hydrates to undefined and import never
+//     touches local corrections); a v13+ bundle forward-rejects (the
+//     validateBundle peek threshold reads BUNDLE_WRITER_VERSION), and
+//     writers emit schemaVersion 12. Import re-applies every incoming
+//     correction to the WINNING original through the engine; ones that
+//     don't fit are kept as not applied, never stripped (conflicts.ts).
+//
 // This module COMPOSES the existing record schemas — no record shape is
 // re-declared here (REUSE-DO-NOT-FORK; the schemas are the STATE-04 trust
 // boundary shared with every Dexie read/write path).
@@ -145,6 +159,7 @@ import {
   CollectionActiveEntrySchema,
   CollectionSchema,
   CompletionRecordSchema,
+  CorrectionsRecordSchema,
   HighlightRecordSchema,
   LocationRecordSchema,
   NoteRecordSchema,
@@ -205,6 +220,7 @@ export const ExportBundleSchema = z
       z.literal(9),
       z.literal(10),
       z.literal(11),
+      z.literal(12),
     ]),
     exportedAt: z.string().datetime(), // ISO-8601
     appVersion: z.string(), // diagnostic only (D9-04)
@@ -262,12 +278,24 @@ export const ExportBundleSchema = z
     collections: z.array(CollectionSchema).optional(),
     completions: z.array(CompletionRecordSchema).optional(),
     collectionActiveEntries: z.array(CollectionActiveEntrySchema).optional(),
+    // Spec #68 / issue #77 — absent on v1..v11 bundles (hydrates to
+    // undefined); ALWAYS present on v12 writes (empty array on a
+    // correction-free library — the presence-is-the-contract precedent).
+    // Composes CorrectionsRecordSchema — one row per corrected article,
+    // keyed by articleId, holding the ORDERED corrections list. Outcomes
+    // never ride: import re-derives them against the winning original.
+    corrections: z.array(CorrectionsRecordSchema).optional(),
   })
   .refine((bundle) => bundle.schemaVersion < 7 || bundle.starterRemoved !== undefined, {
     message: "Version 7 bundles must include the starter article choice",
     path: ["starterRemoved"],
   });
 export type ExportBundle = z.infer<typeof ExportBundleSchema>;
+
+/** The schemaVersion writers emit — and the newest one the importer reads
+ * (anything above it forward-refuses at the validateBundle peek). The ONE
+ * place a version bump changes; tests read it instead of a literal. */
+export const BUNDLE_WRITER_VERSION = 12 as const;
 
 /** The D9-01 locked download filename for the whole-library zip export. */
 export const BUNDLE_FILENAME = "lem-reader-bundle-v1.zip";

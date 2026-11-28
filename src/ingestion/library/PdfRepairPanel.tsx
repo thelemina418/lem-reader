@@ -12,6 +12,7 @@ import {
   type PdfRepairPreview,
 } from "../../persistence/pdfRepairStore";
 import { StatusRegion } from "../../ui/StatusRegion";
+import { CorrectionsOutcome } from "./reprocessParts";
 import "./pdfRepair.css";
 
 /** Explicit maintenance inside the existing library metadata dialog. The
@@ -165,6 +166,11 @@ export function PdfRepairPanel({
                 )}
               </details>
               <p>Saved position, highlights, and notes keep their exact text attachments.</p>
+              <CorrectionsOutcome
+                reapplied={preview.corrections.reapplied.length}
+                notApplied={preview.corrections.notApplied}
+                version="repaired version"
+              />
               <p>
                 Only classification changes. The reading identity and extracted text stay unchanged.
                 A recoverable pre-repair version is kept on this device, not included in library

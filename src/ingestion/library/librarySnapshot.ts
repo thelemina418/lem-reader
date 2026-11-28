@@ -114,14 +114,24 @@ import { loadAllTags } from "./tagsStore";
 // fold (the tagText module header's "every seam that touches tag strings").
 import { normalizeTags } from "./tagText";
 import { fromLegacyEndPin, latestLocationByArticle } from "../../reader/readingPosition";
+import { isSameText } from "../../content/sameText";
+import { correctedArticle } from "../../content/corrections/engine";
+import { loadAllCorrections } from "../../persistence/correctionsStore";
 
 /**
  * The one consistent library read model. All fields derive from ONE settled
  * Promise.all — no fold can straddle two reads.
  */
 export interface LibrarySnapshot {
-  /** The composite library (bundled fixtures ∪ ingested rows). */
+  /** The composite library (bundled fixtures ∪ ingested rows) — the
+   * ORIGINALS as stored (rows are written back from these, so they never
+   * carry corrections — ADR 0014). Read through `readingArticleOf` for
+   * anything about the text the reader reads. */
   articles: CanonicalArticle[];
+  /** Spec #68 / #71 — the article as READ (the correction engine's
+   * corrected article) per id; only corrected articles are listed, and an
+   * uncorrected article reads as itself. */
+  readingArticleById?: Map<string, CanonicalArticle>;
   /** Articles WITHOUT ingestionMeta.bookId (top-level rows; D12-01). */
   standaloneArticles: CanonicalArticle[];
   /** Chapter members grouped by bookId, in article-list order (D12-01). */
@@ -133,8 +143,9 @@ export interface LibrarySnapshot {
   /** THE latest-location fold (max savedAt per articleId — D8-10; ties keep
    * the first row in iteration order, the readingPosition discipline). */
   latestLocationByArticleId: Map<string, LocationRecord>;
-  /** THE grapheme-total fold: mainTextLength(article) per article id — the
-   * D-05 main text, notes excluded (issue #58), computed once per load. */
+  /** THE grapheme-total fold: mainTextLength of the article AS READ (hidden
+   * blocks left out — #71) per article id — the D-05 main text, notes
+   * excluded (issue #58), computed once per load. */
   totalsByArticleId: Map<string, number>;
   /** Issue #76 (decision #72) — THE per-article highlight-count fold:
    * highlight rows per articleId, computed once per load (the library-row
@@ -179,6 +190,7 @@ export interface LibrarySnapshot {
 /** The pre-first-load snapshot: every collection empty, every fold settled. */
 export const EMPTY_LIBRARY_SNAPSHOT: LibrarySnapshot = {
   articles: [],
+  readingArticleById: new Map(),
   standaloneArticles: [],
   chaptersByBook: new Map(),
   books: [],
@@ -274,6 +286,7 @@ export async function loadLibrarySnapshot(): Promise<LibrarySnapshot> {
     articleNotes,
     readingSessions,
     completions,
+    corrections,
   ] = await Promise.all([
     listArticles(),
     loadAllLocations(),
@@ -293,6 +306,9 @@ export async function loadLibrarySnapshot(): Promise<LibrarySnapshot> {
     // display, so a completions-read failure routes calmly to [] (every
     // target reads unfinished-by-default, never a blocked surface).
     loadAllCompletions().catch(() => []),
+    // Spec #68 / #71 — fail-quiet: a corrections-read failure reads every
+    // article as its original.
+    loadAllCorrections(),
   ]);
   const books = booksResult.ok ? booksResult.books : [];
 
@@ -317,9 +333,18 @@ export async function loadLibrarySnapshot(): Promise<LibrarySnapshot> {
   // reference material, so progress, completion, and Estimated reading time
   // all measure against the end of the main text. A saved position inside
   // the notes lies past that end and is not a completion signal (spec #66).
+  // Spec #68 / #71 — every total is over the article AS READ (the one
+  // correction engine), so hidden blocks are left out of reading time,
+  // progress and completion.
+  const readingArticleById = new Map<string, CanonicalArticle>();
+  for (const article of articles) {
+    const list = corrections.get(article.id);
+    if (list !== undefined) readingArticleById.set(article.id, correctedArticle(article, list));
+  }
+  const readingOf = (article: CanonicalArticle) => readingArticleById.get(article.id) ?? article;
   const totalsByArticleId = new Map<string, number>();
   for (const article of articles) {
-    totalsByArticleId.set(article.id, mainTextLength(article));
+    totalsByArticleId.set(article.id, mainTextLength(readingOf(article)));
   }
 
   // THE latest-location fold — readingPosition's one fold (Issue #2).
@@ -329,11 +354,12 @@ export async function loadLibrarySnapshot(): Promise<LibrarySnapshot> {
   const latestLocationByArticleId = latestLocationByArticle(locations);
   for (const article of articles) {
     const loc = latestLocationByArticleId.get(article.id);
-    if (loc === undefined || loc.revision !== article.revision) continue;
+    const reading = readingOf(article);
+    if (loc === undefined || !isSameText(loc, reading)) continue;
     const offset = fromLegacyEndPin(
       loc.graphemeOffset,
       totalsByArticleId.get(article.id)!,
-      graphemeLength(article),
+      graphemeLength(reading),
     );
     if (offset !== loc.graphemeOffset) {
       latestLocationByArticleId.set(article.id, { ...loc, graphemeOffset: offset });
@@ -371,6 +397,7 @@ export async function loadLibrarySnapshot(): Promise<LibrarySnapshot> {
 
   return {
     articles,
+    readingArticleById,
     standaloneArticles,
     chaptersByBook,
     books,
@@ -387,6 +414,15 @@ export async function loadLibrarySnapshot(): Promise<LibrarySnapshot> {
     readingSessions,
     completionByTargetKey,
   };
+}
+
+/** Spec #68 / #71 — the article as the reader reads it (corrections
+ * applied); the original when it has none. */
+export function readingArticleOf(
+  snapshot: Pick<LibrarySnapshot, "readingArticleById">,
+  article: CanonicalArticle,
+): CanonicalArticle {
+  return snapshot.readingArticleById?.get(article.id) ?? article;
 }
 
 // ── Invalidation (the one write-followup call) ──────────────────────────────

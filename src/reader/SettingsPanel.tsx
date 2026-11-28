@@ -35,6 +35,7 @@
 // always the truth at the moment of export), and a landed import calls the
 // ONE invalidateLibrarySnapshot() so mounted surfaces re-derive.
 import { SPEECH_BROWSER_NOTICE } from "../readaloud/webSpeech";
+import { counted, importOutcomeMessage } from "./importOutcomeMessage";
 import { RestoreStarterButton } from "./RestoreStarterButton";
 // Issue #195 — the highlight slots' editor (its own module: the editor
 // is form-heavy and settings-only; the panel stays readable).
@@ -269,11 +270,6 @@ function refusalCopy(refusal: ImportRefusal): string {
     case "corrupted":
       return `This bundle may be corrupted — ${refusal.failedBlocks.length} record types failed integrity checking. Nothing was imported.`;
   }
-}
-
-/** "{n} {noun}" with honest singular/plural agreement (calm DOC-06 voice). */
-function counted(n: number, one: string, other: string): string {
-  return `${n} ${n === 1 ? one : other}`;
 }
 
 /**
@@ -610,30 +606,7 @@ export function SettingsPanel({ open, onClose }: SettingsPanelProps) {
       // re-derive from the imported rows; nothing stays stale behind the
       // panel.
       invalidateLibrarySnapshot();
-      const skipped =
-        plan.skipped.articles +
-        plan.skipped.highlights +
-        plan.skipped.notes +
-        plan.skipped.articleNotes +
-        plan.skipped.locations +
-        plan.skipped.collections;
-      let message = `Imported ${counted(plan.articlesToWrite.length, "article", "articles")}, ${counted(plan.highlightsToWrite.length, "highlight", "highlights")}, ${counted(plan.notesToWrite.length, "note", "notes")}, ${counted(plan.articleNotesToWrite.length, "article note", "article notes")}, ${counted(plan.locationsToWrite.length, "reading position", "reading positions")}, and ${counted(plan.collectionsToWrite.length, "collection", "collections")}.`;
-      if (skipped > 0) {
-        message += ` ${counted(skipped, "item", "items")} ${skipped === 1 ? "was" : "were"} skipped.`;
-      }
-      // Issue #249 — the whole-library preflight's honest report: the
-      // reader's content choices invalidated entry targets in local
-      // collections (blame-attributed: pre-existing breakage is never
-      // counted, replaced rows are moot). The rows are never destroyed —
-      // the breakage is admitted here, never silent.
-      if (plan.localCollectionsBrokenByImport > 0) {
-        message += ` ${counted(
-          plan.localCollectionsBrokenByImport,
-          "collection",
-          "collections",
-        )} ${plan.localCollectionsBrokenByImport === 1 ? "now points" : "now point"} at readings this import changed.`;
-      }
-      setDataMessage(message);
+      setDataMessage(importOutcomeMessage(plan));
     } catch {
       // The Dexie transaction rolled back — local data is unchanged.
       setDataMessage("Import didn't complete. Nothing was changed.");

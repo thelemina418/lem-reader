@@ -260,6 +260,14 @@ export const StructureDestinationSchema = z.object({
 });
 export type StructureDestination = z.infer<typeof StructureDestinationSchema>;
 
+/** Spec #68 — the text-stamp fingerprint a stored record's coordinates
+ * were saved against (src/content/sameText.ts): the applied corrections, or
+ * a PDF repair of the original (#78). Absent = the original as ingested —
+ * so rows saved against an unchanged original stay byte-identical. One
+ * fragment for every record that carries it (the work-structure snapshot,
+ * reading positions, highlights). */
+export const TextFingerprintSchema = z.string().min(1).optional();
+
 export const WorkStructureSchema = z.object({
   schemaVersion: z.literal(WORK_STRUCTURE_SCHEMA_VERSION), // STATE-04 migration hook
   /** Derivation algorithm stamp. An ESTABLISHED snapshot is frozen — readers
@@ -270,6 +278,7 @@ export const WorkStructureSchema = z.object({
    * any snapshot whose revision or ranges do not match the row's canonical
    * content. */
   revision: z.number().int().min(1),
+  fingerprint: TextFingerprintSchema,
   /** Ordered destinations tiling [0, totalGraphemes) exactly — no gaps, no
    * overlaps, source order. */
   destinations: z.array(StructureDestinationSchema).min(1),
@@ -470,6 +479,12 @@ export const ArticleSchema = z.object({
   // revision/range compatibility against the winning row before accepting a
   // snapshot (an invalid snapshot is stripped, never trusted as structure).
   structure: WorkStructureSchema.optional(),
+  // Spec #68 / #78 — set by an explicit PDF repair, which rewrites block
+  // kinds without a revision bump: the repaired original's own text identity
+  // (src/content/sameText.ts), so records saved against the unrepaired
+  // original are never trusted for the repaired one. Absent = never
+  // repaired (or recovered). Additive-optional (Pitfall 9).
+  repairStamp: z.string().min(1).optional(),
   // Issue #114 — the IMMUTABLE added-to-library stamp (Recently added is the
   // trustworthy default order for the mixed article+book list). Stamped ONCE
   // at the save seams (DexieLibrarySource.save / saveBook) the moment the row
@@ -1066,6 +1081,7 @@ export const LocationRecordSchema = z.object({
   revision: z.number().int().min(1), // D-06 monotonic
   graphemeOffset: z.number().int().min(0), // D-05 offset into normalizeText
   savedAt: z.string().datetime(), // ISO-8601 — used for last-write-wins tiebreak
+  fingerprint: TextFingerprintSchema,
 });
 export type LocationRecord = z.infer<typeof LocationRecordSchema>;
 
@@ -1104,6 +1120,7 @@ export const HighlightRecordSchema = z.object({
   id: z.string(),
   articleId: z.string().regex(/^[a-z0-9-]+$/), // reuse LocationRecord regex (D-06)
   revision: z.number().int().min(1), // revision AT CREATION TIME (orphan detection)
+  fingerprint: TextFingerprintSchema,
   position: TextPositionSelectorSchema, // D5-03: grapheme range (primary anchor)
   quote: TextQuoteSelectorSchema, // D5-03: prefix/exact/suffix (recovery substrate)
   createdAt: z.string().datetime(), // ISO-8601
@@ -1146,6 +1163,164 @@ export const HighlightRecordSchema = z.object({
     .optional(),
 });
 export type HighlightRecord = z.infer<typeof HighlightRecordSchema>;
+
+// ── Corrections (spec #68, ADR 0014 — a layer over the preserved original) ──
+// One record per article, in its own table (never on the article row). The
+// list is ORDERED: each correction applies to the result of the ones before
+// it (src/content/corrections/engine.ts). Every correction finds its target
+// by TEXT — a quote selector (the highlight shape) over the normalized text
+// of the correction-view article it was made against — never by block index
+// alone. Kinds are a discriminated union; later phase-1 kinds (#72–#76) add
+// members here and a handler in the engine.
+
+export const CORRECTIONS_SCHEMA_VERSION = 1;
+
+export const CorrectableBlockKindSchema = z.enum([
+  "heading",
+  "paragraph",
+  "blockquote",
+  "bulleted-list",
+  "numbered-list",
+  "figure",
+  "code-block",
+  "footnote-reference",
+  "unsupported",
+]);
+
+/** A whole block, found by its text: `quote.exact` is the block's entire
+ * normalized text, `kind` and `depth` (0 = top level, 1 = inside one
+ * quotation, …) tell apart blocks that share a range (a quotation and its
+ * only paragraph).
+ *
+ * Story 53 — a block with no text of its own (an image with no alt text and
+ * no caption) has an EMPTY `exact`: it is found by the text either side of
+ * it (`prefix` / `suffix`, the highlight quote-selector shape) plus, for an
+ * image, its source (`src`). An empty `exact` always carries context. */
+export const BlockTargetSchema = z
+  .object({
+    quote: TextQuoteSelectorSchema.extend({ exact: z.string() }),
+    kind: CorrectableBlockKindSchema,
+    depth: z.number().int().min(0),
+    src: z.string().min(1).optional(),
+  })
+  .refine(
+    (t) => t.quote.exact.length > 0 || t.quote.prefix.length > 0 || t.quote.suffix.length > 0,
+    {
+      message: "a block with no text is found by the text around it",
+    },
+  );
+export type BlockTarget = z.infer<typeof BlockTargetSchema>;
+
+const correctionBase = {
+  /** crypto.randomUUID() — identity for undo and the corrections list. */
+  id: z.string().min(1),
+  createdAt: z.string().datetime(),
+};
+
+export const HideCorrectionSchema = z.object({
+  kind: z.literal("hide"),
+  ...correctionBase,
+  target: BlockTargetSchema,
+});
+
+export const UnhideCorrectionSchema = z.object({
+  kind: z.literal("unhide"),
+  ...correctionBase,
+  target: BlockTargetSchema,
+});
+
+/** Split a block in two at a block-internal separator (#75). `at` is the
+ * grapheme offset, into the target block's normalized text, of the
+ * whitespace (a space; a line break in a code block) that becomes the
+ * boundary between the two blocks. The target is found by its whole text,
+ * so the offset is relative to text that matched exactly. */
+export const SplitCorrectionSchema = z.object({
+  kind: z.literal("split"),
+  ...correctionBase,
+  target: BlockTargetSchema,
+  at: z.number().int().min(1),
+});
+
+/** Merge a block with the one after it (#75). `next` is the block merged
+ * in, found by text too: a merge applies only when the block that now
+ * follows the target is still the one the reader merged. */
+export const MergeCorrectionSchema = z.object({
+  kind: z.literal("merge"),
+  ...correctionBase,
+  target: BlockTargetSchema,
+  next: BlockTargetSchema,
+});
+
+/** Issue #74 — the block type a "set-type" correction gives its target.
+ * "quotation" wraps the block in a quotation (on a quotation: no-op refusal;
+ * "paragraph" on a quotation lifts its blocks out). "caption" makes a
+ * paragraph the caption of the figure next to it; "paragraph" on a figure
+ * takes its caption out as a paragraph after it. */
+export const BlockTypeChoiceSchema = z.discriminatedUnion("type", [
+  z.object({ type: z.literal("paragraph") }),
+  z.object({
+    type: z.literal("heading"),
+    level: z.union([
+      z.literal(1),
+      z.literal(2),
+      z.literal(3),
+      z.literal(4),
+      z.literal(5),
+      z.literal(6),
+    ]),
+  }),
+  z.object({ type: z.literal("quotation") }),
+  z.object({ type: z.literal("caption") }),
+  z.object({ type: z.literal("code-block") }),
+]);
+export type BlockTypeChoice = z.infer<typeof BlockTypeChoiceSchema>;
+
+export const SetTypeCorrectionSchema = z.object({
+  kind: z.literal("set-type"),
+  ...correctionBase,
+  target: BlockTargetSchema,
+  to: BlockTypeChoiceSchema,
+});
+
+/** Issue #73 — move words across ONE block boundary. `words` is the moved
+ * words' quote over the view article it was made against; they sit at the
+ * END of the target block ("next") or its START ("previous"). Only the block
+ * separator moves; the words never change. */
+export const MoveWordsCorrectionSchema = z.object({
+  kind: z.literal("move-words"),
+  ...correctionBase,
+  target: BlockTargetSchema,
+  words: TextQuoteSelectorSchema,
+  direction: z.enum(["next", "previous"]),
+});
+
+/** Issue #73 — make the selected words their own paragraph (the words
+ * before and after keep the block's type). */
+export const OwnParagraphCorrectionSchema = z.object({
+  kind: z.literal("own-paragraph"),
+  ...correctionBase,
+  target: BlockTargetSchema,
+  words: TextQuoteSelectorSchema,
+});
+
+export const CorrectionSchema = z.discriminatedUnion("kind", [
+  HideCorrectionSchema,
+  UnhideCorrectionSchema,
+  SplitCorrectionSchema,
+  MergeCorrectionSchema,
+  SetTypeCorrectionSchema,
+  MoveWordsCorrectionSchema,
+  OwnParagraphCorrectionSchema,
+]);
+export type Correction = z.infer<typeof CorrectionSchema>;
+
+export const CorrectionsRecordSchema = z.object({
+  schemaVersion: z.literal(CORRECTIONS_SCHEMA_VERSION), // STATE-04 migration hook
+  articleId: z.string().regex(/^[a-z0-9-]+$/),
+  corrections: z.array(CorrectionSchema),
+  updatedAt: z.string().datetime(),
+});
+export type CorrectionsRecord = z.infer<typeof CorrectionsRecordSchema>;
 
 /** NoteRecord — one note attached to a highlight (1:1 via highlightId).
  * text is z.string() (NEVER HTML — Pitfall 8). Empty string = no note

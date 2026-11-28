@@ -3,7 +3,14 @@ import type { Page } from "@playwright/test";
 /** Seed validated fixture rows after the app has initialized its database. */
 export async function seedStoreRows<T>(
   page: Page,
-  store: "articles" | "books" | "location" | "completions",
+  store:
+    | "articles"
+    | "books"
+    | "location"
+    | "completions"
+    | "highlights"
+    | "collections"
+    | "corrections",
   rows: readonly T[],
 ): Promise<void> {
   await page.evaluate(

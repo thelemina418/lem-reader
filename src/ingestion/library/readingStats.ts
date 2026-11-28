@@ -149,7 +149,9 @@ export function timeReadLabels(stats: ReadingStats): Map<string, string> {
 // What counts is the D-05 MAIN TEXT the totals fold measures: prose,
 // headings, quotes, lists, captions and code (verbatim). The notes at the
 // end are reference material, not reading, and are left out (issue #58 —
-// the fold is mainTextLength). Images add no per-image time allowance. The
+// the fold is mainTextLength). Hidden blocks are left out too (spec #68 /
+// #71): the fold measures the article as READ, the correction engine's
+// corrected article. Images add no per-image time allowance. The
 // stream also carries a few short incidental strings — image alt text,
 // footnote markers like "[1]", and the plain description of an unsupported
 // block — which are too small to move a minute-rounded estimate, so they

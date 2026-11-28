@@ -5,7 +5,7 @@ import { expandSettingsGroup } from "./settings";
 // with no horizontal scroll of the article body. The settings panel must open
 // and all five fieldsets + Reset + close remain operable at this size.
 import { test, expect } from "@playwright/test";
-import { assertEdgeInvariant } from "./_edge-invariant";
+import { assertEdgeInvariant, assertCorrectionViewInvariant } from "./_edge-invariant";
 // Plan 21-06 (D21-14 / ACPT-08) — the four-destination matrix cells below
 // (additive import; the cells are additive to the reader cells above).
 import { DESTINATIONS, assertDestinationInvariant, openEdgeDestination } from "./_edge-invariant";
@@ -159,6 +159,17 @@ test.describe("Reflow at 320px (A11Y-04)", () => {
   // Strengthen-only — the existing focused (c) test above stays
   // authoritative as a direct WCAG 1.4.10 proof (D6-12); no duplication
   // in this new test (the helper owns (c) here).
+  // Spec #68 / issue #70 — the Correction view joins the same bar: block
+  // boundaries + type labels perceivable, functions reachable, no overflow.
+  for (const fixture of FIXTURES) {
+    test(`correction view invariant holds under reflow-320 @ ${fixture} (#70)`, async ({
+      page,
+    }) => {
+      await openArticle(page, fixture);
+      await assertCorrectionViewInvariant(page, { fixture, condition: "reflow-320" });
+    });
+  }
+
   for (const fixture of FIXTURES) {
     test(`shared invariant holds at 320px reflow @ ${fixture} (D6-09)`, async ({ page }) => {
       await openArticle(page, fixture);

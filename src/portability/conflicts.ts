@@ -34,6 +34,8 @@ import { loadAllSubscriptions } from "../persistence/subscriptionsStore";
 import { listBooks } from "../persistence/booksStore";
 import { listCollections, sameCollectionTarget } from "../persistence/collectionsStore";
 import { loadAllCompletions } from "../persistence/completionsStore";
+import { loadAllCorrections } from "../persistence/correctionsStore";
+import { applyCorrections } from "../content/corrections/engine";
 import { db } from "../persistence/db";
 import { normalizeFeedUrl } from "../discover/feedUrl";
 import { bundledFixtures } from "../fixtures";
@@ -55,6 +57,8 @@ import type {
   Collection,
   CollectionActiveEntry,
   CompletionRecord,
+  Correction,
+  CorrectionsRecord,
   HighlightRecord,
   LocationRecord,
   NoteRecord,
@@ -63,6 +67,7 @@ import type {
   SubscriptionRecord,
 } from "../content/schema";
 import type { AssetExportMeta, ExportBundle } from "./bundle";
+import { isSameText } from "../content/sameText";
 
 // ── Phase 20 (Plan 20-05) — validated import assets + the no-broken-refs
 //    gate (IMG-04). Assets ride their article's D9-14 resolution; there is
@@ -399,6 +404,19 @@ export interface ImportPreviewData {
    * order, with both arrangements' names and entry counts plus keep-local
    * validity against the preview's winning rows. */
   collectionConflicts: CollectionConflictDetail[];
+  /** Spec #68 / issue #77 — the bundle's corrections, as the import would
+   * treat them if this device's copies win (the skip default): how many
+   * arrive, how many won't fit their winning original (kept as not
+   * applied), and for how many articles they are set aside because this
+   * device's copy wins and already has its own corrections. */
+  corrections: CorrectionsRide;
+}
+
+/** What an import does with the bundle's corrections (spec #68 / #77). */
+export interface CorrectionsRide {
+  incoming: number;
+  notApplied: number;
+  setAside: number;
 }
 
 /** The fully-computed import plan (RESEARCH Pattern 3's apply-step contract).
@@ -480,6 +498,29 @@ export interface ResolvedImportPlan {
    * and the row is never destroyed or rewritten. The breakage is ADMITTED
    * here for the post-import status, never left silent. */
   localCollectionsBrokenByImport: number;
+  /** Spec #68 / issue #77 — the incoming corrections records that follow
+   * their article (no ConflictKind — the assets ride-along precedent):
+   *   - the incoming article is WRITTEN (new or winning) → its incoming
+   *     corrections record replaces the local one with it;
+   *   - the LOCAL article wins and has its own corrections → those stay
+   *     untouched and nothing is written;
+   *   - the local article wins and has NO corrections → the incoming ones
+   *     are adopted on top of the local original (nothing local to lose);
+   *   - the article is nowhere after import → nothing is written.
+   * A bundle without a record for an article never deletes local
+   * corrections (older bundles import unchanged). Every written record is
+   * re-applied to its WINNING original through the engine; corrections
+   * that don't fit are kept, in order — never stripped, never trusted. */
+  correctionsToWrite: CorrectionsRecord[];
+  /** Spec #68 / issue #77 — how many written corrections the engine could
+   * not apply to their winning original (kept as not applied; the engine
+   * gives each its reason). Admitted in the post-import status, never
+   * silent. */
+  correctionsNotApplied: number;
+  /** Spec #68 / issue #77 — articles whose incoming corrections were set
+   * aside because the local article won and already has its own (an
+   * identical list is not counted). Admitted in the post-import status. */
+  correctionsSetAside: number;
   preferences?: ReaderSettings;
   applyPreferences: boolean;
   starterRemoved?: boolean;
@@ -717,7 +758,7 @@ export async function detectImportPreview(
     const local = localArticleById.get(a.id);
     if (!local) {
       added.articles++;
-    } else if (a.revision !== local.revision) {
+    } else if (!isSameText(a, local)) {
       revisionConflicts.push(a.id);
     } else if (a.provenance.originalHtmlHash !== local.provenance.originalHtmlHash) {
       divergenceConflicts.push(a.id);
@@ -912,6 +953,20 @@ export async function detectImportPreview(
     resolution[status]++;
   }
 
+  // ── Spec #68 / #77: the corrections, as the skip default would treat
+  // them (this device's copy wins where it has one) — the same rule
+  // resolveImportPlan applies.
+  const incomingArticleById = new Map(bundle.articles.map((a) => [a.id, a]));
+  const ride =
+    (bundle.corrections ?? []).length > 0
+      ? rideCorrections(bundle, await loadAllCorrections(), (id) => {
+          const local = localArticleById.get(id);
+          if (local) return { article: local, local: true };
+          const incoming = incomingArticleById.get(id);
+          return incoming ? { article: incoming, local: false } : undefined;
+        })
+      : { incoming: 0, notApplied: 0, setAside: 0 };
+
   // ── D9-12 fresh-device preference default (row PRESENCE, a read) ──
   const prefsRow = await db.settings.get(READER_PREFS_KEY);
   const applyPreferencesDefault = prefsRow === undefined;
@@ -937,7 +992,43 @@ export async function detectImportPreview(
     unresolvedCollections,
     conflictingCollections,
     collectionConflicts,
+    corrections: { incoming: ride.incoming, notApplied: ride.notApplied, setAside: ride.setAside },
   };
+}
+
+/**
+ * Spec #68 / issue #77 — corrections follow their article (the rule on
+ * ResolvedImportPlan.correctionsToWrite), for the preview and the plan
+ * alike. `winnerOf` names the original that wins for an article id and
+ * whether it is the local one. Pure planning: the engine is a pure
+ * function, so re-application happens here, never inside the apply
+ * transaction. The first record per article wins (an over-determined
+ * bundle never double-writes).
+ */
+function rideCorrections(
+  bundle: ExportBundle,
+  localCorrections: ReadonlyMap<string, readonly Correction[]>,
+  winnerOf: (articleId: string) => { article: CanonicalArticle; local: boolean } | undefined,
+): CorrectionsRide & { toWrite: CorrectionsRecord[] } {
+  const out = { incoming: 0, notApplied: 0, setAside: 0, toWrite: [] as CorrectionsRecord[] };
+  const seen = new Set<string>();
+  for (const record of bundle.corrections ?? []) {
+    if (seen.has(record.articleId)) continue;
+    seen.add(record.articleId);
+    out.incoming += record.corrections.length;
+    const winner = winnerOf(record.articleId);
+    if (winner === undefined) continue;
+    const own = winner.local ? localCorrections.get(record.articleId) : undefined;
+    if (own !== undefined) {
+      // The local article won and keeps its own corrections.
+      if (JSON.stringify(own) !== JSON.stringify(record.corrections)) out.setAside++;
+      continue;
+    }
+    const { outcomes } = applyCorrections(winner.article, record.corrections);
+    out.notApplied += outcomes.filter((o) => o.status === "not-applied").length;
+    out.toWrite.push(record);
+  }
+  return out;
 }
 
 // ── resolveImportPlan — bulk per-kind overrides → fully-computed plan ────────
@@ -1170,6 +1261,9 @@ export async function resolveImportPlan(
     completionsToWrite: [],
     collectionActiveEntriesToWrite: [],
     localCollectionsBrokenByImport: 0,
+    correctionsToWrite: [],
+    correctionsNotApplied: 0,
+    correctionsSetAside: 0,
     applyPreferences,
     starterRemoved: bundle.starterRemoved,
     idRewrites: new Map<string, string>(),
@@ -1224,7 +1318,7 @@ export async function resolveImportPlan(
     const local = localArticleById.get(a.id);
     if (!local) {
       plan.articlesToWrite.push(a); // new — always written (overrides ride)
-    } else if (a.revision !== local.revision) {
+    } else if (!isSameText(a, local)) {
       // D-06 monotonic: only a STRICTLY higher incoming revision may replace
       // the local row (an explicit reader choice under Overwrite-all). The
       // LOCAL-wins path (equal-or-lower) stays untouched — no write, the
@@ -1377,6 +1471,24 @@ export async function resolveImportPlan(
     }
   }
 
+  // ── Spec #68 / issue #77: corrections follow their article (the rule on
+  // ResolvedImportPlan.correctionsToWrite). Pure planning: the engine is a
+  // pure function, so re-application happens HERE, never inside the
+  // apply transaction. The first record per article wins (an
+  // over-determined bundle never double-writes).
+  if ((bundle.corrections ?? []).length > 0) {
+    const writtenById = new Map(plan.articlesToWrite.map((a) => [a.id, a]));
+    const ride = rideCorrections(bundle, await loadAllCorrections(), (id) => {
+      const written = writtenById.get(id);
+      if (written) return { article: written, local: false };
+      const local = localArticleById.get(id);
+      return local ? { article: local, local: true } : undefined;
+    });
+    plan.correctionsToWrite.push(...ride.toWrite);
+    plan.correctionsNotApplied += ride.notApplied;
+    plan.correctionsSetAside += ride.setAside;
+  }
+
   // ── Issue #37: reading sessions merge by their per-visit uuid PRIMARY
   // KEY. A new id always writes (the history rides along); an id already
   // present locally keeps the LOCAL row — no duplication, no clobbering.
@@ -1442,7 +1554,7 @@ export async function resolveImportPlan(
     const local = localArticleById.get(a.id);
     if (
       local?.structure !== undefined &&
-      local.revision === a.revision &&
+      isSameText(a, local) &&
       local.provenance.originalHtmlHash === a.provenance.originalHtmlHash
     ) {
       const frozen = validateWorkStructure(a, local.structure);

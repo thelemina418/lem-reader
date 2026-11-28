@@ -153,7 +153,8 @@ test("(d) keyboard: Back to library is Tab-reachable from the article top and En
     // Discover destination between Library and Highlights in the primary
     // nav, so DOM order to the back affordance is now skip-link → wordmark
     // → Library → Discover → Highlights → contents → tags → annotations →
-    // mode → gear → back-to-library = 10 presses. The assertion's contract
+    // mode → gear → back-to-library = 10 presses. Spec #68 (#70) then put the
+    // Correction view toggle beside the mode toggle: 11 presses. The assertion's contract
     // (Tab-reachability in DOM order within a bounded walk) is unchanged —
     // only the bound tracks the sanctioned anatomy. The unsupported-speech
     // notice adds one dismiss button before the article when it is present.
@@ -162,7 +163,7 @@ test("(d) keyboard: Back to library is Tab-reachable from the article top and En
       .getByRole("button", { name: "Dismiss", exact: true })
       .count();
     expect(
-      await tabWalkUntil(page, "button.back-to-library", 10 + speechNoticeStops),
+      await tabWalkUntil(page, "button.back-to-library", 11 + speechNoticeStops),
       "Tab from the skip link must reach Back to library in DOM order",
     ).toBe(true);
     // Enter while focused → history.back() (the in-app path) → library.

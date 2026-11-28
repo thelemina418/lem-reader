@@ -187,7 +187,10 @@ export function resolveCollectionEntry(
  */
 export function entryLookupFromSnapshot(snapshot: LibrarySnapshot): CollectionEntryLookup {
   return {
-    articlesById: new Map(snapshot.articles.map((a) => [a.id, a])),
+    // Spec #68 / #71 — entries resolve against the article AS READ.
+    articlesById: new Map(
+      snapshot.articles.map((a) => [a.id, snapshot.readingArticleById?.get(a.id) ?? a]),
+    ),
     booksById: new Map(snapshot.books.map((b) => [b.id, b])),
     chaptersByBookId: snapshot.chaptersByBook,
     latestLocationByArticleId: snapshot.latestLocationByArticleId,

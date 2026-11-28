@@ -2,6 +2,7 @@ import { beforeEach, describe, expect, it } from "vitest";
 import fakeIndexedDB, { IDBKeyRange } from "fake-indexeddb";
 import { Dexie } from "dexie";
 import { unzipSync, strFromU8, strToU8, zipSync } from "fflate";
+import { BUNDLE_WRITER_VERSION } from "../../../src/portability/bundle";
 
 Dexie.dependencies.indexedDB = fakeIndexedDB;
 Dexie.dependencies.IDBKeyRange = IDBKeyRange;
@@ -88,7 +89,7 @@ describe("optional starter article", () => {
 
   it("exports v7 and imports removal on a fresh device without applying reading preferences", async () => {
     const { bundle } = await exportRemovedStarter();
-    expect(bundle.schemaVersion).toBe(11); // #41 moved the writer version
+    expect(bundle.schemaVersion).toBe(BUNDLE_WRITER_VERSION); // #41 moved the writer version
     expect(bundle.starterRemoved).toBe(true);
     await clearData();
     await importBundle(bundle);

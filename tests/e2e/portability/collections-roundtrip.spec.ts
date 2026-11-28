@@ -41,6 +41,7 @@ import {
   seedRows,
   settingsStatus,
 } from "./_portability";
+import { BUNDLE_WRITER_VERSION } from "../../../src/portability/bundle";
 
 // ── Machine A corpus (Node-side builders — shipped schemas only) ────────────
 
@@ -269,7 +270,7 @@ test.describe("Collections round trip (issue #248)", () => {
 
       // ── Node side: the envelope carries the collection blocks ───────────
       const { bundle: bundleJson } = readBundleJson(bundlePath!);
-      expect(bundleJson.schemaVersion).toBe(11); // #41 moved the writer version
+      expect(bundleJson.schemaVersion).toBe(BUNDLE_WRITER_VERSION); // #41 moved the writer version
       expect(bundleJson.collections).toEqual([COLLECTION, EMPTY_COLLECTION]);
       expect(bundleJson.completions).toEqual([COMPLETION]);
       expect(bundleJson.collectionActiveEntries).toEqual([ACTIVE_ENTRY]);

@@ -9,11 +9,14 @@ import {
   type HighlightConsequence,
   type HighlightOutcome,
 } from "../../persistence/reprocessStore";
+import { describeCorrection } from "../../content/corrections/describe";
+import type { NotAppliedCorrection } from "../../content/corrections/reapply";
 
 const OUTCOME_COPY: Record<HighlightOutcome, string> = {
   confident: "re-matches",
   ambiguous: "ambiguous — it will be shown as needing your attention",
   orphan: "orphaned — it will be shown as orphaned, never moved",
+  hidden: "inside a block your corrections hide — it shows again if you unhide the block",
 };
 
 /** Busy/error state around one reprocess step. Every failure is calm and
@@ -77,43 +80,38 @@ export function HighlightOutcomes({
   );
 }
 
-/** Each consequence is accepted explicitly; apply stays disabled until all
- * are. */
-export function ConsequenceChecklist({
-  items,
-  accepted,
-  onChange,
-  disabled,
+/** Spec #68 / #78 — the reader's corrections re-applied to the new version:
+ * how many still fit, and each one that no longer does, with its reason.
+ * Nothing is dropped: those stay in the corrections list as not applied.
+ * Renders nothing for an article without corrections. */
+export function CorrectionsOutcome({
+  reapplied,
+  notApplied,
+  version,
 }: {
-  items: readonly { label: string }[];
-  accepted: ReadonlySet<number>;
-  onChange: (next: Set<number>) => void;
-  disabled: boolean;
+  reapplied: number;
+  notApplied: readonly (NotAppliedCorrection & { chapter?: string })[];
+  /** How the new version is named in the copy. */
+  version: "new version" | "repaired version";
 }) {
-  if (items.length === 0) return null;
+  const total = reapplied + notApplied.length;
+  if (total === 0) return null;
   return (
     <>
-      <h3>Reader data that cannot keep its chapter meaning</h3>
-      <ul>
-        {items.map((item, index) => (
-          <li key={index}>
-            <label>
-              <input
-                type="checkbox"
-                checked={accepted.has(index)}
-                disabled={disabled}
-                onChange={(event) => {
-                  const next = new Set(accepted);
-                  if (event.target.checked) next.add(index);
-                  else next.delete(index);
-                  onChange(next);
-                }}
-              />
-              {item.label}
-            </label>
-          </li>
-        ))}
-      </ul>
+      <p>
+        Your corrections: {reapplied} of {total} re-applied to the {version} by finding their text.
+      </p>
+      {notApplied.length > 0 && (
+        <ul aria-label="Corrections that no longer fit">
+          {notApplied.map(({ correction, reason, chapter }) => (
+            <li key={`${chapter ?? ""}:${correction.id}`}>
+              {chapter !== undefined && `${chapter}: `}
+              {describeCorrection(correction)} — no longer fits: {reason} It stays in the
+              corrections list as not applied.
+            </li>
+          ))}
+        </ul>
+      )}
     </>
   );
 }

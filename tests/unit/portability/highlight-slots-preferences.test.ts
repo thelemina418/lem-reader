@@ -20,6 +20,7 @@ import fakeIndexedDB, { IDBKeyRange } from "fake-indexeddb";
 import { Dexie } from "dexie";
 import { ExportBundleSchema } from "../../../src/portability/bundle";
 import type { HighlightSlot } from "../../../src/content/schema";
+import { BUNDLE_WRITER_VERSION } from "../../../src/portability/bundle";
 
 Dexie.dependencies.indexedDB = fakeIndexedDB;
 Dexie.dependencies.IDBKeyRange = IDBKeyRange;
@@ -414,7 +415,7 @@ describe("ordered highlight slots travel in the versioned bundle (issue #41)", (
       schemaVersion: number;
       preferences: { schemaVersion: number; highlightSlots: Array<{ id: string }> };
     };
-    expect(raw.schemaVersion).toBe(11);
+    expect(raw.schemaVersion).toBe(BUNDLE_WRITER_VERSION);
     expect(raw.preferences.schemaVersion).toBe(9);
     expect(raw.preferences.highlightSlots.every((s) => typeof s.id === "string")).toBe(true);
   });

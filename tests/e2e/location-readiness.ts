@@ -78,6 +78,51 @@ export async function waitForLocationSaved(
     .toBe(true);
 }
 
+/** The negative counterpart of waitForLocationSaved: observe the location
+ * store for `windowMs` (callers pass at least the app's save debounce,
+ * SAVE_DEBOUNCE_MS 1200 in useScrollSave, plus margin) and fail the moment a
+ * write for `articleId` newer than `sinceISO` lands. A bounded observation
+ * of the store — it fails fast on a write — rather than a blind sleep
+ * followed by one read (spec #68: the Correction view saves no position). */
+export async function expectNoLocationSave(
+  page: Page,
+  articleId: string,
+  sinceISO: string,
+  windowMs: number,
+): Promise<void> {
+  const until = Date.now() + windowMs;
+  while (Date.now() < until) {
+    const saved = await page.evaluate(
+      async ({ articleId, sinceISO }) => {
+        const db = await new Promise<IDBDatabase>((resolve, reject) => {
+          const req = indexedDB.open("lem-reader");
+          req.onsuccess = () => resolve(req.result);
+          req.onerror = () => reject(req.error);
+        });
+        try {
+          const rows = await new Promise<{ articleId?: string; savedAt?: string }[]>(
+            (resolve, reject) => {
+              const getReq = db
+                .transaction("location", "readonly")
+                .objectStore("location")
+                .getAll();
+              getReq.onsuccess = () =>
+                resolve((getReq.result ?? []) as { articleId?: string; savedAt?: string }[]);
+              getReq.onerror = () => reject(getReq.error);
+            },
+          );
+          return rows.some((r) => r.articleId === articleId && (r.savedAt ?? "") > sinceISO);
+        } finally {
+          db.close();
+        }
+      },
+      { articleId, sinceISO },
+    );
+    expect(saved, `a location save landed for ${articleId} after ${sinceISO}`).toBe(false);
+    await page.evaluate(() => new Promise((resolve) => setTimeout(resolve, 100)));
+  }
+}
+
 /** The in-page clock marker for waitForLocationSaved (see the module header
  * for when to capture it). */
 export async function locationSaveMarker(page: Page): Promise<string> {

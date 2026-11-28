@@ -12,15 +12,27 @@
 //   - previewUrlReprocess(articleId) — the URL source: re-fetches the stored
 //     address through the existing guarded ingest endpoint.
 //   - applyReprocess(preview) — writes the new revision.
-// Future stages (#51 re-applying corrections, #52 embed cards) transform the
-// proposed article inside previewReprocess before consequences are derived,
-// so the preview always shows what apply will write.
+// Future stages (#52 embed cards) transform the proposed article inside
+// previewReprocess before consequences are derived, so the preview always
+// shows what apply will write.
+//
+// Corrections (spec #68 / #78, ADR 0014): the reader's corrections are
+// re-applied to the proposed original at that seam (planRevision), by
+// finding their text through the one engine. Every consequence — changed
+// passages, highlight outcomes, the reading position, chapter consequences —
+// is derived between what the reader sees now (the corrected current
+// version) and what they will see (the corrected proposed version). The
+// corrections list itself is never rewritten: corrections that no longer fit
+// are listed in the preview and stay in the list as not applied (the engine
+// derives the outcome over the stored original). Book reprocessing does this
+// per chapter article.
 //
 // Carry-over rules on apply (spec #66 "Reprocessing"):
 //   - The article keeps its id; revision increments (D-06 monotonic).
 //   - Reader-owned row fields (tags, display overrides, addedAt) are kept.
 //   - Highlights are never rewritten: they re-match against the new revision
-//     by their stored quote (D5-01/D5-02), exactly as the preview reports.
+//     by their stored quote (D5-01/D5-02), exactly as the preview reports; a
+//     highlight inside a block a correction still hides is reported hidden.
 //   - Article notes, reading sessions and whole-article completion/collection
 //     targets are keyed by article id and carry over untouched.
 //   - Reading position is re-anchored by quote to the new revision; a finished
@@ -29,29 +41,22 @@
 //   - Chapter-targeted completions and collection entries whose chapter no
 //     longer corresponds are disclosed and need explicit acceptance.
 //   - Image assets are replaced together with the article.
-import type { Collection, Table } from "dexie";
 import {
   ArticleSchema,
   BookSchema,
-  CollectionSchema,
   type ArticleSource,
   type Book,
   type CanonicalArticle,
   type CollectionEntryTarget,
+  type Correction,
   type LocationRecord,
-  LocationRecordSchema,
   HighlightRecordSchema,
 } from "../content/schema";
-import {
-  BLOCK_SEPARATOR,
-  deriveQuoteSelector,
-  graphemeLength,
-  mainTextLength,
-  normalizeText,
-  resolveQuoteSelector,
-} from "../content/normalizeText";
+import { BLOCK_SEPARATOR, normalizeText, resolveQuoteSelector } from "../content/normalizeText";
 import { deriveWorkStructure } from "../content/structure";
-import { fromLegacyEndPin, inNotesOffset, isFinishedOffset } from "../reader/readingPosition";
+import { isHiddenByCorrections } from "../content/corrections/engine";
+import { carryOffset } from "../content/corrections/positions";
+import { reapplyCorrections, type NotAppliedCorrection } from "../content/corrections/reapply";
 import {
   ingestEpub,
   ingestHtml,
@@ -67,14 +72,29 @@ import { EPUB_MAX_BYTES } from "../ingestion/types";
 import { bookAssetsForChapters } from "../ingestion/addToLibrary";
 import type { BookAsset } from "./booksStore";
 import { db, type AssetRecordRow } from "./db";
-import { chapterConsequences, type ChapterConsequence } from "./chapterConsequences";
+import {
+  chapterConsequences,
+  writeChapterConsequences,
+  type ChapterConsequence,
+} from "./chapterConsequences";
+import { isSameText, textStamp, type TextStamp } from "../content/sameText";
+import { loadCorrections } from "./correctionsStore";
+import {
+  ACCEPTANCE_REQUIRED,
+  everyRevision,
+  latestLocation,
+  readerRowsSnapshot,
+  STALE_PREVIEW,
+} from "./readerRows";
 
 /** A calm, reader-facing refusal. Nothing was changed when one is thrown. */
 export class ReprocessRefusal extends Error {}
 
 export type PassageChange = { kind: "removed" | "added"; text: string };
 
-export type HighlightOutcome = "confident" | "ambiguous" | "orphan";
+/** "hidden": inside a block one of the reader's corrections still hides —
+ * not shown while the block is hidden, matches again on unhide (spec #68). */
+export type HighlightOutcome = "confident" | "ambiguous" | "orphan" | "hidden";
 
 export interface HighlightConsequence {
   highlightId: string;
@@ -85,6 +105,15 @@ export interface HighlightConsequence {
 
 export type PositionConsequence =
   { kind: "none" } | { kind: "kept"; offset: number } | { kind: "unmatched" };
+
+/** The reader's corrections re-applied to the proposed original (#78). */
+export interface CorrectionsCarry {
+  /** Corrections that apply to the proposed version. */
+  reapplied: readonly Correction[];
+  /** Corrections that apply today and would no longer fit; they stay in the
+   * corrections list as not applied. */
+  notApplied: readonly NotAppliedCorrection[];
+}
 
 /** What reprocessing one article would do, before any snapshot is taken:
  * the per-article unit a single-article preview and each kept chapter of a
@@ -99,6 +128,10 @@ export interface ReprocessPlan {
   highlights: HighlightConsequence[];
   position: PositionConsequence;
   consequences: ChapterConsequence[];
+  corrections: CorrectionsCarry;
+  /** The text stamp of what the reader will see (the corrected proposed
+   * version): the re-anchored position is saved against it. */
+  substrate: TextStamp;
 }
 
 export interface ReprocessPreview extends ReprocessPlan {
@@ -132,25 +165,6 @@ async function loadSaved(articleId: string): Promise<CanonicalArticle> {
   if (!parsed.success)
     throw new ReprocessRefusal("This article is no longer in your library; nothing was changed.");
   return parsed.data;
-}
-
-/** Every revision's rows of one article, by the [articleId+revision] key. */
-function everyRevision<T, K>(table: Table<T, K>, articleId: string): Collection<T, K> {
-  return table
-    .where("[articleId+revision]")
-    .between([articleId, 0], [articleId, Number.MAX_SAFE_INTEGER]);
-}
-
-/** Everything apply reads, serialized in a stable order. */
-async function snapshotOf(articleId: string): Promise<string> {
-  const [row, highlights, locations, completions, collections] = await Promise.all([
-    db.articles.get(articleId),
-    everyRevision(db.highlights, articleId).toArray(),
-    everyRevision(db.location, articleId).toArray(),
-    db.completions.toArray(),
-    db.collections.toArray(),
-  ]);
-  return JSON.stringify({ row, highlights, locations, completions, collections });
 }
 
 function adoptCandidate(saved: CanonicalArticle, fresh: CanonicalArticle): CanonicalArticle {
@@ -233,42 +247,31 @@ export function passageChanges(before: string[], after: string[]): PassageChange
   return out;
 }
 
-/** The latest saved position across revisions (the library's own fold). */
-async function latestLocation(articleId: string): Promise<LocationRecord | undefined> {
-  const rows = await everyRevision(db.location, articleId).toArray();
-  return rows
-    .flatMap((row) => {
-      const parsed = LocationRecordSchema.safeParse(row);
-      return parsed.success ? [parsed.data] : [];
-    })
-    .sort((x, y) => (x.savedAt < y.savedAt ? 1 : x.savedAt > y.savedAt ? -1 : 0))[0];
-}
-
-/** Re-anchor a reading position by the text that follows it. */
+/** Re-anchor a reading position by the text that follows it: from what
+ * the reader sees now (or the uncorrected original it was saved against)
+ * into what they will see. Finished stays finished (carried to the
+ * proposed version's main-text end, never the end of its notes; the legacy
+ * notes-end pin is a finish), and the very start stays the start. */
 function carryPosition(
   saved: CanonicalArticle,
-  proposed: CanonicalArticle,
+  shownBefore: CanonicalArticle,
+  shownAfter: CanonicalArticle,
   location: LocationRecord | undefined,
 ): PositionConsequence {
   if (!location) return { kind: "none" };
-  if (location.revision !== saved.revision) return { kind: "unmatched" };
-  const total = graphemeLength(saved);
-  // Spec #66 — finished is reaching the end of the MAIN text; a finish
-  // carries to the proposed article's main-text end (its end-pin), never to
-  // the end of its notes. A position inside the notes re-anchors by quote.
-  // The legacy end pin (a pre-#66 finish at the end of the notes) is a finish.
-  const mainEnd = mainTextLength(saved);
-  const saveOffset = fromLegacyEndPin(location.graphemeOffset, mainEnd, total);
-  if (!inNotesOffset(saveOffset, mainEnd) && isFinishedOffset(saveOffset, mainEnd))
-    return { kind: "kept", offset: mainTextLength(proposed) };
-  if (location.graphemeOffset === 0) return { kind: "kept", offset: 0 };
-  const start = Math.min(location.graphemeOffset, total);
-  const quote = deriveQuoteSelector(saved, { start, end: Math.min(total, start + 48) });
-  const resolved = resolveQuoteSelector(proposed, quote, { start, end: start + 48 });
-  return typeof resolved === "string"
-    ? { kind: "unmatched" }
-    : { kind: "kept", offset: resolved.start };
+  const from = isSameText(location, shownBefore)
+    ? shownBefore
+    : isSameText(location, saved)
+      ? saved
+      : null;
+  if (from === null) return { kind: "unmatched" };
+  const offset = carryOffset(from, shownAfter, location.graphemeOffset);
+  return offset === null ? { kind: "unmatched" } : { kind: "kept", offset };
 }
+
+const structureOf = (article: CanonicalArticle) =>
+  article.structure ??
+  deriveWorkStructure({ ...article, provenanceTitle: article.provenance.title });
 
 /**
  * previewReprocess — the core. No writes. Adopts `candidate` (a fresh ingest
@@ -280,7 +283,7 @@ export async function previewReprocess(
   candidate: IngestionSuccess,
   options: PreviewOptions = {},
 ): Promise<ReprocessPreview> {
-  const snapshot = await snapshotOf(articleId);
+  const snapshot = await readerRowsSnapshot(articleId);
   const saved = await loadSaved(articleId);
   const fresh = ArticleSchema.parse(candidate.article);
   const sourceChanged = saved.provenance.originalHtmlHash !== fresh.provenance.originalHtmlHash;
@@ -288,44 +291,66 @@ export async function previewReprocess(
     throw new ReprocessRefusal(options.requireSameSource.refusal);
   return {
     snapshot,
-    ...(await planRevision(saved, adoptCandidate(saved, fresh), candidate.assets, sourceChanged)),
+    ...(await planRevision(
+      saved,
+      adoptCandidate(saved, fresh),
+      candidate.assets,
+      sourceChanged,
+      await loadCorrections(articleId),
+    )),
   };
 }
 
-/** No writes. Every consequence of replacing `saved` with `proposed`. */
+/** No writes. Every consequence of replacing `saved` with `proposed`, with
+ * the reader's corrections re-applied to `proposed` first (#78): every
+ * consequence is between the corrected current and corrected proposed
+ * versions — what the reader reads. Uncorrected, both are the originals. */
 async function planRevision(
   saved: CanonicalArticle,
   proposed: CanonicalArticle,
   assets: ValidatedAsset[],
   sourceChanged: boolean,
+  corrections: readonly Correction[],
 ): Promise<ReprocessPlan> {
   const articleId = saved.id;
+  const carry = reapplyCorrections(saved, proposed, corrections);
+  const shownBefore = carry.before.article;
+  const shownAfter = carry.after.article;
   const highlights: HighlightConsequence[] = [];
   for (const row of await everyRevision(db.highlights, articleId).toArray()) {
     const parsed = HighlightRecordSchema.safeParse(row);
     if (!parsed.success) continue;
-    const resolved = resolveQuoteSelector(proposed, parsed.data.quote, parsed.data.position);
+    const resolved = resolveQuoteSelector(shownAfter, parsed.data.quote, parsed.data.position);
     highlights.push({
       highlightId: parsed.data.id,
       exact: parsed.data.quote.exact,
-      outcome: typeof resolved === "string" ? resolved : "confident",
+      outcome:
+        typeof resolved !== "string"
+          ? "confident"
+          : isHiddenByCorrections(carry.after, parsed.data.quote)
+            ? "hidden"
+            : resolved,
     });
   }
 
-  const oldStructure =
-    saved.structure ?? deriveWorkStructure({ ...saved, provenanceTitle: saved.provenance.title });
   return {
     articleId,
     proposed,
     assets,
     sourceChanged,
     changes: passageChanges(
-      normalizeText(saved).split(BLOCK_SEPARATOR),
-      normalizeText(proposed).split(BLOCK_SEPARATOR),
+      normalizeText(shownBefore).split(BLOCK_SEPARATOR),
+      normalizeText(shownAfter).split(BLOCK_SEPARATOR),
     ),
     highlights,
-    position: carryPosition(saved, proposed, await latestLocation(articleId)),
-    consequences: await chapterConsequences(articleId, oldStructure, proposed.structure),
+    position: carryPosition(saved, shownBefore, shownAfter, await latestLocation(articleId)),
+    consequences: await chapterConsequences(
+      articleId,
+      structureOf(shownBefore),
+      structureOf(shownAfter),
+    ),
+    corrections: { reapplied: carry.reapplied, notApplied: carry.notApplied },
+    substrate: textStamp(shownAfter),
   };
 }
 
@@ -398,11 +423,6 @@ export async function previewUploadReprocess(
   });
 }
 
-const STALE_PREVIEW =
-  "This article or its reader data changed after the preview. Preview again before applying; nothing was changed.";
-const ACCEPTANCE_REQUIRED =
-  "Explicit acceptance is required for the disclosed chapter consequences; nothing was changed.";
-
 function assetRowsOf(
   assets: readonly (ValidatedAsset & { articleId?: string })[],
   articleId: string,
@@ -418,39 +438,11 @@ function assetRowsOf(
   }));
 }
 
-/** Inside a transaction: drop the accepted completion and collection-entry
- * consequences. */
-async function writeConsequences(
-  consequences: readonly ChapterConsequence[],
-  updatedAt: string,
-): Promise<void> {
-  for (const consequence of consequences) {
-    if (consequence.kind === "completion") await db.completions.delete(consequence.id);
-  }
-  const byCollection = new Map<string, Set<string>>();
-  for (const item of consequences) {
-    if (item.kind !== "collection-entry") continue;
-    const set = byCollection.get(item.collectionId) ?? new Set<string>();
-    set.add(item.entryId);
-    byCollection.set(item.collectionId, set);
-  }
-  for (const [id, removed] of byCollection) {
-    const before = CollectionSchema.parse(await db.collections.get(id));
-    await db.collections.put({
-      ...before,
-      entries: before.entries.filter((entry) => !removed.has(entry.id)),
-      updatedAt,
-    });
-    const active = await db.collectionActiveEntries.get(id);
-    if (active && removed.has(active.entryId)) await db.collectionActiveEntries.delete(id);
-  }
-}
-
 /** Inside a transaction: write one planned revision, its re-anchored
  * position and its replacement assets. `row` adds stored-only fields (the
  * denormalized chapter `bookId` index). */
 async function writeRevision(
-  plan: Pick<ReprocessPlan, "articleId" | "proposed" | "position">,
+  plan: Pick<ReprocessPlan, "articleId" | "proposed" | "position" | "substrate">,
   assetRows: readonly AssetRecordRow[],
   createdAt: string,
   row: Record<string, unknown> = {},
@@ -459,11 +451,13 @@ async function writeRevision(
   if (plan.position.kind === "kept") {
     const latest = await latestLocation(articleId);
     await everyRevision(db.location, articleId).delete();
-    // The savedAt stays the reader's own: reprocessing is not reading.
+    // The savedAt stays the reader's own: reprocessing is not reading. The
+    // position is saved against what the reader will see (the corrected
+    // proposed version, #78), so it is trusted directly when they open it.
     await db.location.put({
       schemaVersion: 1,
       articleId,
-      revision: proposed.revision,
+      ...plan.substrate,
       graphemeOffset: plan.position.offset,
       savedAt: latest?.savedAt ?? createdAt,
     });
@@ -491,13 +485,14 @@ export async function applyReprocess(
       db.completions,
       db.collections,
       db.collectionActiveEntries,
+      db.corrections,
     ],
     async () => {
-      if ((await snapshotOf(preview.articleId)) !== preview.snapshot)
+      if ((await readerRowsSnapshot(preview.articleId)) !== preview.snapshot)
         throw new ReprocessRefusal(STALE_PREVIEW);
       if (preview.consequences.length > 0 && options.acceptConsequences !== true)
         throw new ReprocessRefusal(ACCEPTANCE_REQUIRED);
-      await writeConsequences(preview.consequences, createdAt);
+      await writeChapterConsequences(preview.consequences, createdAt);
       await writeRevision(preview, assetRows, createdAt);
     },
   );
@@ -546,6 +541,10 @@ export interface BookReprocessPreview {
   positionsUnmatched: string[];
   consequences: BookConsequence[];
   assets: BookAsset[];
+  /** Kept chapters' corrections re-applied (#78): how many still fit, and
+   * the ones that no longer do, by chapter. */
+  correctionsReapplied: number;
+  correctionsNotApplied: (NotAppliedCorrection & { chapter: string })[];
 }
 
 const boundTitle = (title: string): string =>
@@ -581,6 +580,7 @@ async function bookSnapshotOf(bookId: string): Promise<string> {
       highlights: await everyRevision(db.highlights, id).toArray(),
       locations: await everyRevision(db.location, id).toArray(),
       notes: await db.articleNotes.where("articleId").equals(id).toArray(),
+      corrections: await db.corrections.get(id),
     });
   }
   return JSON.stringify({
@@ -636,7 +636,7 @@ export async function previewBookReprocess(
     if (saved) {
       matched.add(saved.id);
       const proposed = adoptCandidate(saved, { ...fresh, ingestionMeta: meta });
-      kept.push(await planRevision(saved, proposed, [], false));
+      kept.push(await planRevision(saved, proposed, [], false, await loadCorrections(saved.id)));
       finalChapters.push(proposed);
       continue;
     }
@@ -718,6 +718,10 @@ export async function previewBookReprocess(
       .map((plan) => titleOf(plan.articleId)),
     consequences,
     assets: bookAssetsForChapters(finalChapters, candidate.assets),
+    correctionsReapplied: kept.reduce((n, plan) => n + plan.corrections.reapplied.length, 0),
+    correctionsNotApplied: kept.flatMap((plan) =>
+      plan.corrections.notApplied.map((n) => ({ ...n, chapter: titleOf(plan.articleId) })),
+    ),
   };
 }
 
@@ -746,18 +750,16 @@ export async function applyBookReprocess(
       db.completions,
       db.collections,
       db.collectionActiveEntries,
+      db.corrections,
     ],
     async () => {
       let stale = (await bookSnapshotOf(preview.bookId)) !== preview.snapshot;
       for (const { articleId } of preview.added)
         stale ||= (await db.articles.get(articleId)) !== undefined;
-      if (stale)
-        throw new ReprocessRefusal(
-          "This book or its reader data changed after the preview. Preview again before applying; nothing was changed.",
-        );
+      if (stale) throw new ReprocessRefusal(STALE_PREVIEW);
       if (preview.consequences.length > 0 && options.acceptConsequences !== true)
         throw new ReprocessRefusal(ACCEPTANCE_REQUIRED);
-      await writeConsequences(
+      await writeChapterConsequences(
         preview.consequences.filter((c): c is ChapterConsequence => c.kind !== "chapter-removed"),
         createdAt,
       );
@@ -775,6 +777,8 @@ export async function applyBookReprocess(
         await db.articleNoteDrafts.where("articleId").equals(articleId).delete();
         await db.assets.where("articleId").equals(articleId).delete();
         await db.readingSessions.where("articleId").equals(articleId).delete();
+        // Spec #68 / #71 — a dropped chapter's corrections go with it.
+        await db.corrections.delete(articleId);
         await db.articles.delete(articleId);
       }
       const bookRow = { bookId: preview.bookId };
@@ -782,7 +786,12 @@ export async function applyBookReprocess(
         await writeRevision(plan, rowsFor(plan.articleId), createdAt, bookRow);
       for (const { articleId, article } of preview.added)
         await writeRevision(
-          { articleId, proposed: article, position: { kind: "none" } },
+          {
+            articleId,
+            proposed: article,
+            position: { kind: "none" },
+            substrate: textStamp(article),
+          },
           rowsFor(articleId),
           createdAt,
           bookRow,

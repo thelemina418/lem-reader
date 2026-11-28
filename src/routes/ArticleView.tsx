@@ -24,7 +24,10 @@
 import { speechSynthesisAvailable, SPEECH_BROWSER_NOTICE } from "../readaloud/webSpeech";
 import { RestoreStarterButton } from "../reader/RestoreStarterButton";
 import { STARTER_ARTICLE_ID, isStarterRemoved } from "../persistence/starterArticleStore";
-import { onLibrarySnapshotInvalidated } from "../ingestion/library/librarySnapshotBus";
+import {
+  invalidateLibrarySnapshot,
+  onLibrarySnapshotInvalidated,
+} from "../ingestion/library/librarySnapshotBus";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { CSSProperties } from "react";
 import { openArticle } from "../content/repository";
@@ -149,6 +152,14 @@ import { highlightBases } from "../settings/highlightTint";
 // churn, and measurement sees the same reserved figure boxes the visible
 // pages will (decode is paint, never layout — D20-13).
 import { AssetProvider } from "../content/assets/AssetProvider";
+import { applyCorrections } from "../content/corrections/engine";
+import { storedOffsetInShown } from "../content/corrections/positions";
+import type { Correction } from "../content/schema";
+import { loadCorrections } from "../persistence/correctionsStore";
+import { CorrectionConsequencesDialog } from "../reader/CorrectionConsequencesDialog";
+import { CorrectionsList } from "../reader/CorrectionsList";
+import { useCorrectionCommands } from "../reader/useCorrectionCommands";
+import { CorrectionView, type CorrectionViewHandle } from "../reader/CorrectionView";
 import { SelectionToolbar } from "../reader/annotations/SelectionToolbar";
 // Shared annotation panel for passage and drawer entry.
 import { HighlightControls } from "../reader/annotations/HighlightControls";
@@ -230,6 +241,7 @@ import { useReadAloudFollow } from "../reader/useReadAloudFollow";
 import { ReadAloudBar } from "../reader/ReadAloudBar";
 import { formatIsoDate } from "../ingestion/library/formatDate";
 import type { GraphemeRange } from "../annotations/unifiedHighlightSlicer";
+import { textStamp } from "../content/sameText";
 
 /** The D4-10 mode-toggle handler signature (App threads a ref of this shape). */
 type ModeToggleHandler = () => void;
@@ -304,6 +316,15 @@ export interface ArticleViewProps {
    * preference flip.
    */
   modeToggleHandlerRef: React.RefObject<ModeToggleHandler | null>;
+  /**
+   * Spec #68 / issue #70 — the Correction view bridge (the modeToggle-
+   * HandlerRef pattern): ArticleView registers its enter/leave handler so
+   * the header button shares the C shortcut's ONE path (with its position
+   * capture); cleared on unmount.
+   */
+  correctionToggleHandlerRef?: React.RefObject<(() => void) | null>;
+  /** Issue #70 — reports the Correction view state up so the header reflects it. */
+  onCorrectionViewChange?: (active: boolean) => void;
   /**
    * Phase 5 Plan 05-03 (D5-09): annotations drawer open state — owned by App
    * (same lifting pattern as settingsOpen) so Header (the trigger) and this
@@ -414,6 +435,9 @@ function AssignmentEndNav({
 /** Issue #57 — keys that scroll the page (reading on from the notes). */
 const SCROLL_KEYS = new Set(["ArrowDown", "ArrowUp", "PageDown", "PageUp", " ", "Home", "End"]);
 
+/** Spec #68 / #71 — a stable empty corrections list (the pass-through). */
+const NO_CORRECTIONS: readonly Correction[] = Object.freeze([]);
+
 export function ArticleView({
   articleId,
   jumpHighlightId,
@@ -421,6 +445,8 @@ export function ArticleView({
   collectionId,
   collectionEntryId,
   modeToggleHandlerRef,
+  correctionToggleHandlerRef,
+  onCorrectionViewChange,
   drawerOpen,
   onCloseDrawer,
   tagsOpen,
@@ -436,7 +462,18 @@ export function ArticleView({
     if (articleId !== STARTER_ARTICLE_ID || !starterRemoved) return;
     return onLibrarySnapshotInvalidated(() => setArticleReload((value) => value + 1));
   }, [articleId, starterRemoved]);
-  const [article, setArticle] = useState<CanonicalArticle | null>(null);
+  // Spec #68 / issue #71 — the original as stored, plus its ordered
+  // corrections; `article` (what every reading surface reads) is the
+  // correction engine's corrected article — the original object itself
+  // when there are no corrections. Memoized on the corrections change, so
+  // measurement/pagination key on a stable identity.
+  const [originalArticle, setArticle] = useState<CanonicalArticle | null>(null);
+  const [corrections, setCorrections] = useState<readonly Correction[]>(NO_CORRECTIONS);
+  const correctionsResult = useMemo(
+    () => (originalArticle ? applyCorrections(originalArticle, corrections) : null),
+    [originalArticle, corrections],
+  );
+  const article = correctionsResult?.article ?? null;
   const [status, setStatus] = useState<"loading" | "ready" | "error">("loading");
   // Phase 18 Plan 18-03 (ORNT-06, D18-05/08): the restoration marker mount
   // state — replaces the retired ResumeBanner's showResumeBanner flag. The
@@ -1006,6 +1043,27 @@ export function ArticleView({
   // persisted; see src/reader/footnoteExcursion.ts). While it is set, every
   // scheduled save holds the followed reference's offset.
   const excursionRef = useRef<FootnoteExcursion | null>(null);
+  // Spec #68 / issue #70 — the Correction view: a VIEW STATE, never a
+  // reading-mode setting. Non-null while the view is up; `from` is the
+  // effective reading mode to return to, `offset` the reading position
+  // carried in (reading coordinates). The persisted readingMode is never
+  // written by entering or leaving. While it is up the reading <article> is
+  // unmounted, so every reading-surface listener (scroll save, anchor
+  // capture, selection toolbar, mark activation, page turns, M) goes inert.
+  const [correctionEntry, setCorrectionEntry] = useState<{
+    from: "paginated" | "scrolling";
+    offset: number;
+    /** The entry position in VIEW coordinates (stable while corrections
+     * change underneath the view — hide/unhide never move view offsets). */
+    viewOffset: number;
+  } | null>(null);
+  const correctionActiveRef = useRef(false);
+  correctionActiveRef.current = correctionEntry !== null;
+  const correctionViewRef = useRef<CorrectionViewHandle | null>(null);
+  // The leave landing for scrolling reading (paged reading lands through
+  // PaginatedSurface's initialAnchorOffset), consumed once the reading
+  // <article> is mounted again.
+  const pendingCorrectionExitRef = useRef<{ offset: number; refocus: boolean } | null>(null);
   const { scheduleLocationSave, saveLocationNow } = useScrollSave(article, articleRef, {
     readingEndOffset: assignment?.endOffset,
     heldOffset: () => excursionRef.current?.offset ?? null,
@@ -1607,6 +1665,9 @@ export function ArticleView({
   // header ModeToggle button (and the M shortcut via PageTurnControls) share
   // ONE toggle path with ONE anchor capture.
   const handleToggleMode = useCallback(() => {
+    // Issue #70 — the Correction view is not a reading mode: the toggle is
+    // inert while it is up (leaving returns to the mode the reader came from).
+    if (correctionActiveRef.current) return;
     // A mode change supersedes the handoff even if arrival already consumed
     // its intent and is still waiting for pagination to become available.
     handoff.cancelPending();
@@ -1709,6 +1770,151 @@ export function ArticleView({
       window.removeEventListener("keydown", onKey);
     };
   }, [article, articleEl]);
+
+  // Spec #68 / issues #70, #71 — the Correction view renders the correction
+  // engine's view model (every block, hidden ones marked), whose offset maps
+  // translate reading ↔ view coordinates.
+  const correctionModel = correctionsResult?.view ?? null;
+  // Every change to the corrections list — a new correction, Ctrl+Z /
+  // Ctrl+Shift+Z, a list undo, Restore original — takes the one preview →
+  // consequences → apply path, with the session undo history (#76).
+  const handleCorrectionsApplied = useCallback(
+    (next: readonly Correction[]) => {
+      // A paused read-aloud holds chunks in the old text's coordinates:
+      // end it, so the reader's next Play speaks the corrected article
+      // from their place (spec #68 story 9).
+      stopReadAloud();
+      setCorrections(next);
+      invalidateLibrarySnapshot();
+    },
+    [stopReadAloud],
+  );
+  // Every Correction-view command, the list, undo and the announcements
+  // (src/reader/useCorrectionCommands.ts).
+  const correctionCommands = useCorrectionCommands({
+    articleId: originalArticle?.id ?? null,
+    result: correctionsResult,
+    corrections,
+    onApplied: handleCorrectionsApplied,
+    viewUp: correctionEntry !== null,
+  });
+  const { announce: setCorrectionAnnouncement, setLanding: setCorrectionLanding } =
+    correctionCommands;
+  const correctionChanges = correctionCommands.changes;
+  // Enter / leave — ONE path shared by the header button and the C shortcut.
+  // Entry carries the reading position in (the mode-switch anchor capture);
+  // leaving captures the focused or top-visible passage in the view and
+  // makes it the reading position in the mode the reader came from.
+  const handleToggleCorrectionView = useCallback(() => {
+    if (!article || !correctionModel) return;
+    if (correctionEntry === null) {
+      handoff.cancelPending();
+      const offset = captureModeSwapAnchor(effectiveMode === "scrolling");
+      // Read-aloud pauses on entry (the structure may change under it) and
+      // never resumes on its own; the reader presses Play when ready.
+      if (readAloudState === "playing" || readAloudContinuationPending) {
+        pauseOrResumeReadAloud();
+      }
+      markProgrammaticScroll();
+      // The entry passage is the saved position until the reader leaves:
+      // flush any pending save now, against the text as it reads now, so a
+      // late debounced save can never land after a correction (#71).
+      saveLocationNow(offset);
+      setCorrectionLanding(null);
+      setCorrectionEntry({
+        from: effectiveMode,
+        offset,
+        viewOffset: correctionModel.viewOffsetFor(offset),
+      });
+      setCorrectionAnnouncement("Correction view. Selecting text offers corrections.");
+      return;
+    }
+    const viewOffset = correctionViewRef.current?.captureOffset() ?? correctionEntry.viewOffset;
+    const offset = correctionModel.readingOffsetFor(viewOffset);
+    const active = document.activeElement;
+    const refocus =
+      active === null || active === document.body || active.closest(".correction-view") !== null;
+    currentAnchorOffsetRef.current = offset;
+    lastPreciseAnchorRef.current = offset;
+    pendingCorrectionExitRef.current = { offset, refocus };
+    markProgrammaticScroll();
+    setCorrectionEntry(null);
+    setCorrectionAnnouncement(
+      correctionEntry.from === "paginated"
+        ? "Back to paged reading."
+        : "Back to scrolling reading.",
+    );
+  }, [
+    article,
+    correctionModel,
+    correctionEntry,
+    handoff,
+    captureModeSwapAnchor,
+    effectiveMode,
+    readAloudState,
+    readAloudContinuationPending,
+    pauseOrResumeReadAloud,
+    markProgrammaticScroll,
+    saveLocationNow,
+    setCorrectionAnnouncement,
+    setCorrectionLanding,
+  ]);
+
+  useEffect(() => {
+    if (!correctionToggleHandlerRef) return;
+    correctionToggleHandlerRef.current = handleToggleCorrectionView;
+    return () => {
+      correctionToggleHandlerRef.current = null;
+    };
+  }, [handleToggleCorrectionView, correctionToggleHandlerRef]);
+  useEffect(() => {
+    onCorrectionViewChange?.(correctionEntry !== null);
+  }, [correctionEntry, onCorrectionViewChange]);
+  useEffect(() => () => onCorrectionViewChange?.(false), [onCorrectionViewChange]);
+  // The C shortcut: registered whenever an article is open (the reading
+  // <article> is unmounted while the view is up, so it cannot depend on
+  // articleEl the way M does). Plain C only — Ctrl/Cmd+C stays copy — and
+  // never from form fields or dialogs (the isFormField contract).
+  const handleToggleCorrectionViewRef = useRef(handleToggleCorrectionView);
+  handleToggleCorrectionViewRef.current = handleToggleCorrectionView;
+  useEffect(() => {
+    if (!article) return;
+    const onKey = (event: KeyboardEvent) => {
+      if (event.ctrlKey || event.metaKey || event.altKey) return;
+      if (isFormField(event.target)) return;
+      if (event.key === "c" || event.key === "C") {
+        handleToggleCorrectionViewRef.current();
+      }
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [article]);
+  // The leave landing, once the reading <article> is back. Paged reading
+  // lands through PaginatedSurface's initialAnchorOffset (seeded from
+  // currentAnchorOffsetRef above); scrolling reading jumps here. Focus that
+  // was inside the view returns to the header toggle, never <body>.
+  useEffect(() => {
+    const exit = pendingCorrectionExitRef.current;
+    if (!exit || correctionEntry !== null || !article || !articleEl) return;
+    if (exit.refocus) {
+      document.querySelector<HTMLElement>(".correction-toggle")?.focus({ preventScroll: true });
+    }
+    if (isPaginated) {
+      pendingCorrectionExitRef.current = null;
+      return;
+    }
+    const rafId = requestAnimationFrame(() => {
+      pendingCorrectionExitRef.current = null;
+      if (!articleRef.current) return;
+      jumpProgrammatically(article, exit.offset, {
+        mode: "scrolling",
+        surface: null,
+        blocks: queryBlocks(articleRef.current),
+        endLanding: true,
+      });
+    });
+    return () => cancelAnimationFrame(rafId);
+  }, [correctionEntry, article, articleEl, isPaginated, jumpProgrammatically]);
 
   // Delegated passage activation opens the unified annotation panel. Keep
   // InlineRenderer presentational and omit the hidden measurement surface.
@@ -2054,6 +2260,10 @@ export function ArticleView({
     // distinguish articles).
     setFallbackFailure(null);
     setSessionModeOverride(null);
+    // Issue #70 — the Correction view belongs to the article it was entered on.
+    setCorrectionEntry(null);
+    setCorrections(NO_CORRECTIONS);
+    pendingCorrectionExitRef.current = null;
     // Phase 5 Plan 05-02: reset annotation state on article swap so a stale
     // announcement from the previous article doesn't flash. The selection-
     // toolbar trio (rect/capture/saved Range) is reset by useSelectionToolbar
@@ -2088,10 +2298,14 @@ export function ArticleView({
     Promise.all([
       openArticle(articleId),
       articleId === STARTER_ARTICLE_ID ? isStarterRemoved() : Promise.resolve(false),
+      // Spec #68 / #71 — the corrections load with the article (never
+      // throws; a failed read reads as the original).
+      loadCorrections(articleId),
     ])
-      .then(([a, removed]) => {
+      .then(([a, removed, loadedCorrections]) => {
         if (cancelled) return;
         setStarterRemoved(removed);
+        setCorrections(loadedCorrections);
         setArticle(a);
         setStatus(a ? "ready" : "error");
         // Plan 12-06 (D12-08 + D12-05) + Issue #8 — the epub-chapter
@@ -2698,8 +2912,25 @@ export function ArticleView({
     // it (the landing is created inside the async .then — after this effect
     // function has returned — so the holder pattern bridges the two).
     let cancelOpeningLanding: (() => void) | null = null;
-    loadLocation(article.id, article.revision)
-      .then((result) => {
+    loadLocation(article.id, textStamp(article).revision)
+      .then((stored) => {
+        // Spec #68 / #71 — a stored position is trusted directly only when
+        // it was saved against the text as it reads now; one saved against
+        // the uncorrected original is carried by quote (the one helper).
+        const result =
+          stored.ok && stored.location && originalArticle && corrections.length > 0
+            ? {
+                ...stored,
+                location: {
+                  ...stored.location,
+                  graphemeOffset: storedOffsetInShown(
+                    stored.location,
+                    originalArticle,
+                    corrections,
+                  ),
+                },
+              }
+            : stored;
         if (cancelled) return;
         // Fall-through cases (reading continues from the top in all of
         // them; what differs is HOW HONEST the fall-through is — issue #98):
@@ -2884,8 +3115,11 @@ export function ArticleView({
     // mounted. Explicit continue owns its own landing (the pending-offset
     // guard above); ordinary scope changes rerun the shared resume gate.
     // hasAppHistory is read per arrival, never a restore trigger itself.
+    // Spec #68 / #71 — keyed on the ORIGINAL: a correction made while the
+    // article is open changes `article` but is not a new arrival (the store
+    // already re-anchored the saved position; the view's exit lands it).
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [article, chapterScope]);
+  }, [originalArticle, chapterScope]);
 
   // Plan 14-03 Task 3 (D14-06) — error parity: a failed open is a truthful
   // destination, so an in-app arrival at the error branch announces via its
@@ -3399,7 +3633,9 @@ export function ArticleView({
           never paint during the paginated pending window either (it would
           appear, then vanish at the swap — the exact first-load jump this
           plan closes). */}
-      {!isPaginated && <ProgressHairline progress={progress} placement="viewport" />}
+      {!isPaginated && correctionEntry === null && (
+        <ProgressHairline progress={progress} placement="viewport" />
+      )}
       {/* A11Y-08: polite live region announcing section changes during scroll.
           articleEl is null during loading; the callback ref sets it once the
           <article> mounts, triggering a re-render so this component receives
@@ -3410,7 +3646,12 @@ export function ArticleView({
           window included). The html/body :has overflow locks + the viewport
           inset therefore engage before measurement settles, so the frame
           never changes shape when pagination commits. */}
-      <main id="main" className={isPaginated ? "paginated-main" : undefined}>
+      <main
+        id="main"
+        className={
+          correctionEntry !== null ? "correction-main" : isPaginated ? "paginated-main" : undefined
+        }
+      >
         {/*
           A11Y-08 (UI-SPEC §Copywriting "keyboard-help affordance"): a single
           concise visually-hidden paragraph at the top of <main>, preceding the
@@ -3455,6 +3696,10 @@ export function ArticleView({
         {/* Issue #246 — the completion-write failure announce: one polite
             atomic phrase on its own region (the issue #98 discipline). */}
         <StatusRegion className="visually-hidden">{completionSaveAnnouncement}</StatusRegion>
+        {/* Spec #68 (#70/#73) — the Correction view's enter/leave and command
+            announcements, on their own region (the issue #98 discipline).
+            Appended LAST so the established regions keep their DOM order. */}
+        <StatusRegion className="visually-hidden">{correctionCommands.announcement}</StatusRegion>
         {/* Phase 18 Plan 18-03 (ORNT-06, D18-05/08): the passive restoration
             marker mounts ONLY when a reopen-restore genuinely landed (the
             restorationMarker state above is set exclusively inside the
@@ -3528,7 +3773,50 @@ export function ArticleView({
           highlightSlots={settings.highlightSlots}
           highlightBases={highlightBasesMemo}
         >
-          {/* Plan 13-09 (G4 — stable first paint): the pinned paginated frame
+          {correctionEntry !== null && correctionModel !== null ? (
+            // Spec #68 / issue #70 — the Correction view replaces the reading
+            // surface: no reading <article>, no selection toolbar, no
+            // annotation panel (highlights render as inert tints inside it).
+            <>
+              <CorrectionView
+                ref={correctionViewRef}
+                model={correctionModel}
+                entryOffset={correctionEntry.viewOffset}
+                commandsFor={correctionCommands.commandsFor}
+                onCommand={correctionCommands.onCommand}
+                typeChoicesFor={correctionCommands.typeChoicesFor}
+                onChangeType={correctionCommands.onChangeType}
+                selectionCommandsFor={
+                  correctionsResult ? correctionCommands.selectionCommandsFor : undefined
+                }
+                onSelectionCommand={correctionCommands.onSelectionCommand}
+                landing={correctionCommands.landing}
+                busy={correctionChanges.busy || correctionChanges.pending !== null}
+                headerExtras={
+                  <CorrectionsList
+                    corrections={corrections}
+                    outcomes={correctionsResult?.outcomes ?? []}
+                    open={correctionCommands.listOpen}
+                    onOpenChange={correctionCommands.setListOpen}
+                    onUndo={correctionCommands.undoListed}
+                    onRestoreOriginal={correctionCommands.restoreOriginal}
+                    busy={correctionChanges.busy || correctionChanges.pending !== null}
+                  />
+                }
+              />
+              <CorrectionConsequencesDialog
+                preview={correctionChanges.pending?.preview ?? null}
+                title={correctionChanges.pending?.title ?? ""}
+                confirmLabel={correctionChanges.pending?.confirmLabel ?? ""}
+                busy={correctionChanges.busy}
+                error={correctionChanges.pendingError}
+                onConfirm={() => void correctionChanges.confirmPending()}
+                onCancel={correctionChanges.cancelPending}
+              />
+            </>
+          ) : (
+            <>
+              {/* Plan 13-09 (G4 — stable first paint): the pinned paginated frame
             (fixed viewport height + grid + overflow clip) is applied whenever
             the EFFECTIVE mode is paginated — including the pre-settle pending
             window — so the frame is byte-stable from the first article paint
@@ -3536,53 +3824,53 @@ export function ArticleView({
             reverts the class in the same render that mounts the scrolling
             body (disclosed by the banner), so the clip never traps a
             scrolling rendering. */}
-          {/* Phase 20 Plan 20-04: AssetProvider wraps the whole <article>
+              {/* Phase 20 Plan 20-04: AssetProvider wraps the whole <article>
             element — every figure-rendering subtree (both reading bodies)
             resolves through the one per-article object-URL map. Siblings
             outside (toolbar/popovers/drawer) render no figures and stay
             outside the provider. */}
-          <AssetProvider article={article}>
-            {/* Issue #220 — heldSlotTint drives the armed hold's live selection
+              <AssetProvider article={article}>
+                {/* Issue #220 — heldSlotTint drives the armed hold's live selection
             paint: the `held-slot-armed` root class switches on the ::selection
             rule, and the slot's derived tint rides the inline
             --held-slot-tint custom property (same derivation as the eventual
             mark — seamless release). */}
-            <article
-              ref={articleCallbackRef}
-              className={
-                (isPaginated ? "article-body paginated-surface" : "article-body") +
-                (heldSlotTint !== null ? " held-slot-armed" : "")
-              }
-              style={
-                heldSlotTint !== null
-                  ? ({ "--held-slot-tint": heldSlotTint } as CSSProperties)
-                  : undefined
-              }
-            >
-              {/* Plan 13-04 (POLISH-03 / D13-13): the pinned per-page header is
+                <article
+                  ref={articleCallbackRef}
+                  className={
+                    (isPaginated ? "article-body paginated-surface" : "article-body") +
+                    (heldSlotTint !== null ? " held-slot-armed" : "")
+                  }
+                  style={
+                    heldSlotTint !== null
+                      ? ({ "--held-slot-tint": heldSlotTint } as CSSProperties)
+                      : undefined
+                  }
+                >
+                  {/* Plan 13-04 (POLISH-03 / D13-13): the pinned per-page header is
               SLIM — BackToLibrary + the title ONLY. Byline/source/book
               context moved to the article-top metadata spot (13-10 G5:
               provenance-only); tags live in the top-bar popover and export
               in the annotations drawer. The header row's 09-07 geometry cap
               stays byte-unchanged; the slimmer content keeps it far under
               the cap (no internal scrolling at 360×640). */}
-              <header>
-                {/* Plan 13-04 (POLISH-05 / D13-15) — the standardized back
+                  <header>
+                    {/* Plan 13-04 (POLISH-05 / D13-15) — the standardized back
                 affordance at the article header start, BEFORE the title
                 cluster. Native button = keyboard-reachable by construction;
                 history.back() only when App's in-app flag is set, else the
                 "#/" fallback (Pitfall 7 — deep-link tabs never exit). */}
-                <BackToLibrary hasAppHistory={hasAppHistory} />
-                {/* Plan 14-03 Task 3: gains ONLY tabIndex={-1} + the focus ref —
+                    <BackToLibrary hasAppHistory={hasAppHistory} />
+                    {/* Plan 14-03 Task 3: gains ONLY tabIndex={-1} + the focus ref —
                 text and level byte-stable. Plan 17-03: the text VALUE source
                 is now the effective title (ref + tabIndex untouched). */}
-                <h1 ref={articleH1Ref} tabIndex={-1}>
-                  {effectiveTitle(article)}
-                </h1>
-              </header>
-              {paginatedActive && (windowedPagination || trustedView) && articleEl ? (
-                <>
-                  {/*
+                    <h1 ref={articleH1Ref} tabIndex={-1}>
+                      {effectiveTitle(article)}
+                    </h1>
+                  </header>
+                  {paginatedActive && (windowedPagination || trustedView) && articleEl ? (
+                    <>
+                      {/*
                 Plan 04-08 (PAGE-06 + PAGE-07 cross-phase regression fix):
                 a hidden ArticleBody is kept mounted alongside PaginatedSurface
                 so the measurement engine's measureAllBlocks always finds the
@@ -3603,21 +3891,21 @@ export function ArticleView({
                 none prevents any interaction. See app.css for the geometry
                 contract.
               */}
-                  {!windowedPagination && (
-                    <div className="article-body-measurement" aria-hidden="true">
-                      {/* Issue #235 — the hidden measurement tree carries no
+                      {!windowedPagination && (
+                        <div className="article-body-measurement" aria-hidden="true">
+                          {/* Issue #235 — the hidden measurement tree carries no
                       exposed footnote identifiers: footnote-reference anchors
                       render without fn-ref-N ids and the footnotes section
                       without fn-N ids, so the visible page is the only place
                       either id exists. */}
-                      <ArticleBody
-                        article={article}
-                        highlights={EMPTY_HIGHLIGHTS}
-                        measurementProjection
-                      />
-                    </div>
-                  )}
-                  {/*
+                          <ArticleBody
+                            article={article}
+                            highlights={EMPTY_HIGHLIGHTS}
+                            measurementProjection
+                          />
+                        </div>
+                      )}
+                      {/*
                 PaginatedSurface owns pages + currentPageIdx + the turn handler.
                 The ref lets PageTurnControls (keyboard + swipe) drive the same
                 state. initialAnchorOffset is the D4-10 scrolling→paginated
@@ -3625,7 +3913,7 @@ export function ArticleView({
                 currentAnchorOffsetRef fresh for the NEXT swap (paginated→
                 scrolling).
               */}
-                  {/* Plan 13-04 (Option A — human decision 2026-08-18): the
+                      {/* Plan 13-04 (Option A — human decision 2026-08-18): the
                   metadata spot is OWNED here but MOUNTED by
                   PaginatedSurface (articleStartChrome) — the surface shows
                   it exactly on page 1, in the same render as the page-1
@@ -3639,68 +3927,70 @@ export function ArticleView({
                   The viewport box itself is grid-determined: the spot
                   mount/unmount never changes its height (no ResizeObserver
                   re-measure loop). */}
-                  <div className="page-viewport">
-                    <PaginationSurface
-                      // Scope changes discard the previous assignment's
-                      // page publication, never its canonical article.
-                      key={`${article.id}:${chapterScope ?? "work"}`}
-                      animatePageTurns={settings.animatePageTurns}
-                      ref={surfaceRef}
-                      article={article}
-                      trustedView={trustedView!}
-                      articleEl={articleEl}
-                      diagnostics={diagnostics}
-                      // Issue #240 — the "Try pages again" epoch: re-runs
-                      // pagination at the same anchor after a processing
-                      // failure. Constant otherwise.
-                      paginationRetryEpoch={paginationRetryEpoch}
-                      articleStartChrome={articleTopMeta}
-                      orientationLabel={orientationLabel}
-                      initialAnchorOffset={currentAnchorOffsetRef.current}
-                      onAnchorChange={handleAnchorChange}
-                      routeFootnoteLink={routePagedFootnoteLink}
-                      spokenRange={follow.spokenRange}
-                      onUserTurn={handleSurfaceUserTurn}
-                      // Issue #238 — the whole-book turn seam: when the book
-                      // has a neighboring existing chapter, the ordinary
-                      // Next/Previous turn at this chapter's TRUE start/end
-                      // crosses to it (windowed chapters cross their layout
-                      // windows internally — these props are the BOOK-level
-                      // contract for both surfaces). Standalone articles
-                      // keep the bounded dead-end (both flags false).
-                      // Issue #244 — a chapter assignment closes the seam
-                      // entirely: the reader turns within the assignment;
-                      // its end is the explicit continue-the-work affordance
-                      // (below), never an automatic crossing.
-                      hasPreviousWindow={
-                        assignment !== null ? false : chapterContext?.prevId !== undefined
-                      }
-                      hasNextWindow={
-                        assignment !== null ? false : chapterContext?.nextId !== undefined
-                      }
-                      {...(assignmentWindowList !== undefined
-                        ? { windows: assignmentWindowList }
-                        : {})}
-                      onBoundaryTurn={chapterContext !== null ? handleBookBoundaryTurn : undefined}
-                    />
-                    {/*
+                      <div className="page-viewport">
+                        <PaginationSurface
+                          // Scope changes discard the previous assignment's
+                          // page publication, never its canonical article.
+                          key={`${article.id}:${chapterScope ?? "work"}`}
+                          animatePageTurns={settings.animatePageTurns}
+                          ref={surfaceRef}
+                          article={article}
+                          trustedView={trustedView!}
+                          articleEl={articleEl}
+                          diagnostics={diagnostics}
+                          // Issue #240 — the "Try pages again" epoch: re-runs
+                          // pagination at the same anchor after a processing
+                          // failure. Constant otherwise.
+                          paginationRetryEpoch={paginationRetryEpoch}
+                          articleStartChrome={articleTopMeta}
+                          orientationLabel={orientationLabel}
+                          initialAnchorOffset={currentAnchorOffsetRef.current}
+                          onAnchorChange={handleAnchorChange}
+                          routeFootnoteLink={routePagedFootnoteLink}
+                          spokenRange={follow.spokenRange}
+                          onUserTurn={handleSurfaceUserTurn}
+                          // Issue #238 — the whole-book turn seam: when the book
+                          // has a neighboring existing chapter, the ordinary
+                          // Next/Previous turn at this chapter's TRUE start/end
+                          // crosses to it (windowed chapters cross their layout
+                          // windows internally — these props are the BOOK-level
+                          // contract for both surfaces). Standalone articles
+                          // keep the bounded dead-end (both flags false).
+                          // Issue #244 — a chapter assignment closes the seam
+                          // entirely: the reader turns within the assignment;
+                          // its end is the explicit continue-the-work affordance
+                          // (below), never an automatic crossing.
+                          hasPreviousWindow={
+                            assignment !== null ? false : chapterContext?.prevId !== undefined
+                          }
+                          hasNextWindow={
+                            assignment !== null ? false : chapterContext?.nextId !== undefined
+                          }
+                          {...(assignmentWindowList !== undefined
+                            ? { windows: assignmentWindowList }
+                            : {})}
+                          onBoundaryTurn={
+                            chapterContext !== null ? handleBookBoundaryTurn : undefined
+                          }
+                        />
+                        {/*
                   PageTurnControls registers the keyboard bundle + swipe + the
                   "Page N of M" announce. Enabled only while paginated mode is
                   active. The M shortcut routes through the SAME handleToggleMode
                   as the header button so the D4-10 anchor applies either way.
                 */}
-                    <PageTurnControls
-                      enabled={paginatedActive}
-                      surfaceRef={surfaceRef}
-                      articleEl={articleEl}
-                      orientationText={orientationLabel}
-                      progressPercent={orientationPercent}
-                      // Issue #238 — the offset ratio is per-chapter for a
-                      // book chapter; the announce names its scope honestly.
-                      progressScopeLabel={chapterContext !== null ? "this chapter" : undefined}
-                    />
-                  </div>
-                  {/* Plan 12-06 (D12-05): paginated chapter nav — ArticleView-
+                        <PageTurnControls
+                          enabled={paginatedActive}
+                          surfaceRef={surfaceRef}
+                          articleEl={articleEl}
+                          orientationText={orientationLabel}
+                          progressPercent={orientationPercent}
+                          // Issue #238 — the offset ratio is per-chapter for a
+                          // book chapter; the announce names its scope honestly.
+                          progressScopeLabel={chapterContext !== null ? "this chapter" : undefined}
+                        />
+                      </div>
+                      {/* Plan 12-06 (D12-05): paginated chapter nav — ArticleView-
                   owned chrome rendered AFTER the surface element (never
                   inside page fragments), so it is geometrically stable: the
                   CSS places it in the fixed chrome band below the pinned
@@ -3712,7 +4002,7 @@ export function ArticleView({
                   state, never permanent chrome. Native focusable anchors
                   (Tab/Enter only, no shortcut registration); the page-turn
                   key handlers in PageTurnControls are untouched. */}
-                  {/* Issue #244 — the assignment's explicit END: at the
+                      {/* Issue #244 — the assignment's explicit END: at the
                   assigned chapter's final page the reader gets the separate,
                   explicit continue-the-underlying-work option — never an
                   automatic advancement into the work's next chapter (or the
@@ -3720,77 +4010,83 @@ export function ArticleView({
                   suppressed while the assignment scopes the read: the
                   crossing it performs is exactly what the assignment must
                   not do silently. */}
-                  {assignment !== null &&
-                    assignmentWorkContinues &&
-                    pageState !== null &&
-                    (pageState.atEnd ?? pageState.page === pageState.total) && (
-                      <AssignmentEndNav
-                        chapterTitle={assignment.title}
-                        workTitle={assignmentWorkTitle}
-                        onContinue={handleContinueWork}
-                        pagePlacement
-                      />
-                    )}
-                  {/* Issue #247 — the collection end card rides the assigned
+                      {assignment !== null &&
+                        assignmentWorkContinues &&
+                        pageState !== null &&
+                        (pageState.atEnd ?? pageState.page === pageState.total) && (
+                          <AssignmentEndNav
+                            chapterTitle={assignment.title}
+                            workTitle={assignmentWorkTitle}
+                            onContinue={handleContinueWork}
+                            pagePlacement
+                          />
+                        )}
+                      {/* Issue #247 — the collection end card rides the assigned
                   chapter's final page (pagePlacement keeps it out of the
                   measured page content): the orientation line + the explicit
                   Next reading action. The continue-the-work option above
                   stays intact — both are the reader's explicit choices. */}
-                  {assignment !== null &&
-                    assignmentWorkContinues &&
-                    collectionContext !== null &&
-                    pageState !== null &&
-                    (pageState.atEnd ?? pageState.page === pageState.total) && (
-                      <CollectionEndNav
-                        context={collectionContext}
-                        placement="page"
-                        onNext={handleCollectionNext}
-                      />
-                    )}
-                  {(assignment === null || !assignmentWorkContinues) &&
-                    chapterContext?.nextId &&
-                    pageState !== null &&
-                    (pageState.atEnd ?? pageState.page === pageState.total) && (
-                      <nav
-                        className="chapter-nav chapter-nav-page chapter-nav-next"
-                        aria-label="Book chapters"
-                      >
-                        <a
-                          className="chapter-next"
-                          href={`#/article/${chapterContext.nextId}`}
-                          onClick={(event) =>
-                            handleChapterLink(event, chapterContext.nextId, "next")
-                          }
-                        >
-                          Next chapter
-                          {chapterContext.nextTitle && (
-                            <span className="chapter-nav-title"> {chapterContext.nextTitle}</span>
-                          )}
-                        </a>
-                      </nav>
-                    )}
-                  {chapterContext?.prevId &&
-                    pageState !== null &&
-                    (pageState.atStart ?? pageState.page === 1) && (
-                      <nav
-                        className="chapter-nav chapter-nav-page chapter-nav-previous"
-                        aria-label="Book chapters"
-                      >
-                        <a
-                          className="chapter-prev"
-                          href={`#/article/${chapterContext.prevId}`}
-                          onClick={(event) =>
-                            handleChapterLink(event, chapterContext.prevId, "previous")
-                          }
-                        >
-                          Previous chapter
-                          {chapterContext.prevTitle && (
-                            <span className="chapter-nav-title"> {chapterContext.prevTitle}</span>
-                          )}
-                        </a>
-                      </nav>
-                    )}
-                  {/* 260908-oht: the end-of-article gesture on the FINAL page —
+                      {assignment !== null &&
+                        assignmentWorkContinues &&
+                        collectionContext !== null &&
+                        pageState !== null &&
+                        (pageState.atEnd ?? pageState.page === pageState.total) && (
+                          <CollectionEndNav
+                            context={collectionContext}
+                            placement="page"
+                            onNext={handleCollectionNext}
+                          />
+                        )}
+                      {(assignment === null || !assignmentWorkContinues) &&
+                        chapterContext?.nextId &&
+                        pageState !== null &&
+                        (pageState.atEnd ?? pageState.page === pageState.total) && (
+                          <nav
+                            className="chapter-nav chapter-nav-page chapter-nav-next"
+                            aria-label="Book chapters"
+                          >
+                            <a
+                              className="chapter-next"
+                              href={`#/article/${chapterContext.nextId}`}
+                              onClick={(event) =>
+                                handleChapterLink(event, chapterContext.nextId, "next")
+                              }
+                            >
+                              Next chapter
+                              {chapterContext.nextTitle && (
+                                <span className="chapter-nav-title">
+                                  {" "}
+                                  {chapterContext.nextTitle}
+                                </span>
+                              )}
+                            </a>
+                          </nav>
+                        )}
+                      {chapterContext?.prevId &&
+                        pageState !== null &&
+                        (pageState.atStart ?? pageState.page === 1) && (
+                          <nav
+                            className="chapter-nav chapter-nav-page chapter-nav-previous"
+                            aria-label="Book chapters"
+                          >
+                            <a
+                              className="chapter-prev"
+                              href={`#/article/${chapterContext.prevId}`}
+                              onClick={(event) =>
+                                handleChapterLink(event, chapterContext.prevId, "previous")
+                              }
+                            >
+                              Previous chapter
+                              {chapterContext.prevTitle && (
+                                <span className="chapter-nav-title">
+                                  {" "}
+                                  {chapterContext.prevTitle}
+                                </span>
+                              )}
+                            </a>
+                          </nav>
+                        )}
+                      {/* 260908-oht: the end-of-article gesture on the FINAL page —
                   the SAME final-page gate the Next chapter link uses. A
                   one-page article satisfies the gate (1 === 1), which is
                   exactly how one-page articles finish given the POLISH-02
@@ -3806,36 +4102,36 @@ export function ArticleView({
                   gesture completes the book). The departing chapter's
                   finished state is not lost: its final-page anchor commits
                   the end-pin through the debounced save. */}
-                  {pageState !== null &&
-                    (pageState.atEnd ?? pageState.page === pageState.total) &&
-                    chapterContext?.nextId === undefined &&
-                    (assignment === null || !assignmentWorkContinues) && (
-                      <MarkReadAndClose
-                        placement="page"
-                        onMarkRead={handleMarkRead}
-                        hasAppHistory={hasAppHistory}
-                      />
-                    )}
-                  {/* Issue #247 — the collection end card on the entry's true
+                      {pageState !== null &&
+                        (pageState.atEnd ?? pageState.page === pageState.total) &&
+                        chapterContext?.nextId === undefined &&
+                        (assignment === null || !assignmentWorkContinues) && (
+                          <MarkReadAndClose
+                            placement="page"
+                            onMarkRead={handleMarkRead}
+                            hasAppHistory={hasAppHistory}
+                          />
+                        )}
+                      {/* Issue #247 — the collection end card on the entry's true
                   end page (a whole-reading entry at its final page, or a
                   work-chapter entry at the work's last chapter): orientation
                   + the explicit Next reading action in the fixed chrome
                   band (outside the measured page content). */}
-                  {pageState !== null &&
-                    (pageState.atEnd ?? pageState.page === pageState.total) &&
-                    chapterContext?.nextId === undefined &&
-                    (assignment === null || !assignmentWorkContinues) &&
-                    collectionContext !== null && (
-                      <CollectionEndNav
-                        context={collectionContext}
-                        placement="page"
-                        onNext={handleCollectionNext}
-                      />
-                    )}
-                </>
-              ) : paginatedPending ? (
-                <>
-                  {/*
+                      {pageState !== null &&
+                        (pageState.atEnd ?? pageState.page === pageState.total) &&
+                        chapterContext?.nextId === undefined &&
+                        (assignment === null || !assignmentWorkContinues) &&
+                        collectionContext !== null && (
+                          <CollectionEndNav
+                            context={collectionContext}
+                            placement="page"
+                            onNext={handleCollectionNext}
+                          />
+                        )}
+                    </>
+                  ) : paginatedPending ? (
+                    <>
+                      {/*
                 Plan 13-09 (G4): the pending window — the effective mode is
                 paginated but measurement has not settled (trustedView or
                 articleEl not yet ready). This branch renders the SAME hidden
@@ -3848,21 +4144,21 @@ export function ArticleView({
                 contract (position:absolute out of flow, visibility:hidden
                 boxes preserved).
               */}
-                  {!windowedPagination && (
-                    <div className="article-body-measurement" aria-hidden="true">
-                      {/* Issue #235 — the hidden measurement tree carries no
+                      {!windowedPagination && (
+                        <div className="article-body-measurement" aria-hidden="true">
+                          {/* Issue #235 — the hidden measurement tree carries no
                       exposed footnote identifiers: footnote-reference anchors
                       render without fn-ref-N ids and the footnotes section
                       without fn-N ids, so the visible page is the only place
                       either id exists. */}
-                      <ArticleBody
-                        article={article}
-                        highlights={EMPTY_HIGHLIGHTS}
-                        measurementProjection
-                      />
-                    </div>
-                  )}
-                  {/*
+                          <ArticleBody
+                            article={article}
+                            highlights={EMPTY_HIGHLIGHTS}
+                            measurementProjection
+                          />
+                        </div>
+                      )}
+                      {/*
                 Plan 13-09 (G4): a calm placeholder inside the REAL page
                 viewport — the frame rides the pinned .paginated-surface
                 geometry already applied to the <article>, and this paragraph
@@ -3873,135 +4169,141 @@ export function ArticleView({
                 this branch unmounts and the banner discloses the mode
                 change.
               */}
-                  <div className="page-viewport">
-                    <p className="meta" role="status" aria-live="polite">
-                      Preparing pages…
-                    </p>
-                  </div>
-                </>
-              ) : (
-                <>
-                  {/* Plan 13-10 (G5): in scrolling mode the metadata spot is
+                      <div className="page-viewport">
+                        <p className="meta" role="status" aria-live="polite">
+                          Preparing pages…
+                        </p>
+                      </div>
+                    </>
+                  ) : (
+                    <>
+                      {/* Plan 13-10 (G5): in scrolling mode the metadata spot is
                   ordinary flow content above the article body — byline,
                   source, book context (provenance-only) — scrolling away
                   naturally with the article (rendered once, never pinned). */}
-                  {articleTopMeta}
-                  {/* Plan 12-06 (D12-05): Previous chapter at chapter START —
+                      {articleTopMeta}
+                      {/* Plan 12-06 (D12-05): Previous chapter at chapter START —
                   mounted BEFORE the body in the article flow so it is
                   reachable from the top of the chapter (symmetric with the
                   Next link at the end). */}
-                  {chapterContext?.prevId && (
-                    <nav className="chapter-nav chapter-nav-previous" aria-label="Book chapters">
-                      <a
-                        className="chapter-prev"
-                        href={`#/article/${chapterContext.prevId}`}
-                        onClick={(event) =>
-                          handleChapterLink(event, chapterContext.prevId, "previous")
-                        }
-                      >
-                        Previous chapter
-                        {chapterContext.prevTitle && (
-                          <span className="chapter-nav-title"> {chapterContext.prevTitle}</span>
-                        )}
-                      </a>
-                    </nav>
-                  )}
-                  <ArticleBody
-                    article={article}
-                    spokenRange={spokenRange}
-                    contentRange={assignment?.destination}
-                    {...(assignmentBoundarySlot !== undefined
-                      ? { boundarySlot: assignmentBoundarySlot }
-                      : {})}
-                  />
-                  {/* 260908-oht: the end-of-article gesture sits at the end of
+                      {chapterContext?.prevId && (
+                        <nav
+                          className="chapter-nav chapter-nav-previous"
+                          aria-label="Book chapters"
+                        >
+                          <a
+                            className="chapter-prev"
+                            href={`#/article/${chapterContext.prevId}`}
+                            onClick={(event) =>
+                              handleChapterLink(event, chapterContext.prevId, "previous")
+                            }
+                          >
+                            Previous chapter
+                            {chapterContext.prevTitle && (
+                              <span className="chapter-nav-title"> {chapterContext.prevTitle}</span>
+                            )}
+                          </a>
+                        </nav>
+                      )}
+                      <ArticleBody
+                        article={article}
+                        spokenRange={spokenRange}
+                        contentRange={assignment?.destination}
+                        {...(assignmentBoundarySlot !== undefined
+                          ? { boundarySlot: assignmentBoundarySlot }
+                          : {})}
+                      />
+                      {/* 260908-oht: the end-of-article gesture sits at the end of
                   the content — BEFORE the book navigation that follows it
                   (flow placement, calm quiet-button register).
                   Issue #238 — only at the whole-book end (no next chapter);
                   a mid-book chapter's end affordance is the Next chapter
                   link below (the distinction in controls the acceptance
                   names). */}
-                  {chapterContext?.nextId === undefined &&
-                    (assignment === null || !assignmentWorkContinues) && (
-                      <MarkReadAndClose
-                        placement="flow"
-                        onMarkRead={handleMarkRead}
-                        hasAppHistory={hasAppHistory}
-                      />
-                    )}
-                  {/* Issue #247 — the collection end card at the entry's true
+                      {chapterContext?.nextId === undefined &&
+                        (assignment === null || !assignmentWorkContinues) && (
+                          <MarkReadAndClose
+                            placement="flow"
+                            onMarkRead={handleMarkRead}
+                            hasAppHistory={hasAppHistory}
+                          />
+                        )}
+                      {/* Issue #247 — the collection end card at the entry's true
                   end IN FLOW (right after the end-of-article gesture): the
                   orientation line + the explicit Next reading action. The
                   reader chooses; nothing advances on its own. */}
-                  {chapterContext?.nextId === undefined &&
-                    (assignment === null || !assignmentWorkContinues) &&
-                    collectionContext !== null && (
-                      <CollectionEndNav
-                        context={collectionContext}
-                        placement="flow"
-                        onNext={handleCollectionNext}
-                      />
-                    )}
-                  {/* Plan 12-06 (D12-05): Next chapter exactly at chapter END —
+                      {chapterContext?.nextId === undefined &&
+                        (assignment === null || !assignmentWorkContinues) &&
+                        collectionContext !== null && (
+                          <CollectionEndNav
+                            context={collectionContext}
+                            placement="flow"
+                            onNext={handleCollectionNext}
+                          />
+                        )}
+                      {/* Plan 12-06 (D12-05): Next chapter exactly at chapter END —
                   after the last block in the article flow; a calm link, not
                   permanent chrome. Issue #244 — a whole-article assignment
                   replaces the crossing link with the assignment's explicit
                   continue-the-work option (same position, same calm
                   register; the crossing is the reader's choice, never the
                   assignment's silent follow-through). */}
-                  {chapterContext?.nextId && assignment !== null ? (
-                    <>
-                      <AssignmentEndNav
-                        chapterTitle={assignment.title}
-                        workTitle={assignmentWorkTitle}
-                        onContinue={handleContinueWork}
-                      />
-                      {/* Issue #247 — the collection end card beside the
+                      {chapterContext?.nextId && assignment !== null ? (
+                        <>
+                          <AssignmentEndNav
+                            chapterTitle={assignment.title}
+                            workTitle={assignmentWorkTitle}
+                            onContinue={handleContinueWork}
+                          />
+                          {/* Issue #247 — the collection end card beside the
                       continue-the-work option (in flow, at the chapter's
                       end): orientation + the explicit Next reading action. */}
-                      {collectionContext !== null && (
-                        <CollectionEndNav
-                          context={collectionContext}
-                          placement="flow"
-                          onNext={handleCollectionNext}
-                        />
+                          {collectionContext !== null && (
+                            <CollectionEndNav
+                              context={collectionContext}
+                              placement="flow"
+                              onNext={handleCollectionNext}
+                            />
+                          )}
+                        </>
+                      ) : (
+                        chapterContext?.nextId && (
+                          <nav className="chapter-nav chapter-nav-next" aria-label="Book chapters">
+                            <a
+                              className="chapter-next"
+                              href={`#/article/${chapterContext.nextId}`}
+                              onClick={(event) =>
+                                handleChapterLink(event, chapterContext.nextId, "next")
+                              }
+                            >
+                              Next chapter
+                              {chapterContext.nextTitle && (
+                                <span className="chapter-nav-title">
+                                  {" "}
+                                  {chapterContext.nextTitle}
+                                </span>
+                              )}
+                            </a>
+                          </nav>
+                        )
                       )}
                     </>
-                  ) : (
-                    chapterContext?.nextId && (
-                      <nav className="chapter-nav chapter-nav-next" aria-label="Book chapters">
-                        <a
-                          className="chapter-next"
-                          href={`#/article/${chapterContext.nextId}`}
-                          onClick={(event) =>
-                            handleChapterLink(event, chapterContext.nextId, "next")
-                          }
-                        >
-                          Next chapter
-                          {chapterContext.nextTitle && (
-                            <span className="chapter-nav-title"> {chapterContext.nextTitle}</span>
-                          )}
-                        </a>
-                      </nav>
-                    )
                   )}
-                </>
-              )}
-              {/* Phase 18 Plan 18-03 (ORNT-06): the passive marker — rendered as
+                  {/* Phase 18 Plan 18-03 (ORNT-06): the passive marker — rendered as
               the LAST child of the shared <article> so it never disturbs the
               mode branches; absolutely positioned (zero layout impact) with
               pointer-events none; transient (unmounts itself at 4s). */}
-              {restorationMarker && articleEl && (
-                <RestorationMarker
-                  article={article}
-                  articleEl={articleEl}
-                  offset={restorationMarker.offset}
-                  mode={restorationMarker.mode}
-                />
-              )}
-            </article>
-          </AssetProvider>
-          {/* Issue #9: SelectionToolbar renders purely from the
+                  {restorationMarker && articleEl && (
+                    <RestorationMarker
+                      article={article}
+                      articleEl={articleEl}
+                      offset={restorationMarker.offset}
+                      mode={restorationMarker.mode}
+                    />
+                  )}
+                </article>
+              </AssetProvider>
+              {/* Issue #9: SelectionToolbar renders purely from the
              useSelectionToolbar controller state. onHighlightAndNote reuses
              the SAME hook create path the N keyboard path uses (ONE capture
              → persist → clear-selection flow); onFocusExit wires the
@@ -4013,19 +4315,21 @@ export function ArticleView({
              #220: every creation auto-dismisses the toolbar (undo is the
              Escape grace) and the toolbar mounts on pointer-up only — never
              mid-drag. */}
-          <SelectionToolbar
-            selectionRect={selectionRect}
-            captureResult={captureResult}
-            onHighlightAndNote={handleHighlightAndNote}
-            slots={settings.highlightSlots}
-            defaultSlotIndex={defaultSlotPosition}
-            bases={highlightBasesMemo}
-            onActivateSlot={handleActivateSlot}
-            onFocusExit={dismissToolbarFromFocusExit}
-          />
-          {/* One annotation panel owns controls, note, tags, and confirmation.
+              <SelectionToolbar
+                selectionRect={selectionRect}
+                captureResult={captureResult}
+                onHighlightAndNote={handleHighlightAndNote}
+                slots={settings.highlightSlots}
+                defaultSlotIndex={defaultSlotPosition}
+                bases={highlightBasesMemo}
+                onActivateSlot={handleActivateSlot}
+                onFocusExit={dismissToolbarFromFocusExit}
+              />
+              {/* One annotation panel owns controls, note, tags, and confirmation.
               Native modal focus protects writing and reader shortcuts. */}
-          <HighlightControls />
+              <HighlightControls />
+            </>
+          )}
           {/* Plan 13-10 (G5 — the AnnotationsDrawer ownership pattern): the
             tag-editing popover. A native popover="auto" panel in the top
             layer — free light-dismiss + Esc; the toggle-event close seam

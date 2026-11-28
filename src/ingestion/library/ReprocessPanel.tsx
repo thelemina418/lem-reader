@@ -8,7 +8,8 @@ import {
   type ReprocessPreview,
 } from "../../persistence/reprocessStore";
 import { StatusRegion } from "../../ui/StatusRegion";
-import { ConsequenceChecklist, HighlightOutcomes, useReprocessRun } from "./reprocessParts";
+import { ConsequenceChecklist } from "../../ui/ConsequenceChecklist";
+import { CorrectionsOutcome, HighlightOutcomes, useReprocessRun } from "./reprocessParts";
 import "./pdfRepair.css";
 
 const ORIGINAL_ACCEPT: Record<string, string> = {
@@ -120,6 +121,11 @@ export function ReprocessPanel({
             </details>
           )}
           <HighlightOutcomes highlights={preview.highlights} noun="article" />
+          <CorrectionsOutcome
+            reapplied={preview.corrections.reapplied.length}
+            notApplied={preview.corrections.notApplied}
+            version="new version"
+          />
           {preview.position.kind === "unmatched" && (
             <p>
               Your reading position cannot be matched in the new version; it opens at the start.

@@ -48,7 +48,9 @@ import type {
   NoteDraftRecord,
   NoteRecord,
 } from "../../content/schema";
-import { deriveQuoteSelector, resolveQuoteSelector } from "../../content/normalizeText";
+import { deriveQuoteSelector } from "../../content/normalizeText";
+import { resolveStoredHighlight } from "../../annotations/storedHighlight";
+import { isHiddenByCorrections } from "../../content/corrections/engine";
 import type { TextPositionSelector } from "../../content/normalizeText";
 import {
   loadHighlights,
@@ -82,6 +84,7 @@ import type { HighlightSlotPreset } from "../../annotations/highlightSlots";
 import type { HighlightSlot } from "../../content/schema";
 import { normalizeTags } from "../../ingestion/library/tagText";
 import { classifyStorageError } from "../../persistence/errors";
+import { textStamp } from "../../content/sameText";
 
 /** D5-02 tri-state — drives Plan 05-04 ambiguous/orphan surfacing. */
 export type HighlightStatus = "confident" | "ambiguous" | "orphan";
@@ -391,7 +394,9 @@ export function useAnnotationState(
         // Eager batch-resolve each record (D5-02 tri-state).
         const resolved: ResolvedHighlight[] = [];
         for (const record of result.highlights) {
-          const resolution = resolveQuoteSelector(article, record.quote, record.position);
+          // Spec #68 — never re-attached by the loose fallback across a
+          // corrected block boundary (src/annotations/storedHighlight.ts).
+          const resolution = resolveStoredHighlight(article, record);
           let status: HighlightStatus;
           let resolvedPosition: TextPositionSelector | null;
           if (resolution === "ambiguous") {
@@ -399,6 +404,10 @@ export function useAnnotationState(
             // Best-effort vicinity at the stored hint (D5-04).
             resolvedPosition = record.position;
           } else if (resolution === "orphan") {
+            // Spec #68 / #72 — a highlight inside a hidden block is hidden
+            // while the block is hidden (never "couldn't relocate"): not
+            // shown anywhere in the reader; it matches again on unhide.
+            if (isHiddenByCorrections(article, record.quote)) continue;
             status = "orphan";
             resolvedPosition = record.position;
           } else {
@@ -447,7 +456,7 @@ export function useAnnotationState(
         schemaVersion: 1,
         id,
         articleId: article.id,
-        revision: article.revision,
+        ...textStamp(article),
         position,
         quote,
         createdAt: new Date().toISOString(),

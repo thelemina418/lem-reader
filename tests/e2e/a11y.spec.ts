@@ -12,7 +12,7 @@
 import { test, expect, type Page } from "@playwright/test";
 import AxeBuilder from "@axe-core/playwright";
 import { bundledFixtures } from "../../src/fixtures";
-import { wipeDatabase, waitForReadingSurface } from "./annotations/_fixtures";
+import { openArticle, wipeDatabase, waitForReadingSurface } from "./annotations/_fixtures";
 // Issue #185 round 6 — the observable page-commit wait for the chapter
 // page-turn walks below (the same pagination/_harness seam the pagination
 // family uses; replaces the guessed 150ms per-turn sleeps).
@@ -1367,4 +1367,46 @@ test("expanded book chapter highlight actions fit at 320px", async ({ page }) =>
     scroll: document.body.scrollWidth,
   }));
   expect(geometry.scroll).toBeLessThanOrEqual(geometry.width + 1);
+});
+
+// ── Spec #68 / issue #70: the Correction view ───────────────────────────────
+// The view replaces the reading surface with a labelled scrolling column of
+// framed blocks (role=group named by type, each a tab stop). Held to the
+// same axe bar as the reading surfaces, for an article and for an EPUB
+// chapter (chapters are articles to the view).
+async function scanCorrectionView(page: Page): Promise<void> {
+  await page.keyboard.press("c");
+  await expect(page.locator(".correction-view")).toBeVisible();
+  await expect(page.getByRole("heading", { level: 1, name: "Correction view" })).toBeVisible();
+  const results = await new AxeBuilder({ page }).withTags([...WCAG_TAGS]).analyze();
+  const serious = seriousViolations(results);
+  const ids = serious.map((v) => v.id);
+  expect(ids, JSON.stringify(serious, null, 2)).not.toContain("heading-order");
+  expect(serious).toEqual([]);
+  // Exactly one content tree: the reading article is gone while the view is up.
+  await expect(page.locator("article.article-body")).toHaveCount(0);
+  await page.keyboard.press("c");
+  await expect(page.locator(".correction-view")).toBeHidden();
+  await expect(page.locator("article.article-body")).toHaveCount(1);
+}
+
+test("a11y #70: the Correction view is axe-clean (article with figures and footnote references)", async ({
+  page,
+}) => {
+  await wipeDatabase(page);
+  await openArticle(page, "figure-heavy");
+  await scanCorrectionView(page);
+});
+
+test("a11y #70: the Correction view works for an EPUB chapter and is axe-clean", async ({
+  page,
+}) => {
+  await seedBookLibrary(page);
+  await page.locator("li.book-row .book-toggle").click();
+  const chapter = page.locator("li.book-row .book-chapter-list a[href^='#/article/']").first();
+  await expect(chapter).toBeVisible();
+  await chapter.click();
+  await expect(page.getByRole("heading", { level: 1 })).toBeVisible();
+  await waitForReadingSurface(page);
+  await scanCorrectionView(page);
 });

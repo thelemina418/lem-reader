@@ -1,0 +1,618 @@
+// Spec #68 / issue #71 — seam 2: the corrections store against the in-memory
+// database. Observed through the store's public interface and what the
+// library holds afterwards: preview writes nothing; apply is one atomic
+// transaction that refuses a stale preview, writes the corrections list
+// (never the article row — ADR 0014), re-anchors highlight positions and the
+// reading position by quote, and keeps finished finished; deleting an
+// article deletes its corrections.
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import fakeIndexedDB, { IDBKeyRange } from "fake-indexeddb";
+import { Dexie } from "dexie";
+import { ArticleSchema, type BlockTypeChoice, type Correction } from "../../../src/content/schema";
+import {
+  deriveQuoteSelector,
+  mainTextLength,
+  normalizeText,
+} from "../../../src/content/normalizeText";
+import { applyCorrections, blockCorrection } from "../../../src/content/corrections/engine";
+import { setTypeCorrection } from "../../../src/content/corrections/setType";
+import { textStamp } from "../../../src/content/sameText";
+
+Dexie.dependencies.indexedDB = fakeIndexedDB;
+Dexie.dependencies.IDBKeyRange = IDBKeyRange;
+Object.assign(globalThis, { indexedDB: fakeIndexedDB, IDBKeyRange });
+
+const para = (text: string) => ({ kind: "paragraph" as const, content: [{ text, marks: [] }] });
+
+const saved = ArticleSchema.parse({
+  id: "harbour-essay",
+  revision: 2,
+  lang: "en",
+  provenance: {
+    sourceUrl: "https://example.com/harbour",
+    title: "The harbour",
+    retrievedAt: "2026-01-01T00:00:00Z",
+    originalHtmlHash: "hash",
+  },
+  blocks: [
+    para("The ferry leaves at dawn, before the fog lifts."),
+    para("Share this article"),
+    para("Gulls follow it out past the breakwater and back."),
+    para("Sign up for our newsletter"),
+  ],
+});
+
+function highlight(id: string, exact: string) {
+  const text = normalizeText(saved);
+  const at = text.indexOf(exact);
+  const start = [...text.slice(0, at)].length;
+  const position = { start, end: start + [...exact].length };
+  return {
+    schemaVersion: 1 as const,
+    id,
+    articleId: saved.id,
+    revision: 2,
+    position,
+    quote: deriveQuoteSelector(saved, position),
+    createdAt: "2026-01-02T00:00:00Z",
+  };
+}
+
+const gulls = highlight("h-gulls", "past the breakwater");
+
+function hideOf(path: number[], corrections: Correction[] = []): Correction {
+  const result = applyCorrections(saved, corrections);
+  const block = result.view.allBlocks.find((b) => b.path.join(".") === path.join("."))!;
+  return blockCorrection("hide", result, block, {
+    id: `hide-${path.join(".")}`,
+    createdAt: "2026-11-27T10:00:00.000Z",
+  })!;
+}
+
+async function seed() {
+  const { db } = await import("../../../src/persistence/db");
+  await db.articles.put(saved);
+  await db.highlights.put(gulls);
+  return db;
+}
+
+async function store() {
+  return import("../../../src/persistence/correctionsStore");
+}
+
+beforeEach(async () => {
+  const { db } = await import("../../../src/persistence/db");
+  await db.open();
+});
+
+afterEach(async () => {
+  const { db } = await import("../../../src/persistence/db");
+  await db.delete();
+});
+
+describe("previewing a correction", () => {
+  it("writes nothing and shows the proposed corrected article", async () => {
+    const db = await seed();
+    const { previewAddCorrection } = await store();
+    const before = JSON.stringify(await db.highlights.toArray());
+    const preview = await previewAddCorrection(saved.id, hideOf([1]));
+    expect(normalizeText(preview.proposed)).not.toContain("Share this article");
+    expect(preview.outcomes).toEqual([{ status: "applied" }]);
+    expect(preview.highlights).toEqual([
+      { highlightId: "h-gulls", exact: "past the breakwater", outcome: "confident" },
+    ]);
+    expect(preview.clean).toBe(true);
+    expect(await db.corrections.count()).toBe(0);
+    expect(JSON.stringify(await db.highlights.toArray())).toBe(before);
+  });
+});
+
+describe("applying a correction", () => {
+  it("writes the corrections list and never the article row", async () => {
+    const db = await seed();
+    const { previewAddCorrection, applyCorrectionsChange, loadCorrections } = await store();
+    const hide = hideOf([1]);
+    await applyCorrectionsChange(await previewAddCorrection(saved.id, hide));
+    expect(await loadCorrections(saved.id)).toEqual([hide]);
+    expect(ArticleSchema.parse(await db.articles.get(saved.id))).toEqual(saved);
+  });
+
+  it("re-anchors highlight positions by quote onto the corrected text", async () => {
+    const db = await seed();
+    const { previewAddCorrection, applyCorrectionsChange } = await store();
+    const preview = await previewAddCorrection(saved.id, hideOf([1]));
+    await applyCorrectionsChange(preview);
+    const row = await db.highlights.get("h-gulls");
+    const text = normalizeText(preview.proposed);
+    const start = [...text.slice(0, text.indexOf("past the breakwater"))].length;
+    expect(row!.position).toEqual({ start, end: start + [..."past the breakwater"].length });
+    expect(row!.quote).toEqual(gulls.quote);
+    expect(row!.revision).toBe(2);
+    expect(row!.fingerprint).toMatch(/^c/);
+  });
+
+  it("re-anchors the reading position to the same words", async () => {
+    const db = await seed();
+    const text = normalizeText(saved);
+    const offset = [...text.slice(0, text.indexOf("Gulls follow"))].length;
+    await db.location.put({
+      schemaVersion: 1,
+      articleId: saved.id,
+      revision: 2,
+      graphemeOffset: offset,
+      savedAt: "2026-11-01T00:00:00.000Z",
+    });
+    const { previewAddCorrection, applyCorrectionsChange } = await store();
+    const preview = await previewAddCorrection(saved.id, hideOf([1]));
+    await applyCorrectionsChange(preview);
+    const rows = await db.location.toArray();
+    const corrected = normalizeText(preview.proposed);
+    expect(rows).toEqual([
+      {
+        schemaVersion: 1,
+        articleId: saved.id,
+        revision: 2,
+        graphemeOffset: [...corrected.slice(0, corrected.indexOf("Gulls follow"))].length,
+        savedAt: "2026-11-01T00:00:00.000Z",
+        fingerprint: expect.stringMatching(/^c/),
+      },
+    ]);
+  });
+
+  it("moves a position inside a newly hidden block to the next passage still read", async () => {
+    const db = await seed();
+    const text = normalizeText(saved);
+    const offset = [...text.slice(0, text.indexOf("this article"))].length;
+    await db.location.put({
+      schemaVersion: 1,
+      articleId: saved.id,
+      revision: 2,
+      graphemeOffset: offset,
+      savedAt: "2026-11-01T00:00:00.000Z",
+    });
+    const { previewAddCorrection, applyCorrectionsChange } = await store();
+    const preview = await previewAddCorrection(saved.id, hideOf([1]));
+    await applyCorrectionsChange(preview);
+    const corrected = normalizeText(preview.proposed);
+    expect((await db.location.toArray())[0]!.graphemeOffset).toBe(
+      [...corrected.slice(0, corrected.indexOf("Gulls follow"))].length,
+    );
+  });
+
+  it("keeps a finished article finished at the corrected end of the main text", async () => {
+    const db = await seed();
+    await db.location.put({
+      schemaVersion: 1,
+      articleId: saved.id,
+      revision: 2,
+      graphemeOffset: mainTextLength(saved),
+      savedAt: "2026-11-01T00:00:00.000Z",
+    });
+    const { previewAddCorrection, applyCorrectionsChange } = await store();
+    // Hide the trailing chrome: the main text now ends earlier.
+    const preview = await previewAddCorrection(saved.id, hideOf([3]));
+    await applyCorrectionsChange(preview);
+    const end = mainTextLength(preview.proposed);
+    expect(end).toBeLessThan(mainTextLength(saved));
+    expect((await db.location.toArray())[0]!.graphemeOffset).toBe(end);
+  });
+
+  it("unhide restores the original substrate exactly", async () => {
+    const db = await seed();
+    const { previewAddCorrection, applyCorrectionsChange, previewCorrectionsChange } =
+      await store();
+    const hide = hideOf([1]);
+    await applyCorrectionsChange(await previewAddCorrection(saved.id, hide));
+    const result = applyCorrections(saved, [hide]);
+    const block = result.view.blocks[1]!;
+    const unhide = blockCorrection("unhide", result, block, {
+      id: "unhide-1",
+      createdAt: "2026-11-27T10:01:00.000Z",
+    })!;
+    const preview = await previewCorrectionsChange(saved.id, [hide, unhide]);
+    // Back to the original substrate: no corrections fingerprint at all.
+    expect(textStamp(preview.proposed)).toEqual({ revision: 2 });
+    expect(normalizeText(preview.proposed)).toBe(normalizeText(saved));
+    await applyCorrectionsChange(preview);
+    const row = await db.highlights.get("h-gulls");
+    expect(row!.position).toEqual(gulls.position);
+    expect("corrections" in row!).toBe(false);
+  });
+
+  it("refuses a preview made against an older state and changes nothing", async () => {
+    const db = await seed();
+    const { previewAddCorrection, applyCorrectionsChange, STALE_PREVIEW } = await store();
+    const preview = await previewAddCorrection(saved.id, hideOf([1]));
+    // The reader keeps reading in another tab.
+    await db.location.put({
+      schemaVersion: 1,
+      articleId: saved.id,
+      revision: 2,
+      graphemeOffset: 5,
+      savedAt: "2026-11-02T00:00:00.000Z",
+    });
+    await expect(applyCorrectionsChange(preview)).rejects.toThrow(STALE_PREVIEW);
+    expect(await db.corrections.count()).toBe(0);
+    expect((await db.highlights.get("h-gulls"))!.position).toEqual(gulls.position);
+  });
+
+  it("is atomic: a failed write leaves corrections, highlights and position as they were", async () => {
+    const db = await seed();
+    await db.location.put({
+      schemaVersion: 1,
+      articleId: saved.id,
+      revision: 2,
+      graphemeOffset: 60,
+      savedAt: "2026-11-01T00:00:00.000Z",
+    });
+    const { previewAddCorrection, applyCorrectionsChange } = await store();
+    const preview = await previewAddCorrection(saved.id, hideOf([1]));
+    const put = db.location.put.bind(db.location);
+    db.location.put = (() =>
+      Promise.reject(new Error("disk full"))) as unknown as typeof db.location.put;
+    try {
+      await expect(applyCorrectionsChange(preview)).rejects.toThrow();
+    } finally {
+      db.location.put = put;
+    }
+    expect(await db.corrections.count()).toBe(0);
+    expect((await db.highlights.get("h-gulls"))!.position).toEqual(gulls.position);
+    expect((await db.location.toArray())[0]!.graphemeOffset).toBe(60);
+  });
+
+  it("refuses an article with no library row (a bundled fixture)", async () => {
+    const { previewAddCorrection, NOT_CORRECTABLE } = await store();
+    await expect(previewAddCorrection("not-in-library", hideOf([1]))).rejects.toThrow(
+      NOT_CORRECTABLE,
+    );
+  });
+});
+
+describe("deleting an article", () => {
+  it("deletes its corrections too", async () => {
+    const db = await seed();
+    const { previewAddCorrection, applyCorrectionsChange } = await store();
+    await applyCorrectionsChange(await previewAddCorrection(saved.id, hideOf([1])));
+    expect(await db.corrections.count()).toBe(1);
+    const { DexieLibrarySource } = await import("../../../src/ingestion/LibrarySource");
+    await new DexieLibrarySource().remove(saved.id);
+    expect(await db.corrections.count()).toBe(0);
+  });
+
+  it("deletes every chapter's corrections when a book is removed", async () => {
+    const { db } = await import("../../../src/persistence/db");
+    const { BookSchema } = await import("../../../src/content/schema");
+    const chapterId = "epub-abc123def456-c00";
+    await db.books.put(
+      BookSchema.parse({
+        id: "epub-abc123def456",
+        title: "A Book",
+        authors: [],
+        language: "en",
+        chapterArticleIds: [chapterId],
+        skippedChapterCount: 0,
+        source: "epub-upload",
+        originalFileHash: "sha256:" + "b".repeat(64),
+        addedAt: "2026-08-18T00:00:00.000Z",
+      }),
+    );
+    await db.articles.put({ ...saved, id: chapterId });
+    await db.corrections.put({
+      schemaVersion: 1,
+      articleId: chapterId,
+      corrections: [],
+      updatedAt: "2026-11-27T00:00:00.000Z",
+    });
+    const { removeBook } = await import("../../../src/persistence/booksStore");
+    await removeBook("epub-abc123def456");
+    expect(await db.corrections.count()).toBe(0);
+  });
+});
+
+describe("reading the corrections list", () => {
+  it("reads a corrupt row as no corrections (the original), never coerced", async () => {
+    const db = await seed();
+    await db.corrections.put({ articleId: saved.id, schemaVersion: 99, corrections: "nope" });
+    const { loadCorrections, loadAllCorrections } = await store();
+    expect(await loadCorrections(saved.id)).toEqual([]);
+    expect((await loadAllCorrections()).size).toBe(0);
+  });
+});
+
+// ── Issue #72 — consequences before applying ────────────────────────────────
+
+const heading2 = (text: string) => ({
+  kind: "heading" as const,
+  level: 2 as const,
+  content: [{ text, marks: [] }],
+});
+
+// A chaptered work with chrome inside its first chapter.
+const work = ArticleSchema.parse({
+  ...saved,
+  id: "harbour-work",
+  blocks: [
+    heading2("Morning"),
+    para("The ferry leaves at dawn, before the fog lifts."),
+    para("Share this article"),
+    heading2("Noon"),
+    para("Gulls follow it out past the breakwater and back."),
+    heading2("Evening"),
+    para("The lamps come on along the quay."),
+  ],
+});
+
+const STAMP = "2026-11-01T00:00:00.000Z";
+
+async function chapterIds() {
+  const { resolveWorkStructure } = await import("../../../src/content/chapterTargets");
+  return resolveWorkStructure(work)!
+    .destinations.filter((d) => d.kind === "chapter")
+    .map((d) => d.id);
+}
+
+/** Completions for Noon and Evening; a collection holding both, with Noon active. */
+async function seedWork() {
+  const { db } = await import("../../../src/persistence/db");
+  await db.articles.put(work);
+  const [, noon, evening] = await chapterIds();
+  const target = (destinationId: string) => ({
+    kind: "work-chapter" as const,
+    articleId: work.id,
+    destinationId: destinationId!,
+  });
+  for (const id of [noon!, evening!]) {
+    await db.completions.put({
+      schemaVersion: 1,
+      targetKey: `work-chapter:${work.id}/${id}`,
+      target: target(id),
+      finished: true,
+      source: "reader",
+      updatedAt: STAMP,
+    });
+  }
+  await db.collections.put({
+    schemaVersion: 1,
+    id: "harbour-plan",
+    name: "Harbour plan",
+    entries: [
+      { id: "e-noon", target: target(noon!), addedAt: STAMP },
+      { id: "e-evening", target: target(evening!), addedAt: STAMP },
+    ],
+    createdAt: STAMP,
+    updatedAt: STAMP,
+  });
+  await db.collectionActiveEntries.put({
+    schemaVersion: 1,
+    collectionId: "harbour-plan",
+    entryId: "e-noon",
+    updatedAt: STAMP,
+  });
+  return { db, noon: noon!, evening: evening! };
+}
+
+function workHide(path: number[]): Correction {
+  const result = applyCorrections(work, []);
+  const block = result.view.allBlocks.find((b) => b.path.join(".") === path.join("."))!;
+  return blockCorrection("hide", result, block, {
+    id: `hide-${path.join(".")}`,
+    createdAt: "2026-11-27T10:00:00.000Z",
+  })!;
+}
+
+describe("a correction with consequences", () => {
+  it("reports a highlight in a hidden block by its words, as hidden while the block is hidden", async () => {
+    const db = await seed();
+    const { previewAddCorrection } = await store();
+    const before = JSON.stringify(await db.highlights.toArray());
+    const preview = await previewAddCorrection(saved.id, hideOf([2]));
+    expect(preview.highlights).toEqual([
+      { highlightId: "h-gulls", exact: "past the breakwater", outcome: "hidden" },
+    ]);
+    expect(preview.chapters).toEqual([]);
+    expect(preview.clean).toBe(false);
+    expect(await db.corrections.count()).toBe(0);
+    expect(JSON.stringify(await db.highlights.toArray())).toBe(before);
+  });
+
+  it("is refused without the reader's acceptance and changes nothing", async () => {
+    const db = await seed();
+    const { previewAddCorrection, applyCorrectionsChange, ACCEPTANCE_REQUIRED } = await store();
+    const preview = await previewAddCorrection(saved.id, hideOf([2]));
+    await expect(applyCorrectionsChange(preview)).rejects.toThrow(ACCEPTANCE_REQUIRED);
+    expect(await db.corrections.count()).toBe(0);
+  });
+
+  it("applies once accepted, leaving the hidden highlight's record untouched until unhide", async () => {
+    const db = await seed();
+    const { previewAddCorrection, applyCorrectionsChange, previewCorrectionsChange } =
+      await store();
+    const hide = hideOf([2]);
+    await applyCorrectionsChange(await previewAddCorrection(saved.id, hide), {
+      acceptConsequences: true,
+    });
+    expect(await db.highlights.get("h-gulls")).toEqual(gulls);
+    const result = applyCorrections(saved, [hide]);
+    const unhide = blockCorrection("unhide", result, result.view.blocks[2]!, {
+      id: "unhide-2",
+      createdAt: "2026-11-27T10:01:00.000Z",
+    })!;
+    // Unhiding has no consequence: the highlight simply matches again.
+    const back = await previewCorrectionsChange(saved.id, [hide, unhide]);
+    expect(back.clean).toBe(true);
+    await applyCorrectionsChange(back);
+    expect((await db.highlights.get("h-gulls"))!.position).toEqual(gulls.position);
+  });
+
+  it("carries unchanged chapters over: hiding a paragraph has no chapter consequence", async () => {
+    const { db } = await seedWork();
+    const { previewAddCorrection, applyCorrectionsChange } = await store();
+    const before = {
+      completions: await db.completions.toArray(),
+      collections: await db.collections.toArray(),
+    };
+    const preview = await previewAddCorrection(work.id, workHide([2]));
+    expect(preview.chapters).toEqual([]);
+    expect(preview.clean).toBe(true);
+    await applyCorrectionsChange(preview);
+    expect(await db.completions.toArray()).toEqual(before.completions);
+    expect(await db.collections.toArray()).toEqual(before.collections);
+  });
+
+  it("names exactly the hidden heading's chapter completion and collection entries", async () => {
+    const { noon } = await seedWork();
+    const { previewAddCorrection } = await store();
+    const preview = await previewAddCorrection(work.id, workHide([3]));
+    expect(preview.clean).toBe(false);
+    expect(preview.chapters).toEqual([
+      {
+        kind: "completion",
+        id: `work-chapter:${work.id}/${noon}`,
+        label: `Remove finished status for chapter “Noon” (${noon}).`,
+      },
+      {
+        kind: "collection-entry",
+        collectionId: "harbour-plan",
+        entryId: "e-noon",
+        label: `Remove chapter “Noon” (${noon}), entry e-noon, from “Harbour plan”; it cannot be redirected to a different chapter.`,
+      },
+    ]);
+  });
+
+  it("writes the correction and the accepted chapter changes in one transaction", async () => {
+    const { db, evening } = await seedWork();
+    const { previewAddCorrection, applyCorrectionsChange, loadCorrections } = await store();
+    const hide = workHide([3]);
+    const preview = await previewAddCorrection(work.id, hide);
+    await applyCorrectionsChange(preview, { acceptConsequences: true });
+    expect(await loadCorrections(work.id)).toEqual([hide]);
+    expect((await db.completions.toArray()).map((c) => c.targetKey)).toEqual([
+      `work-chapter:${work.id}/${evening}`,
+    ]);
+    expect((await db.collections.get("harbour-plan"))!.entries.map((e) => e.id)).toEqual([
+      "e-evening",
+    ]);
+    expect(await db.collectionActiveEntries.get("harbour-plan")).toBeUndefined();
+  });
+
+  it("is atomic: a failed write leaves corrections, completions and collections as they were", async () => {
+    const { db } = await seedWork();
+    const { previewAddCorrection, applyCorrectionsChange } = await store();
+    const before = {
+      completions: await db.completions.toArray(),
+      collections: await db.collections.toArray(),
+      active: await db.collectionActiveEntries.toArray(),
+    };
+    const preview = await previewAddCorrection(work.id, workHide([3]));
+    const put = db.corrections.put.bind(db.corrections);
+    db.corrections.put = (() =>
+      Promise.reject(new Error("disk full"))) as unknown as typeof db.corrections.put;
+    try {
+      await expect(applyCorrectionsChange(preview, { acceptConsequences: true })).rejects.toThrow();
+    } finally {
+      db.corrections.put = put;
+    }
+    expect(await db.corrections.count()).toBe(0);
+    expect(await db.completions.toArray()).toEqual(before.completions);
+    expect(await db.collections.toArray()).toEqual(before.collections);
+    expect(await db.collectionActiveEntries.toArray()).toEqual(before.active);
+  });
+
+  it("refuses an accepted preview once the library changed underneath it", async () => {
+    const { db } = await seedWork();
+    const { previewAddCorrection, applyCorrectionsChange, STALE_PREVIEW } = await store();
+    const preview = await previewAddCorrection(work.id, workHide([3]));
+    // A new collection entry for the same chapter the reader hasn't seen.
+    const row = (await db.collections.get("harbour-plan"))!;
+    await db.collections.put({
+      ...row,
+      entries: [...row.entries, { ...row.entries[0]!, id: "e-noon-2" }],
+    });
+    await expect(applyCorrectionsChange(preview, { acceptConsequences: true })).rejects.toThrow(
+      STALE_PREVIEW,
+    );
+    expect(await db.corrections.count()).toBe(0);
+  });
+});
+
+// Issue #74 — changing a block's type through the same preview / apply path.
+function workSetType(path: number[], to: BlockTypeChoice, article = work): Correction {
+  const result = applyCorrections(article, []);
+  const block = result.view.allBlocks.find((b) => b.path.join(".") === path.join("."))!;
+  return setTypeCorrection(result, block, to, {
+    id: `set-type-${path.join(".")}`,
+    createdAt: "2026-11-27T10:00:00.000Z",
+  })!;
+}
+
+describe("changing a block's type", () => {
+  it("reports a paragraph becoming a heading as a chapter added to the contents", async () => {
+    const { db } = await seedWork();
+    const { previewAddCorrection, applyCorrectionsChange, ACCEPTANCE_REQUIRED } = await store();
+    const before = {
+      completions: await db.completions.toArray(),
+      collections: await db.collections.toArray(),
+    };
+    const preview = await previewAddCorrection(
+      work.id,
+      workSetType([2], { type: "heading", level: 2 }),
+    );
+    expect(preview.contents).toEqual([{ change: "added", title: "Share this article" }]);
+    // The chapters around it keep their identity: no reader data is touched.
+    expect(preview.chapters).toEqual([]);
+    expect(preview.clean).toBe(false);
+    await expect(applyCorrectionsChange(preview)).rejects.toThrow(ACCEPTANCE_REQUIRED);
+    await applyCorrectionsChange(preview, { acceptConsequences: true });
+    expect((await db.corrections.get(work.id))!.corrections).toHaveLength(1);
+    expect(await db.completions.toArray()).toEqual(before.completions);
+    expect(await db.collections.toArray()).toEqual(before.collections);
+  });
+
+  it("reports a heading becoming a paragraph as a chapter removed, with its reader data", async () => {
+    const { noon } = await seedWork();
+    const { previewAddCorrection } = await store();
+    const preview = await previewAddCorrection(work.id, workSetType([3], { type: "paragraph" }));
+    expect(preview.contents).toEqual([{ change: "removed", title: "Noon" }]);
+    expect(preview.chapters.map((c) => c.label)).toEqual([
+      `Remove finished status for chapter “Noon” (${noon}).`,
+      `Remove chapter “Noon” (${noon}), entry e-noon, from “Harbour plan”; it cannot be redirected to a different chapter.`,
+    ]);
+  });
+
+  it("applies at once when nothing changes for the reader's data or the contents", async () => {
+    await seedWork();
+    const { previewAddCorrection } = await store();
+    const preview = await previewAddCorrection(work.id, workSetType([2], { type: "quotation" }));
+    expect(preview.contents).toEqual([]);
+    expect(preview.droppedMarks).toEqual([]);
+    expect(preview.clean).toBe(true);
+  });
+
+  it("names the marks a code block would drop, before anything is written", async () => {
+    const { db } = await import("../../../src/persistence/db");
+    const marked = ArticleSchema.parse({
+      ...saved,
+      id: "marked-essay",
+      blocks: [
+        para("Intro."),
+        {
+          kind: "paragraph",
+          content: [
+            { text: "Run ", marks: [] },
+            { text: "make tide", marks: [{ type: "code" }] },
+            { text: " twice.", marks: [] },
+          ],
+        },
+      ],
+    });
+    await db.articles.put(marked);
+    const { previewAddCorrection } = await store();
+    const preview = await previewAddCorrection(
+      marked.id,
+      workSetType([1], { type: "code-block" }, marked),
+    );
+    expect(preview.droppedMarks).toEqual([{ mark: "code", text: "make tide" }]);
+    expect(preview.clean).toBe(false);
+    expect(await db.corrections.count()).toBe(0);
+  });
+});
