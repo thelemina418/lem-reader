@@ -38,6 +38,8 @@ interface ModeToggleProps {
   mode: ReadingMode;
   /** Invoked on click. The parent routes this through SettingsContext.update(). */
   onToggle: () => void;
+  /** Issue #70 — inert while the Correction view is up (not a reading mode). */
+  disabled?: boolean;
 }
 
 /**
@@ -45,7 +47,11 @@ interface ModeToggleProps {
  * (detected via a prevMode ref) so it covers BOTH the click path AND the M
  * keyboard shortcut (which flips the same preference via a different route).
  */
-export function ModeToggle({ mode, onToggle }: ModeToggleProps): React.ReactElement {
+export function ModeToggle({
+  mode,
+  onToggle,
+  disabled = false,
+}: ModeToggleProps): React.ReactElement {
   const isPaginated = mode === "paginated";
   const [announce, setAnnounce] = useState("");
   const prevModeRef = useRef<ReadingMode>(mode);
@@ -87,6 +93,7 @@ export function ModeToggle({ mode, onToggle }: ModeToggleProps): React.ReactElem
         className="mode-toggle"
         aria-pressed={isPaginated}
         aria-label={`Reading mode: ${mode}`}
+        disabled={disabled}
         onClick={onToggle}
       >
         {/*

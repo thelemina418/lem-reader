@@ -6,7 +6,7 @@ import { expandSettingsGroup } from "./settings";
 // operable. Asserted via emulateMedia({ forcedColors: "active" }) across
 // Chromium/Firefox/WebKit (forced-colors emulation is supported in all three).
 import { test, expect } from "@playwright/test";
-import { assertEdgeInvariant } from "./_edge-invariant";
+import { assertEdgeInvariant, assertCorrectionViewInvariant } from "./_edge-invariant";
 // Plan 21-06 (D21-14 / ACPT-08) — the four-destination matrix cells below
 // (additive import; the cells are additive to the reader cells above).
 import { DESTINATIONS, assertDestinationInvariant, openEdgeDestination } from "./_edge-invariant";
@@ -279,6 +279,17 @@ test.describe("Forced colors (A11Y-05)", () => {
   // authoritative for their substrates (underlines, aria-expanded, focus
   // outlines, checked state); this adds the consolidated invariant.
   // Strengthen-only — no existing assertion removed (D6-12).
+  // Spec #68 / issue #70 — the Correction view joins the same bar: block
+  // boundaries + type labels perceivable, functions reachable, no overflow.
+  for (const fixture of FIXTURES) {
+    test(`correction view invariant holds under forced-colors @ ${fixture} (#70)`, async ({
+      page,
+    }) => {
+      await openArticle(page, fixture);
+      await assertCorrectionViewInvariant(page, { fixture, condition: "forced-colors" });
+    });
+  }
+
   for (const fixture of FIXTURES) {
     test(`shared invariant holds under forced-colors @ ${fixture} (D6-09)`, async ({ page }) => {
       await openArticle(page, fixture);

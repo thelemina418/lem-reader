@@ -7684,3 +7684,107 @@ dialog.reprocess-book {
 .reprocess-book-inner p {
   margin-block: 0;
 }
+
+/* ════════════════════════════════════════════════════════════════════════
+ * Spec #68 / issue #70 — the Correction view.
+ *
+ * Always a scrolling column (main carries .correction-main, never the
+ * paginated locks). Visibly distinct from reading: a labelled band at the
+ * top of the column and every block framed by a solid boundary with its
+ * type in words above it. Boundaries are real borders (forced colors map
+ * them to CanvasText — never a background or shadow alone), labels are
+ * real text. Nothing animates: no transitions or scroll-behavior here, so
+ * reduced motion holds by construction.
+ * ════════════════════════════════════════════════════════════════════════ */
+.correction-view {
+  max-width: var(--measure);
+  margin-inline: auto;
+  padding-block-end: var(--space-xl);
+  min-width: 0;
+}
+.correction-view-header {
+  margin-block: var(--space-md);
+  padding: var(--space-sm) var(--space-md);
+  border: 1px solid var(--hairline);
+  border-inline-start: 4px solid var(--brass);
+  border-radius: var(--radius-sm);
+  background: var(--surface-raised);
+  font-family: var(--font-ui);
+}
+.correction-view-title {
+  margin: 0;
+  font-size: 1.125rem;
+}
+.correction-view-article {
+  margin: var(--space-xs) 0 0;
+  color: var(--ink-soft);
+  overflow-wrap: anywhere;
+}
+.correction-view-help {
+  margin: var(--space-xs) 0 0;
+  color: var(--ink-soft);
+  font-size: 0.875rem;
+}
+.correction-view-body {
+  overflow-wrap: anywhere;
+}
+.correction-block {
+  margin-block: var(--space-sm);
+  padding: var(--space-xs) var(--space-sm);
+  border: 1px solid var(--hairline);
+  border-radius: var(--radius-sm);
+  min-width: 0;
+}
+.correction-block:focus-visible,
+.correction-block:focus {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: 2px;
+}
+.correction-block-label {
+  display: block;
+  font-family: var(--font-ui);
+  font-size: 0.75rem;
+  letter-spacing: 0.02em;
+  color: var(--ink-soft);
+}
+.correction-block[data-hidden="true"] > :not(.correction-block-label) {
+  opacity: 0.55;
+}
+.correction-block[data-hidden="true"] {
+  border-style: dashed;
+}
+/* Block content keeps its reading typography; the frame owns the outer
+   rhythm, so the block's own first/last margins collapse into the frame. */
+.correction-block > [data-block-index] {
+  margin-block: var(--space-xs) 0;
+}
+.correction-block pre {
+  max-width: 100%;
+  overflow-x: auto;
+}
+.correction-block img {
+  max-width: 100%;
+  height: auto;
+}
+.inert-link {
+  text-decoration: underline;
+  text-decoration-style: dotted;
+}
+@media (forced-colors: active) {
+  .correction-block,
+  .correction-view-header {
+    border-color: CanvasText;
+  }
+  .correction-block-label {
+    color: CanvasText;
+  }
+}
+/* Issue #70 — the Reader row gains one 44px control: menu + contents, tags,
+   highlights and notes, correction, mode, settings = 7×44 + 5×8 + 8 = 356px.
+   Below that the gaps close (the targets stay 44px, the row stays one 48px
+   line and never overflows at 320px: 7×44 + 8 = 316px). */
+@media (max-width: 359px) {
+  .app-header[data-destination="reader"] .header-controls {
+    gap: 0;
+  }
+}

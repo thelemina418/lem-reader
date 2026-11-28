@@ -374,6 +374,11 @@ function AppInner() {
   const { settings, update } = useSettings();
   // D4-10 bridge — ArticleView registers its handler here; null on the list.
   const modeToggleHandlerRef = useRef<ModeToggleHandler | null>(null);
+  // Spec #68 / issue #70 — the Correction view bridge (same pattern): the
+  // mounted ArticleView registers its enter/leave handler and reports the
+  // view state for the header toggle.
+  const correctionToggleHandlerRef = useRef<(() => void) | null>(null);
+  const [correctionViewActive, setCorrectionViewActive] = useState(false);
   // Plan 13-04 (D13-15 / Pitfall 7): in-app navigation flag. Flips true on
   // the FIRST in-app hashchange AFTER initial mount and never flips back.
   // The initial load fires no hashchange — so a fresh deep-link tab AND a
@@ -631,6 +636,8 @@ function AppInner() {
         // Issue #15 — a collection import is not the header trigger's session.
         addOpen={addOpen && addDestination === null}
         onOpenAdd={openAdd}
+        correctionViewActive={view.name === "article" && correctionViewActive}
+        onToggleCorrectionView={() => correctionToggleHandlerRef.current?.()}
       />
       <SettingsPanel open={settingsOpen} onClose={() => setSettingsOpen(false)} />
       {/* Issue #84 (decision #70) — the ONE app-level AddDialog, mounted
@@ -699,6 +706,8 @@ function AppInner() {
             collectionId={view.collectionId}
             collectionEntryId={view.entryId}
             modeToggleHandlerRef={modeToggleHandlerRef}
+            correctionToggleHandlerRef={correctionToggleHandlerRef}
+            onCorrectionViewChange={setCorrectionViewActive}
             drawerOpen={drawerOpen}
             onCloseDrawer={() => setDrawerOpen(false)}
             tagsOpen={tagsOpen}

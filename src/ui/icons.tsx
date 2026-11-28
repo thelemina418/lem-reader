@@ -101,6 +101,18 @@ export function PaginatedIcon(props: IconProps) {
   );
 }
 
+/** Two outlined blocks with a type tick — the Correction view (issue #70). */
+export function BlocksIcon(props: IconProps) {
+  return (
+    <Svg size={20} {...props}>
+      <rect x="4" y="4" width="16" height="7" rx="1" />
+      <rect x="4" y="14" width="16" height="6" rx="1" />
+      <path d="M7 7.5h4" />
+      <path d="M7 17h6" />
+    </Svg>
+  );
+}
+
 /** Continuous vertical flow — scrolling mode. */
 export function ScrollingIcon(props: IconProps) {
   return (

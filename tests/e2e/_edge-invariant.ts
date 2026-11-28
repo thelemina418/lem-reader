@@ -193,6 +193,97 @@ export async function assertEdgeInvariant(
   ).toBeGreaterThan(0);
 }
 
+/**
+ * Spec #68 / issue #70 — the Correction view cell of the shared invariant.
+ * Called on a settled reading surface (after openArticle). Enters the view
+ * by the C shortcut and asserts, under whatever edge condition the caller
+ * emulates:
+ *  (a) every block is reachable and perceivable as a block: a real border
+ *      (forced colors map borders, never backgrounds alone), its type label
+ *      as visible text, an accessible name, and a tab stop;
+ *  (b) the required functions stay reachable (the Correction view toggle
+ *      and settings);
+ *  (c) no horizontal overflow (WCAG 1.4.10) and nothing in the view moves
+ *      (no transition or animation — reduced motion holds by construction).
+ * Then leaves by C and re-asserts the reading surface is back.
+ */
+export async function assertCorrectionViewInvariant(
+  page: Page,
+  { fixture, condition }: EdgeInvariantOptions,
+): Promise<void> {
+  const label = `${condition} ${fixture} (correction view)`;
+  await page.keyboard.press("c");
+  const view = page.locator(".correction-view");
+  await expect(view, `${label}: view did not open`).toBeVisible();
+  await expect(view.locator(".correction-block"), `${label}: no blocks`).not.toHaveCount(0);
+
+  const audit = await page.evaluate(() => {
+    const frames = Array.from(
+      document.querySelectorAll<HTMLElement>(".correction-view .correction-block"),
+    );
+    const moving = [document.querySelector<HTMLElement>(".correction-view"), ...frames].filter(
+      (el): el is HTMLElement => {
+        if (!el) return false;
+        const s = getComputedStyle(el);
+        const durations = s.transitionDuration.split(",").map((d) => parseFloat(d));
+        return (
+          durations.some((d) => d > 0) || (s.animationName !== "none" && s.animationName !== "")
+        );
+      },
+    ).length;
+    const view = document.querySelector<HTMLElement>(".correction-view")!;
+    return {
+      moving,
+      bodyScrollW: document.body.scrollWidth,
+      bodyClientW: document.body.clientWidth,
+      viewScrollW: view.scrollWidth,
+      viewClientW: view.clientWidth,
+      frames: frames.map((el) => {
+        const s = getComputedStyle(el);
+        const tag = el.querySelector<HTMLElement>(".correction-block-label");
+        const r = tag?.getBoundingClientRect();
+        return {
+          index: el.dataset.correctionBlock,
+          bordered: s.borderTopStyle !== "none" && parseFloat(s.borderTopWidth) > 0,
+          labelled:
+            (tag?.textContent ?? "").trim().length > 0 && !!r && r.width > 0 && r.height > 0,
+          named: (el.getAttribute("aria-label") ?? "").length > 0,
+          focusable: el.tabIndex === 0,
+        };
+      }),
+    };
+  });
+  for (const f of audit.frames) {
+    expect(f.bordered, `${label}: block ${f.index} has no visible boundary`).toBe(true);
+    expect(f.labelled, `${label}: block ${f.index} has no visible type label`).toBe(true);
+    expect(f.named, `${label}: block ${f.index} has no accessible type`).toBe(true);
+    expect(f.focusable, `${label}: block ${f.index} is not a tab stop`).toBe(true);
+  }
+  expect(audit.moving, `${label}: something in the view animates`).toBe(0);
+  expect(
+    audit.bodyScrollW,
+    `${label}: body horizontal overflow (scrollW ${audit.bodyScrollW} > clientW ${audit.bodyClientW})`,
+  ).toBeLessThanOrEqual(audit.bodyClientW + 1);
+  expect(audit.viewScrollW, `${label}: view horizontal overflow`).toBeLessThanOrEqual(
+    audit.viewClientW + 1,
+  );
+  await expect(
+    page.getByRole("button", { name: "Correction view" }),
+    `${label}: Correction view toggle missing`,
+  ).toBeVisible();
+  await expect(
+    page.getByRole("button", { name: /^Reading settings$/ }),
+    `${label}: settings button missing`,
+  ).toBeVisible();
+
+  await page.keyboard.press("c");
+  await expect(view, `${label}: view did not close`).toBeHidden();
+  await expect(
+    page.locator(VISIBLE_BLOCK_SELECTOR),
+    `${label}: reading surface did not come back`,
+  ).not.toHaveCount(0);
+}
+
 // ───────────────────────────────────────────────────────────────────────
 // Plan 21-06 (D21-14 / ACPT-08): the four-destination matrix arms.
 //

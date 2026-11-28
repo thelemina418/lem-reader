@@ -47,6 +47,15 @@ export const MeasurementProjectionContext = createContext(false);
  * fragment view so a legacy note cited twice renders `fn-ref-N-2` for its
  * second reference, never a duplicate `fn-ref-N`.
  */
+/**
+ * Spec #68 / issue #70 — TRUE inside the Correction view. Links and footnote
+ * references render as inert text (`.inert-link` spans: no href, no tab
+ * stop, nothing to navigate), and highlight marks render as tints without a
+ * tab stop (no annotation panel opens from the view). ArticleBody provides
+ * it from its `inertInteractions` prop; reading surfaces never set it.
+ */
+export const InertInteractionContext = createContext(false);
+
 export const LegacyReferenceAnchorsContext = createContext<ReadonlyMap<Block, string> | null>(null);
 
 /**
@@ -56,6 +65,7 @@ export const LegacyReferenceAnchorsContext = createContext<ReadonlyMap<Block, st
  */
 function Inline({ run, stampAnchorId = true }: { run: InlineRun; stampAnchorId?: boolean }) {
   const measurementProjection = useContext(MeasurementProjectionContext);
+  const inert = useContext(InertInteractionContext);
   let node: React.ReactNode = run.text;
   for (const mark of run.marks) {
     switch (mark.type) {
@@ -66,6 +76,10 @@ function Inline({ run, stampAnchorId = true }: { run: InlineRun; stampAnchorId?:
         node = measurementProjection ? (
           <sup>
             <span>{node}</span>
+          </sup>
+        ) : inert ? (
+          <sup>
+            <span className="inert-link">{node}</span>
           </sup>
         ) : (
           <sup>
@@ -94,7 +108,11 @@ function Inline({ run, stampAnchorId = true }: { run: InlineRun; stampAnchorId?:
         break;
       case "link":
         // href was scheme-validated at Zod parse time (Pitfall 5)
-        node = (
+        node = inert ? (
+          <span className="inert-link" title={mark.title}>
+            {node}
+          </span>
+        ) : (
           <a href={mark.href} title={mark.title}>
             {node}
           </a>
@@ -130,6 +148,7 @@ export function InlineList({
    */
   highlightSlices?: HighlightSlice[];
 }): React.ReactElement {
+  const inert = useContext(InertInteractionContext);
   // When no highlight slices are provided, render the runs directly (the
   // pre-Phase-5 path — byte-unchanged so existing tests regress nothing).
   if (!highlightSlices || highlightSlices.length === 0) {
@@ -203,7 +222,7 @@ export function InlineList({
             id={slice.isFirst === true ? `hl-${slice.highlightId}` : undefined}
             className={className}
             data-highlight-id={slice.highlightId}
-            tabIndex={0}
+            tabIndex={inert ? undefined : 0}
             aria-label={highlightAriaLabel(slice)}
             style={markStyle}
           >
