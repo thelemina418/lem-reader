@@ -30,6 +30,7 @@ import {
 import { resolveWorkStructure } from "../content/chapterTargets";
 import { bundledFixtures } from "../fixtures";
 import { saveWorkStructure } from "../persistence/structureStore";
+import { textStamp } from "../content/sameText";
 
 export type WorkStructureOrigin = "saved" | "derived" | null;
 export type WorkStructureSaveOutcome =
@@ -88,7 +89,7 @@ export function useWorkStructure(article: CanonicalArticle | null): WorkStructur
     // structure row for a fixture id would be a phantom.
     if (bundledFixtures.some((f) => f.id === article.id)) return;
     let cancelled = false;
-    void saveWorkStructure(article.id, article.revision, structure).then((outcome) => {
+    void saveWorkStructure(article.id, textStamp(article).revision, structure).then((outcome) => {
       if (cancelled) return;
       setSaveOutcome(outcome.saved ? "saved" : outcome.reason);
       if (!outcome.saved) {

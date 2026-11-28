@@ -29,6 +29,7 @@
 import { db } from "./db";
 import { ArticleSchema, type WorkStructure } from "../content/schema";
 import { validateWorkStructure } from "../content/structure";
+import { isSameText } from "../content/sameText";
 
 /** One save attempt's honest outcome. */
 export type SaveStructureOutcome =
@@ -49,7 +50,7 @@ export async function saveWorkStructure(
     return await db.transaction("rw", db.articles, async (): Promise<SaveStructureOutcome> => {
       const row = await db.articles.get(articleId);
       if (row === undefined) return { saved: false, reason: "missing-row" };
-      if (row.revision !== revision) return { saved: false, reason: "revision-changed" };
+      if (!isSameText(row, { revision })) return { saved: false, reason: "revision-changed" };
       // Established snapshots are frozen. A lazy save computed before an
       // explicit repair must not replace that repair at the same text revision.
       const current = ArticleSchema.safeParse(row);

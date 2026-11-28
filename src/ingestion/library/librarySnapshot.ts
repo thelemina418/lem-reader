@@ -114,6 +114,7 @@ import { loadAllTags } from "./tagsStore";
 // fold (the tagText module header's "every seam that touches tag strings").
 import { normalizeTags } from "./tagText";
 import { fromLegacyEndPin, latestLocationByArticle } from "../../reader/readingPosition";
+import { isSameText } from "../../content/sameText";
 
 /**
  * The one consistent library read model. All fields derive from ONE settled
@@ -329,7 +330,7 @@ export async function loadLibrarySnapshot(): Promise<LibrarySnapshot> {
   const latestLocationByArticleId = latestLocationByArticle(locations);
   for (const article of articles) {
     const loc = latestLocationByArticleId.get(article.id);
-    if (loc === undefined || loc.revision !== article.revision) continue;
+    if (loc === undefined || !isSameText(loc, article)) continue;
     const offset = fromLegacyEndPin(
       loc.graphemeOffset,
       totalsByArticleId.get(article.id)!,

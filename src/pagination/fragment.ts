@@ -97,6 +97,7 @@ const CODE_BLOCK_OVERSIZE_THRESHOLD = 0.9;
  * bound to admit longer works — refine their source windows instead.
  */
 import { PAGINATION_PAGE_CEILING as PAGE_CEILING } from "./capacity";
+import { isSameText } from "../content/sameText";
 
 /**
  * Plan 13-04 (Option A — human decision 2026-08-18): the safety floor for
@@ -246,7 +247,7 @@ export function paginateDocument(opts: PaginateOptions): FragmentationResult {
     ? scopeFootnoteRows.length
     : endBlock - startBlock + wholeNotes.length;
   if (
-    (scope && (scope.articleId !== article.id || scope.revision !== article.revision)) ||
+    (scope && (scope.articleId !== article.id || !isSameText(scope, article))) ||
     opts.measurement.blocks.length !== expectedMeasurementRows ||
     (footnoteScope
       ? // Homogeneous footnote scope: empty body range at the body's end,
