@@ -65,6 +65,7 @@
 //     HTML (react/no-danger + lint:no-danger enforced repo-wide).
 import { resolveQuoteSelectorInText } from "../../annotations/resolution";
 import { isHiddenByCorrections } from "../../content/corrections/engine";
+import { wordsUnchanged } from "../../annotations/storedHighlight";
 import { MemoizedArticleText } from "../../portability/conflicts";
 import { effectiveTitle } from "../../ingestion/library/effectiveMetadata";
 // Issue #117 — the ONE case-insensitive tag comparison (tagText.sameTag —
@@ -267,11 +268,15 @@ export function deriveReviewSections(
     if (!article) {
       status = "orphan"; // absent article → orphan, row KEPT (D10-05)
     } else {
+      // Spec #68 — the reader's rule (src/annotations/storedHighlight.ts):
+      // never re-attached by the loose fallback across a corrected boundary.
+      const exactOnly = wordsUnchanged(article, highlight);
       const resolved = resolveQuoteSelectorInText(
         memoizedText.clustersFor(article),
         highlight.quote,
         article.lang,
-        highlight.position,
+        exactOnly ? undefined : highlight.position,
+        { exactOnly },
       );
       if (typeof resolved !== "string") resolvedPosition = resolved;
       status =

@@ -227,7 +227,7 @@ test.describe("Move words to the next block — the caption example (#73)", () =
       .toContain(STRAY);
   });
 
-  test("a highlight across the moved boundary asks first; Cancel changes nothing", async ({
+  test("a highlight across the moved boundary asks first; Cancel changes nothing; it isn't re-attached", async ({
     page,
   }) => {
     await seedStoreRows(page, "highlights", [
@@ -259,6 +259,16 @@ test.describe("Move words to the next block — the caption example (#73)", () =
     await dialog.getByRole("button", { name: "Move words" }).click();
     await expect(status(page, MOVED_NEXT)).toHaveCount(1);
     await expect(frameText(page, PARAGRAPH)).toHaveText(`${STRAY} ${REST}`);
+
+    // Spec #68 — what the dialog said is what the reader does: the highlight
+    // across the moved boundary is not quietly re-attached by its context;
+    // the one inside the moved words still shows.
+    await page.keyboard.press("c");
+    await expect(view(page)).toBeHidden();
+    await expect(
+      page.locator('mark.highlight[data-highlight-id="h-inside"]').first(),
+    ).toBeVisible();
+    await expect(page.locator('mark.highlight[data-highlight-id="h-across"]')).toHaveCount(0);
   });
 
   test("make the stray words their own paragraph with P", async ({ page }) => {

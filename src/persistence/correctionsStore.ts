@@ -75,6 +75,7 @@ import {
   type SameChapter,
 } from "./chapterConsequences";
 import { db } from "./db";
+import { resolveStoredHighlight } from "../annotations/storedHighlight";
 import {
   ACCEPTANCE_REQUIRED,
   everyRevision,
@@ -264,7 +265,8 @@ async function plan(
     const parsed = HighlightRecordSchema.safeParse(row);
     if (!parsed.success) continue;
     const record = parsed.data;
-    const now = resolveQuoteSelector(before.article, record.quote, record.position);
+    // What the reader shows today (src/annotations/storedHighlight.ts).
+    const now = resolveStoredHighlight(before.article, record);
     if (typeof now === "string") continue; // not shown confidently today — untouched
     let outcome: CorrectionHighlightOutcome;
     // Corrections never change words, so a highlight whose text matches
