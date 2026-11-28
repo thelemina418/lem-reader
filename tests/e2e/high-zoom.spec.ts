@@ -27,7 +27,7 @@
 // matrix (playwright.config.ts chromium/firefox/webkit) picks this up
 // automatically.
 import { test, expect } from "@playwright/test";
-import { assertEdgeInvariant } from "./_edge-invariant";
+import { assertEdgeInvariant, assertCorrectionViewInvariant } from "./_edge-invariant";
 import { FIXTURES, wipeDatabase, openArticle } from "./annotations/_fixtures";
 // Plan 16-04 — the shared dialog-opening helper (the dialog-open 400%
 // zoom case below; ADD-04 geometry proof).
@@ -53,6 +53,16 @@ test.beforeEach(async ({ page }) => {
 // The invariant drives BOTH reading modes internally (M toggle), so each
 // fixture proves content + functions + no-overflow hold in paginated AND
 // scrolling at the WCAG reflow target.
+// Spec #68 / issue #70 — the Correction view at the 400%-equivalent 320 CSS
+// px reflow target: block boundaries + type labels perceivable, functions
+// reachable, no horizontal overflow.
+for (const fixture of FIXTURES) {
+  test(`correction view invariant holds at ${ZOOM_LABEL} @ ${fixture} (#70)`, async ({ page }) => {
+    await openArticle(page, fixture);
+    await assertCorrectionViewInvariant(page, { fixture, condition: ZOOM_LABEL });
+  });
+}
+
 for (const fixture of FIXTURES) {
   test.describe(`high-zoom @ ${fixture}`, () => {
     test("400% + 320px reflow: shared invariant holds (content + functions + no overflow) in both modes", async ({

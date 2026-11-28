@@ -38,6 +38,7 @@
 import { useEffect, useId, useRef, useState } from "react";
 import { useSettings } from "../settings/SettingsContext";
 import { ModeToggle } from "./ModeToggle";
+import { CorrectionViewToggle } from "./CorrectionViewToggle";
 import { GearIcon, HighlighterIcon, TagIcon, ContentsIcon, PlusIcon, MenuIcon } from "../ui/icons";
 
 interface HeaderProps {
@@ -143,6 +144,10 @@ interface HeaderProps {
    * instance the Library h1-row button opens); Header stays presentational.
    */
   onOpenAdd: () => void;
+  /** Spec #68 / issue #70 — whether the Correction view is up (aria-pressed). */
+  correctionViewActive?: boolean;
+  /** Issue #70 — enter/leave the Correction view (ArticleView's ONE path). */
+  onToggleCorrectionView?: () => void;
 }
 
 export function Header({
@@ -162,6 +167,8 @@ export function Header({
   openArticleId,
   addOpen,
   onOpenAdd,
+  correctionViewActive = false,
+  onToggleCorrectionView,
 }: HeaderProps) {
   // Header is a useSettings consumer so the toggle's aria-pressed + glyph
   // reflect the LIVE preference without App prop-drilling. App stays unchanged.
@@ -462,7 +469,23 @@ export function Header({
           Article-scoped triggers stay in the shell header, NOT content
           headers (D15-18).
         */}
-        {articleMounted && <ModeToggle mode={settings.readingMode} onToggle={onToggleMode} />}
+        {/*
+          Spec #68 / issue #70: the Correction view toggle sits inline-start
+          of the reading-mode toggle — the Reader reads
+          [contents][tags][annotations][correction][mode][gear]. While the
+          view is up the mode toggle is disabled: the view is not a reading
+          mode, and leaving returns to the mode the reader came from.
+        */}
+        {articleMounted && onToggleCorrectionView && (
+          <CorrectionViewToggle active={correctionViewActive} onToggle={onToggleCorrectionView} />
+        )}
+        {articleMounted && (
+          <ModeToggle
+            mode={settings.readingMode}
+            onToggle={onToggleMode}
+            disabled={correctionViewActive}
+          />
+        )}
         <button
           type="button"
           className="btn btn-icon gear-button"

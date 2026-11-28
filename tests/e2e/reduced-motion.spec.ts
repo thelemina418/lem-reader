@@ -5,7 +5,7 @@
 // settings panel or its controls, so the gate is trivially satisfied. This
 // test guards against a regression that adds a transition.
 import { test, expect } from "@playwright/test";
-import { assertEdgeInvariant } from "./_edge-invariant";
+import { assertEdgeInvariant, assertCorrectionViewInvariant } from "./_edge-invariant";
 // Plan 21-06 (D21-14 / ACPT-08) — the four-destination matrix cells below
 // (additive import; the cells are additive to the reader cells above).
 import { DESTINATIONS, assertDestinationInvariant, openEdgeDestination } from "./_edge-invariant";
@@ -160,6 +160,17 @@ test.describe("Reduced motion (A11Y-06)", () => {
   // transition/animation A11Y-06 assertions above stay authoritative for
   // the motion substrate; this adds the consolidated invariant.
   // Strengthen-only — no existing assertion removed (D6-12).
+  // Spec #68 / issue #70 — the Correction view joins the same bar: block
+  // boundaries + type labels perceivable, functions reachable, no overflow.
+  for (const fixture of FIXTURES) {
+    test(`correction view invariant holds under reduced-motion @ ${fixture} (#70)`, async ({
+      page,
+    }) => {
+      await openArticle(page, fixture);
+      await assertCorrectionViewInvariant(page, { fixture, condition: "reduced-motion" });
+    });
+  }
+
   for (const fixture of FIXTURES) {
     test(`shared invariant holds under reduced-motion @ ${fixture} (D6-09)`, async ({ page }) => {
       await openArticle(page, fixture);

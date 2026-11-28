@@ -291,6 +291,10 @@ export function useScrollSave(
   useEffect(() => {
     if (!article) return; // loading state — no scroll listener
     const onScroll = () => {
+      // Issue #70 — no reading surface mounted (the Correction view replaces
+      // it): window scrolls are not reading progress, so nothing is saved
+      // until a reading surface is back.
+      if (!articleElRef.current) return;
       // 260908-oht scroll-bottom pin: at (or within BOTTOM_EPSILON_PX of)
       // the document bottom, persist the ONE end-pin (endPinOffset — Issue
       // #2's readingPosition module) so a fully-read article crosses the
