@@ -15,6 +15,7 @@
 // everything untouched.
 import { useEffect, useRef, useState } from "react";
 import { ConsequenceChecklist } from "../ingestion/library/reprocessParts";
+import { describeCorrection } from "../content/corrections/describe";
 import type {
   CorrectionHighlightOutcome,
   CorrectionsPreview,
@@ -103,6 +104,7 @@ export function CorrectionConsequencesDialog({
 
   const highlights = preview?.highlights.filter((h) => h.outcome !== "confident") ?? [];
   const chapters = preview?.chapters ?? [];
+  const later = preview?.laterNotApplied ?? [];
   const ready = accepted.size === chapters.length;
 
   return (
@@ -118,9 +120,31 @@ export function CorrectionConsequencesDialog({
         <div className="correction-consequences-inner">
           <h2 id="correction-consequences-title">{title}</h2>
           <p id="correction-consequences-body">
-            This correction affects your reading data. Nothing changes unless you confirm, and you
-            can undo the correction later.
+            This change affects your reading data or your other corrections. Nothing changes unless
+            you confirm, and you can undo it afterwards.
           </p>
+          {later.length > 0 && (
+            <>
+              <h3>Corrections that would no longer fit</h3>
+              <ul aria-label="Corrections that would no longer fit">
+                {later.map(({ correction, reason }) => (
+                  <li key={correction.id}>
+                    {describeCorrection(correction)} — not applied: {reason} It stays in the list.
+                  </li>
+                ))}
+              </ul>
+            </>
+          )}
+          {preview.restored.length > 0 && (
+            <>
+              <h3>Coming back</h3>
+              <ul aria-label="Coming back">
+                {preview.restored.map((label) => (
+                  <li key={label}>{label}</li>
+                ))}
+              </ul>
+            </>
+          )}
           {highlights.length > 0 && (
             <>
               <h3>Highlights</h3>

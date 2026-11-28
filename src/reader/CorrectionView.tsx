@@ -129,6 +129,8 @@ interface CorrectionViewProps {
   onSelectionCommand?: (command: SelectionCommand, words: string) => void;
   /** Land here after a command (see CorrectionLanding). */
   landing?: CorrectionLanding | null;
+  /** Rendered at the end of the view's header (the corrections list, #76). */
+  headerExtras?: React.ReactNode;
 }
 
 function frameOf(el: Element | null): HTMLElement | null {
@@ -151,6 +153,7 @@ export const CorrectionView = forwardRef<CorrectionViewHandle, CorrectionViewPro
       selectionCommandsFor,
       onSelectionCommand,
       landing = null,
+      headerExtras,
     },
     ref,
   ) {
@@ -481,6 +484,7 @@ export const CorrectionView = forwardRef<CorrectionViewHandle, CorrectionViewPro
               </div>
             ))}
           </dl>
+          {headerExtras}
         </header>
         {commandFor && (
           <div className="correction-commands" role="toolbar" aria-label="Block commands">

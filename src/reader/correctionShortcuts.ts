@@ -22,6 +22,9 @@ export const CORRECTION_SHORTCUTS: readonly CorrectionShortcut[] = [
   { keys: ["]"], label: "Move the selected words to the next block" },
   { keys: ["["], label: "Move the selected words to the previous block" },
   { keys: ["P"], label: "Make the selected words their own paragraph" },
+  { keys: ["Ctrl+Z"], label: "Undo your last correction" },
+  { keys: ["Ctrl+Shift+Z"], label: "Redo it" },
+  { keys: ["L"], label: "List every correction on this article" },
 ];
 
 /** The selection commands' keys (event.key values). */

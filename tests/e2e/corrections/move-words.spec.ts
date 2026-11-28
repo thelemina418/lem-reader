@@ -63,6 +63,10 @@ const ARTICLE = {
   },
   addedAt: "2026-11-01T00:00:00.000Z",
 };
+const MOVED_NEXT =
+  "Moved “The mayor said the ferry would keep…” to the next block. Press Ctrl+Z to undo.";
+const MADE_OWN =
+  "Made “The mayor said the ferry would keep…” its own paragraph. Press Ctrl+Z to undo.";
 const FIGURE = 7;
 const PARAGRAPH = 8;
 
@@ -159,7 +163,7 @@ test.describe("Move words to the next block — the caption example (#73)", () =
     await expect(next).toHaveAttribute("aria-keyshortcuts", "]");
 
     await page.keyboard.press("]");
-    await expect(status(page, `Moved “${STRAY}” to the next block.`)).toHaveCount(1);
+    await expect(status(page, MOVED_NEXT)).toHaveCount(1);
     // No highlight or chapter involved → applied at once, no dialog.
     await expect(page.getByRole("alertdialog")).toHaveCount(0);
     await expect(frameText(page, FIGURE)).toContainText(CAPTION);
@@ -253,7 +257,7 @@ test.describe("Move words to the next block — the caption example (#73)", () =
     await page.keyboard.press("]");
     await expect(dialog).toBeVisible();
     await dialog.getByRole("button", { name: "Move words" }).click();
-    await expect(status(page, `Moved “${STRAY}” to the next block.`)).toHaveCount(1);
+    await expect(status(page, MOVED_NEXT)).toHaveCount(1);
     await expect(frameText(page, PARAGRAPH)).toHaveText(`${STRAY} ${REST}`);
   });
 
@@ -261,9 +265,14 @@ test.describe("Move words to the next block — the caption example (#73)", () =
     await openReader(page);
     await selectStrayWords(page);
     await page.keyboard.press("p");
-    await expect(status(page, `Made “${STRAY}” its own paragraph.`)).toHaveCount(1);
+    await expect(status(page, MADE_OWN)).toHaveCount(1);
     await expect(frameText(page, FIGURE)).toContainText(CAPTION);
     await expect(frameText(page, PARAGRAPH)).toHaveText(STRAY);
     await expect(frameText(page, PARAGRAPH + 1)).toHaveText(REST);
+    // Ctrl+Z undoes it (#76's session history takes every command).
+    await page.keyboard.press("Control+z");
+    await expect(status(page, /^Undone: Made “The mayor said/)).toHaveCount(1);
+    await expect(frameText(page, FIGURE)).toContainText(STRAY);
+    await expect(frameText(page, PARAGRAPH)).toHaveText(REST);
   });
 });

@@ -22,6 +22,14 @@
 //     the accepted chapter consequences (completions and collection
 //     entries removed). Finished stays finished.
 //
+// Undo, redo and Restore original (#76) are the same preview / apply over a
+// different list: `previewUndoCorrection` (remove one, re-apply the rest —
+// later corrections that would no longer fit are `laterNotApplied`, a
+// consequence), `previewRestoreOriginal` (the empty list). An apply returns
+// the chapter rows its accepted consequences removed; the Correction view's
+// session history hands them back (`removedEarlier`) so an undo that brings
+// the chapter back puts them back, named in the preview's `restored`.
+//
 // Chapters: a chapter the correction leaves in place keeps its id and
 // title in the corrected structure (src/content/corrections/structure.ts),
 // so its completions and collection entries carry over untouched; only a
@@ -60,8 +68,13 @@ import { resolveWorkStructure } from "../content/chapterTargets";
 import { isSameText, textStamp } from "../content/sameText";
 import {
   chapterConsequences,
+  NO_REMOVED_ROWS,
+  reinstatableRows,
+  reinstateLabels,
   writeChapterConsequences,
+  writeReinstatedRows,
   type ChapterConsequence,
+  type RemovedChapterRows,
   type SameChapter,
 } from "./chapterConsequences";
 import { db } from "./db";
@@ -139,6 +152,16 @@ export interface CorrectionsPreview {
   /** The re-anchored reading position (null = no saved position). */
   readonly position: { readonly offset: number } | { readonly unmatched: true } | null;
   readonly chapters: readonly ChapterConsequence[];
+  /** Corrections that apply today and would no longer fit (#76: undoing an
+   * earlier correction a later one depends on). A consequence. */
+  readonly laterNotApplied: readonly {
+    readonly correction: Correction;
+    readonly reason: string;
+  }[];
+  /** Rows an earlier accepted consequence removed that this change brings
+   * back (session history only, #76) — and their plain-words labels. */
+  readonly reinstate: RemovedChapterRows;
+  readonly restored: readonly string[];
   /** True when nothing needs the reader's acceptance. */
   readonly clean: boolean;
   /** Snapshot identity of everything apply reads. */
@@ -230,7 +253,11 @@ interface Plan {
   location: LocationRecord | undefined;
 }
 
-async function plan(articleId: string, next: readonly Correction[]): Promise<Plan> {
+async function plan(
+  articleId: string,
+  next: readonly Correction[],
+  removedEarlier: RemovedChapterRows = NO_REMOVED_ROWS,
+): Promise<Plan> {
   const original = await originalOf(articleId);
   const current = await loadCorrections(articleId);
   const before = applyCorrections(original, current);
@@ -273,13 +300,43 @@ async function plan(articleId: string, next: readonly Correction[]): Promise<Pla
     position = offset === null ? { unmatched: true } : { offset };
   }
 
+  const afterStructure = resolveWorkStructure(after.article);
   const chapters = await chapterConsequences(
     articleId,
     resolveWorkStructure(before.article),
-    resolveWorkStructure(after.article),
+    afterStructure,
     sameChapter,
   );
-  const clean = chapters.length === 0 && highlights.every((h) => h.outcome === "confident");
+
+  // Later corrections that fit today and would not after this change.
+  const appliedNow = new Set(
+    current.filter((_, i) => before.outcomes[i]?.status === "applied").map((c) => c.id),
+  );
+  const laterNotApplied: CorrectionsPreview["laterNotApplied"][number][] = [];
+  next.forEach((correction, i) => {
+    const outcome = after.outcomes[i];
+    if (outcome?.status === "not-applied" && appliedNow.has(correction.id)) {
+      laterNotApplied.push({ correction, reason: outcome.reason });
+    }
+  });
+
+  const reinstate =
+    removedEarlier.completions.length + removedEarlier.entries.length === 0
+      ? NO_REMOVED_ROWS
+      : await reinstatableRows(articleId, removedEarlier, afterStructure);
+  const restored =
+    reinstate.entries.length + reinstate.completions.length === 0
+      ? []
+      : reinstateLabels(
+          reinstate,
+          afterStructure,
+          new Map((await db.collections.toArray()).map((c) => [c.id, c.name])),
+        );
+
+  const clean =
+    chapters.length === 0 &&
+    laterNotApplied.length === 0 &&
+    highlights.every((h) => h.outcome === "confident");
   return {
     preview: {
       articleId,
@@ -289,6 +346,9 @@ async function plan(articleId: string, next: readonly Correction[]): Promise<Pla
       highlights,
       position,
       chapters,
+      laterNotApplied,
+      reinstate,
+      restored,
       clean,
     },
     positions,
@@ -296,14 +356,46 @@ async function plan(articleId: string, next: readonly Correction[]): Promise<Pla
   };
 }
 
+export interface PreviewOptions {
+  /** Rows earlier accepted consequences removed in this session (#76):
+   * those whose chapter this change brings back are put back on apply. */
+  readonly removedEarlier?: RemovedChapterRows;
+}
+
 /** Preview replacing the article's corrections list with `next`. No writes. */
 export async function previewCorrectionsChange(
   articleId: string,
   next: readonly Correction[],
+  options: PreviewOptions = {},
 ): Promise<CorrectionsPreview> {
   const snapshot = await snapshotOf(articleId);
-  const { preview } = await plan(articleId, next);
+  const { preview } = await plan(articleId, next, options.removedEarlier);
   return { ...preview, snapshot };
+}
+
+/** Preview undoing ONE correction (any, not only the latest): remove it from
+ * the list and re-apply the rest. Later corrections that would no longer fit
+ * are the preview's `laterNotApplied`. Removing a not-applied correction
+ * (tidying the list) is the same operation and changes nothing else. */
+export async function previewUndoCorrection(
+  articleId: string,
+  correctionId: string,
+  options: PreviewOptions = {},
+): Promise<CorrectionsPreview> {
+  const current = await loadCorrections(articleId);
+  return previewCorrectionsChange(
+    articleId,
+    current.filter((c) => c.id !== correctionId),
+    options,
+  );
+}
+
+/** Preview Restore original: the article exactly as it was added. */
+export async function previewRestoreOriginal(
+  articleId: string,
+  options: PreviewOptions = {},
+): Promise<CorrectionsPreview> {
+  return previewCorrectionsChange(articleId, EMPTY, options);
 }
 
 /** Preview appending one correction. */
@@ -320,14 +412,21 @@ export interface ApplyOptions {
   readonly acceptConsequences?: boolean;
 }
 
+/** What an apply did that only the session can undo: the chapter rows its
+ * accepted consequences removed (#76). */
+export interface AppliedCorrectionsChange {
+  readonly removed: RemovedChapterRows;
+}
+
 /** Apply a preview — one atomic transaction (see the header). */
 export async function applyCorrectionsChange(
   preview: CorrectionsPreview,
   options: ApplyOptions = {},
-): Promise<void> {
+): Promise<AppliedCorrectionsChange> {
   const accepted = options.acceptConsequences === true;
   if (!preview.clean && !accepted) throw new CorrectionsRefusal(ACCEPTANCE_REQUIRED);
   const { articleId } = preview;
+  let removed: RemovedChapterRows = NO_REMOVED_ROWS;
   await db.transaction(
     "rw",
     [
@@ -343,7 +442,11 @@ export async function applyCorrectionsChange(
       if ((await snapshotOf(articleId)) !== preview.snapshot) {
         throw new CorrectionsRefusal(STALE_PREVIEW);
       }
-      const { positions, location, preview: fresh } = await plan(articleId, preview.corrections);
+      const {
+        positions,
+        location,
+        preview: fresh,
+      } = await plan(articleId, preview.corrections, preview.reinstate);
       // Consent covers exactly what the reader was shown: the same state
       // (snapshot) gives the same consequences, re-derived here.
       if (!fresh.clean && !accepted) throw new CorrectionsRefusal(ACCEPTANCE_REQUIRED);
@@ -361,7 +464,8 @@ export async function applyCorrectionsChange(
         };
         await db.corrections.put(record);
       }
-      if (accepted) await writeChapterConsequences(fresh.chapters, now);
+      if (accepted) removed = await writeChapterConsequences(fresh.chapters, now);
+      await writeReinstatedRows(fresh.reinstate, now);
 
       for (const [id, position] of positions) {
         const row = await db.highlights.get(id);
@@ -391,6 +495,7 @@ export async function applyCorrectionsChange(
       }
     },
   );
+  return { removed };
 }
 
 /** Delete an article's corrections (inside the caller's delete transaction). */
