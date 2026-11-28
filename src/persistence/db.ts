@@ -37,10 +37,10 @@ export interface LocationRecordRow {
   revision: number;
   graphemeOffset: number;
   savedAt: string;
-  /** Spec #68 / #71 — the corrections fingerprint of the substrate the
+  /** Spec #68 / #71 — the text-stamp fingerprint of the substrate the
    * offset refers to (src/content/sameText.ts); absent = the original.
    * Non-indexed: no version bump. */
-  corrections?: string;
+  fingerprint?: string;
 }
 
 /** Shape of a row in the `highlights` store (Phase 5 — ANNO-05/06/07, STATE-03).
@@ -59,7 +59,7 @@ export interface HighlightRecordRow {
   articleId: string;
   revision: number;
   /** Spec #68 / #71 — the substrate `position` refers to (absent = original). */
-  corrections?: string;
+  fingerprint?: string;
   position: { start: number; end: number };
   quote: { prefix: string; exact: string; suffix: string };
   createdAt: string;

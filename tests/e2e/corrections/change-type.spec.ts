@@ -8,11 +8,19 @@
 // keeps its text and spacing; an EPUB chapter's heading correction updates
 // that chapter's contents.
 import { test, expect, type Page } from "@playwright/test";
-import { modeToggle, switchMode, wipeDatabase } from "../annotations/_fixtures";
+import { modeToggle, switchMode } from "../annotations/_fixtures";
 import { seedStoreRows } from "../library/seedStoreRows";
-import { BASE } from "../_base";
-
-const para = (text: string) => ({ kind: "paragraph", content: [{ text, marks: [] }] });
+import {
+  dialog,
+  frameFor,
+  freshLibrary,
+  openReader,
+  openView as openArticleView,
+  para,
+  readingText,
+  status,
+  view,
+} from "./_corrections";
 const h2 = (text: string) => ({ kind: "heading", level: 2, content: [{ text, marks: [] }] });
 
 const CAPTION = "The morning ferry at the quay, photographed in 1932.";
@@ -81,32 +89,11 @@ const BOOK = {
   addedAt: "2026-10-01T00:00:00.000Z",
 };
 
-test.beforeEach(async ({ page }) => {
-  await wipeDatabase(page);
-  await page.goto(`${BASE}/#/`);
-  await page.reload();
-  await expect(page.getByRole("heading", { level: 1, name: "Saved articles" })).toBeVisible();
-});
+test.beforeEach(async ({ page }) => freshLibrary(page, []));
 
-const view = (page: Page) => page.locator(".correction-view");
-const dialog = (page: Page) => page.getByRole("alertdialog");
-const frameFor = (page: Page, text: string) =>
-  view(page).locator(".correction-block").filter({ hasText: text }).last();
-const readingText = (page: Page) =>
-  page
-    .locator(".page-fragment, .article-body:not(.article-body-measurement)")
-    .filter({ hasNot: page.locator(".correction-view") })
-    .first();
 const typeMenu = (page: Page) => page.locator(".correction-type-menu");
-const status = (page: Page, text: string | RegExp) =>
-  page.getByRole("status").filter({ hasText: text });
-
-async function openView(page: Page, id: string, title: string) {
-  await page.goto(`${BASE}/#/article/${id}`);
-  await expect(page.getByRole("heading", { level: 1, name: title })).toBeVisible();
-  await page.keyboard.press("c");
-  await expect(view(page)).toBeVisible();
-}
+const openView = (page: Page, id: string, title: string) =>
+  openArticleView(page, { id, provenance: { title } });
 
 /** Focus the block holding `text`, press T and choose `choice`. */
 async function changeType(page: Page, text: string, choice: string) {
@@ -130,10 +117,7 @@ test.describe("Change a block's type (#74)", () => {
     page,
   }) => {
     await seedStoreRows(page, "articles", [HARBOUR]);
-    await page.goto(`${BASE}/#/article/${HARBOUR.id}`);
-    await expect(
-      page.getByRole("heading", { level: 1, name: "The Harbour at Dawn" }),
-    ).toBeVisible();
+    await openReader(page, HARBOUR);
     expect(await contentsEntries(page)).not.toContain("Open water");
 
     await page.keyboard.press("c");
@@ -214,14 +198,14 @@ test.describe("Change a block's type (#74)", () => {
     await seedStoreRows(page, "articles", [HARBOUR]);
     await openView(page, HARBOUR.id, "The Harbour at Dawn");
     await changeType(page, "def tide(hour):", "Paragraph");
-    await expect(status(page, "Code is now Paragraph.")).toHaveCount(1);
+    await expect(status(page, "Code block is now Paragraph.")).toHaveCount(1);
     const frame = frameFor(page, "def tide(hour):");
     await expect(frame).toHaveAttribute("aria-label", "Paragraph");
     await expect(frame.locator("pre")).toHaveCount(0);
 
     await changeType(page, "def tide(hour):", "Code block");
     await expect(status(page, "Paragraph is now Code block.")).toHaveCount(1);
-    await expect(frame).toHaveAttribute("aria-label", "Code");
+    await expect(frame).toHaveAttribute("aria-label", "Code block");
     expect(await frame.locator("pre").textContent()).toBe(CODE);
 
     await page.keyboard.press("c");
@@ -261,8 +245,7 @@ test.describe("Change a block's type (#74)", () => {
       expect.arrayContaining(["Spring tides", "Neap tides"]),
     );
     // The other chapter of the book is untouched.
-    await page.goto(`${BASE}/#/article/${CHAPTER_IDS[0]}`);
-    await expect(page.getByRole("heading", { level: 1, name: "Chapter 1" })).toBeVisible();
+    await openReader(page, { id: CHAPTER_IDS[0]!, provenance: { title: "Chapter 1" } });
     expect(await contentsEntries(page)).not.toContain("Neap tides");
   });
 });

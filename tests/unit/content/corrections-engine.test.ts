@@ -18,8 +18,9 @@ import {
   blockTargetFor,
   hideAvailability,
   unhideAvailability,
-  REASONS,
+  HIDE_REASONS,
 } from "../../../src/content/corrections/engine";
+import { describeCorrection } from "../../../src/content/corrections/describe";
 import {
   articleGraphemeIndex,
   mainTextLength,
@@ -95,7 +96,7 @@ describe("pass-through — an article with no corrections", () => {
     const stray = hide(makeArticle([paragraph("Other text"), paragraph("More")]), [0]);
     const result = applyCorrections(article, [stray]);
     expect(result.article).toBe(article);
-    expect(result.outcomes[0]).toEqual({ status: "not-applied", reason: REASONS.notFound });
+    expect(result.outcomes[0]).toEqual({ status: "not-applied", reason: HIDE_REASONS.notFound });
   });
 
   it("returns the same result for the same inputs (runs once per corrections change)", () => {
@@ -130,7 +131,7 @@ describe("hide", () => {
     const article = chrome();
     const result = applyCorrections(article, [hide(article, [2])]);
     expect(result.fingerprint).toMatch(/^c/);
-    expect(textStamp(result.article)).toEqual({ revision: 1, corrections: result.fingerprint });
+    expect(textStamp(result.article)).toEqual({ revision: 1, fingerprint: result.fingerprint });
     expect(isSameText(textStamp(article), result.article)).toBe(false);
     expect(isSameText(textStamp(result.article), result.article)).toBe(true);
   });
@@ -207,7 +208,7 @@ describe("unhide", () => {
     const hid = hide(article, [2]);
     const un = unhide(article, [2], [hid]);
     const result = applyCorrections(article, [un]);
-    expect(result.outcomes[0]).toEqual({ status: "not-applied", reason: REASONS.notHidden });
+    expect(result.outcomes[0]).toEqual({ status: "not-applied", reason: HIDE_REASONS.notHidden });
   });
 
   it("is unavailable inside a hidden quotation, with a reason", () => {
@@ -220,7 +221,7 @@ describe("unhide", () => {
     expect(child.hidden).toBe(true);
     expect(unhideAvailability(child)).toEqual({
       available: false,
-      reason: REASONS.insideHidden,
+      reason: HIDE_REASONS.insideHidden,
     });
     expect(unhideAvailability(result.view.blocks[1]!)).toEqual({ available: true });
   });
@@ -250,7 +251,7 @@ describe("targets are found by text, in order", () => {
     const changed = makeArticle([paragraph("The ferry leaves at dawn."), paragraph("Gulls.")]);
     expect(applyCorrections(changed, [hid]).outcomes[0]).toEqual({
       status: "not-applied",
-      reason: REASONS.notFound,
+      reason: HIDE_REASONS.notFound,
     });
   });
 
@@ -285,7 +286,7 @@ describe("targets are found by text, in order", () => {
     ]);
     expect(applyCorrections(changed, [second]).outcomes[0]).toEqual({
       status: "not-applied",
-      reason: REASONS.ambiguous,
+      reason: HIDE_REASONS.ambiguous,
     });
   });
 
@@ -297,7 +298,10 @@ describe("targets are found by text, in order", () => {
     expect(result.outcomes).toEqual([{ status: "applied" }, { status: "applied" }]);
     // The same hide twice: the second finds the block already hidden.
     const twice = applyCorrections(article, [a, { ...a, id: "again" }]);
-    expect(twice.outcomes[1]).toEqual({ status: "not-applied", reason: REASONS.alreadyHidden });
+    expect(twice.outcomes[1]).toEqual({
+      status: "not-applied",
+      reason: HIDE_REASONS.alreadyHidden,
+    });
   });
 
   it("records the block's text, kind and depth — never only an index", () => {
@@ -320,7 +324,10 @@ describe("validity rules", () => {
     const first = hide(article, [0]);
     const result = applyCorrections(article, [first]);
     const last = result.view.blocks[1]!;
-    expect(hideAvailability(result, last)).toEqual({ available: false, reason: REASONS.lastBlock });
+    expect(hideAvailability(result, last)).toEqual({
+      available: false,
+      reason: HIDE_REASONS.lastBlock,
+    });
   });
 
   it("refuses to hide a block holding a footnote reference", () => {
@@ -340,7 +347,7 @@ describe("validity rules", () => {
     const result = applyCorrections(article, []);
     expect(hideAvailability(result, result.view.blocks[1]!)).toEqual({
       available: false,
-      reason: REASONS.footnoteReference,
+      reason: HIDE_REASONS.footnoteReference,
     });
   });
 
@@ -350,14 +357,72 @@ describe("validity rules", () => {
     expect(hideAvailability(result, result.view.blocks[0]!)).toEqual({ available: true });
     expect(hideAvailability(result, result.view.blocks[2]!)).toEqual({ available: true });
   });
+});
 
-  it("refuses a figure with no text to find it by", () => {
-    const article = makeArticle([paragraph("Body."), { kind: "figure", alt: "", caption: [] }]);
+describe("hiding a block with no text (spec #68, story 53)", () => {
+  // An image with no alt text and no caption has no words of its own; it is
+  // found by the text either side of it (and its image source), the way a
+  // highlight's quote carries context — and only a confident match applies.
+  const image = (src: string): Block => ({ kind: "figure", alt: "", src, caption: [] });
+  const withImage = () =>
+    makeArticle([
+      paragraph("The ferry leaves at dawn."),
+      image("https://example.com/tracking-pixel.png"),
+      paragraph("Gulls follow it out past the breakwater."),
+    ]);
+
+  it("offers hiding an image with no alt text or caption, and hides it", () => {
+    const article = withImage();
     const result = applyCorrections(article, []);
-    expect(hideAvailability(result, result.view.blocks[1]!)).toEqual({
-      available: false,
-      reason: REASONS.noText,
-    });
+    expect(hideAvailability(result, result.view.blocks[1]!)).toEqual({ available: true });
+    const hideImage = hide(article, [1]);
+    const after = applyCorrections(article, [hideImage]);
+    expect(after.outcomes).toEqual([{ status: "applied" }]);
+    expect(after.article.blocks.map((b) => b.kind)).toEqual(["paragraph", "paragraph"]);
+    expect(after.view.blocks[1]!.hidden).toBe(true);
+    // ...and unhides it again by the same neighbours.
+    const back = unhide(article, [1], [hideImage]);
+    expect(applyCorrections(article, [hideImage, back]).article.blocks).toEqual(article.blocks);
+  });
+
+  it("re-applies to the same image in a fresh copy with the same neighbours", () => {
+    const hideImage = hide(withImage(), [1]);
+    const fresh = makeArticle([...withImage().blocks], { revision: 2 });
+    const after = applyCorrections(fresh, [hideImage]);
+    expect(after.outcomes).toEqual([{ status: "applied" }]);
+    expect(after.article.blocks).toHaveLength(2);
+  });
+
+  it("is not applied when the text around the image changed", () => {
+    const hideImage = hide(withImage(), [1]);
+    const changed = makeArticle([
+      paragraph("A different opening line."),
+      image("https://example.com/other.png"),
+      paragraph("And a different closing line."),
+    ]);
+    expect(applyCorrections(changed, [hideImage]).outcomes).toEqual([
+      { status: "not-applied", reason: HIDE_REASONS.notFound },
+    ]);
+  });
+
+  it("describes the hidden image by the words just before it", () => {
+    expect(describeCorrection(hide(withImage(), [1]))).toBe(
+      "Hid the figure after “The ferry leaves at dawn.”",
+    );
+  });
+
+  it("tells two identical images apart by the text around them", () => {
+    const twins = makeArticle([
+      paragraph("First caption-less image follows."),
+      image("https://example.com/same.png"),
+      paragraph("Second caption-less image follows."),
+      image("https://example.com/same.png"),
+      paragraph("The end."),
+    ]);
+    const hideSecond = hide(twins, [3]);
+    const after = applyCorrections(twins, [hideSecond]);
+    expect(after.outcomes).toEqual([{ status: "applied" }]);
+    expect(after.view.blocks.map((b) => b.hidden)).toEqual([false, false, false, true, false]);
   });
 });
 

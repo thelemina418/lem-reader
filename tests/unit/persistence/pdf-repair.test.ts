@@ -361,7 +361,7 @@ describe("explicit PDF structural repair", () => {
     // identity (#78: a repair changes structure without a revision bump).
     expect(await db.location.get([original.id, 1])).toEqual({
       ...location,
-      corrections: repaired.repairStamp,
+      fingerprint: repaired.repairStamp,
     });
     expect(await db.highlights.get(highlight.id)).toEqual(highlight);
     expect((await db.notes.get("saved-note"))!.text).toBe("Keep this note");

@@ -48,7 +48,8 @@ import type {
   NoteDraftRecord,
   NoteRecord,
 } from "../../content/schema";
-import { deriveQuoteSelector, resolveQuoteSelector } from "../../content/normalizeText";
+import { deriveQuoteSelector } from "../../content/normalizeText";
+import { resolveStoredHighlight } from "../../annotations/storedHighlight";
 import { isHiddenByCorrections } from "../../content/corrections/engine";
 import type { TextPositionSelector } from "../../content/normalizeText";
 import {
@@ -393,7 +394,9 @@ export function useAnnotationState(
         // Eager batch-resolve each record (D5-02 tri-state).
         const resolved: ResolvedHighlight[] = [];
         for (const record of result.highlights) {
-          const resolution = resolveQuoteSelector(article, record.quote, record.position);
+          // Spec #68 — never re-attached by the loose fallback across a
+          // corrected block boundary (src/annotations/storedHighlight.ts).
+          const resolution = resolveStoredHighlight(article, record);
           let status: HighlightStatus;
           let resolvedPosition: TextPositionSelector | null;
           if (resolution === "ambiguous") {

@@ -14,9 +14,15 @@ import {
   selectRangeInBlock,
   switchMode,
   turnToPage,
+  waitForReadingSurface,
   wipeDatabase,
   PIXEL_SVG,
 } from "../annotations/_fixtures";
+import {
+  expectNoLocationSave,
+  locationSaveMarker,
+  waitForLocationSaved,
+} from "../location-readiness";
 import { BASE } from "../_base";
 import { installFakeSpeech } from "../readaloud/_speech";
 import { playAndAwaitProbe, readLocationOffset } from "../readaloud/_harness";
@@ -143,21 +149,26 @@ test.describe("Correction view (#70)", () => {
     page,
   }) => {
     await openArticle(page, FIXTURE);
+    const turned = await locationSaveMarker(page);
     await turnToPage(page, 1);
     // Let the page turn's debounced position save land first.
-    await expect.poll(() => readLocationOffset(page, FIXTURE)).not.toBeNull();
-    await page.waitForTimeout(1500);
+    await waitForLocationSaved(page, FIXTURE, turned);
     const savedBefore = await readLocationOffset(page, FIXTURE);
 
+    // Entering flushes the entry passage as the saved position (#71); only
+    // what happens after that is "in the view".
+    const entering = await locationSaveMarker(page);
     await enterView(page);
+    await waitForLocationSaved(page, FIXTURE, entering);
+    const viewMarker = await locationSaveMarker(page);
     // Scroll back toward the start: a passage other than the entry one.
     const entered = await topVisibleBlock(page, ".correction-view");
     const target = 1;
     expect(entered).toBeGreaterThan(target);
     await scrollViewToBlock(page, target);
     await expect.poll(() => topVisibleBlock(page, ".correction-view")).toBe(target);
-    // Beyond the save debounce: still the pre-entry position.
-    await page.waitForTimeout(1600);
+    // Beyond the save debounce: no save lands while in the view.
+    await expectNoLocationSave(page, FIXTURE, viewMarker, 1600);
     expect(await readLocationOffset(page, FIXTURE)).toBe(savedBefore);
 
     await leaveView(page);
@@ -180,7 +191,7 @@ test.describe("Correction view (#70)", () => {
     expect(labels.length).toBe(await blocks.count());
     for (const l of labels) {
       expect(l).toMatch(
-        /^(Paragraph|Heading [1-6]|Quotation|Code|Figure( with caption)?|Bulleted list|Numbered list|Footnote reference|Unsupported content)$/,
+        /^(Paragraph|Heading [1-6]|Quotation|Code block|Figure( with caption)?|Bulleted list|Numbered list|Footnote reference|Unsupported block)$/,
       );
     }
     expect(labels).toContain("Paragraph");
@@ -192,7 +203,7 @@ test.describe("Correction view (#70)", () => {
     await expect(focused).toHaveAttribute("role", "group");
     await expect(focused).toHaveAttribute(
       "aria-label",
-      /^(Paragraph|Heading [1-6]|Quotation|Code|Figure.*|.*list|Footnote reference|Unsupported content)$/,
+      /^(Paragraph|Heading [1-6]|Quotation|Code block|Figure.*|.*list|Footnote reference|Unsupported block)$/,
     );
     await page.keyboard.press("ArrowDown");
     await expect(page.locator(".correction-block:focus")).not.toHaveAttribute(
@@ -256,7 +267,9 @@ test.describe("Correction view (#70)", () => {
     await expect(highlightControls(page)).toHaveCount(0);
 
     expect(await selectRangeInBlock(page, idx, 14, 30)).toBe(true);
-    await page.waitForTimeout(300);
+    // The view's own selection commands answer the selection (#73) — the
+    // reading toolbar never does.
+    await expect(page.locator(".correction-selection-commands")).toBeVisible();
     await expect(page.locator(".selection-toolbar")).toHaveCount(0);
 
     // No link in the view navigates or is a tab stop.
@@ -289,7 +302,8 @@ test.describe("Correction view (#70)", () => {
     await enterView(page);
     await expect(bar.getByRole("button", { name: "Play" })).toBeVisible();
     await leaveView(page);
-    await page.waitForTimeout(500);
+    // The reading surface is back (any resume would have run by now).
+    await waitForReadingSurface(page);
     await expect(bar.getByRole("button", { name: "Play" })).toBeVisible();
   });
 

@@ -5,11 +5,15 @@
 // "Hidden", and Unhide brings it back exactly. A hide with no consequences
 // applies with no dialog (#72). Each change is announced in the status region.
 import { test, expect, type Page } from "@playwright/test";
-import { modeToggle, switchMode, wipeDatabase } from "../annotations/_fixtures";
-import { seedStoreRows } from "../library/seedStoreRows";
-import { BASE } from "../_base";
-
-const para = (text: string) => ({ kind: "paragraph", content: [{ text, marks: [] }] });
+import { modeToggle, switchMode } from "../annotations/_fixtures";
+import {
+  frameFor,
+  freshLibrary,
+  openReader as openArticle,
+  para,
+  readingText,
+  view,
+} from "./_corrections";
 
 const CHROME = "Share this article on social media";
 const ARTICLE = {
@@ -40,31 +44,9 @@ const ARTICLE = {
   addedAt: "2026-11-01T00:00:00.000Z",
 };
 
-test.beforeEach(async ({ page }) => {
-  await wipeDatabase(page);
-  // Remount AFTER the wipe so the app recreates the Dexie schema.
-  await page.goto(`${BASE}/#/`);
-  await page.reload();
-  await expect(page.getByRole("heading", { level: 1, name: "Saved articles" })).toBeVisible();
-  await seedStoreRows(page, "articles", [ARTICLE]);
-});
+test.beforeEach(async ({ page }) => freshLibrary(page, [ARTICLE]));
 
-const view = (page: Page) => page.locator(".correction-view");
-const readingText = (page: Page) =>
-  page
-    .locator(".page-fragment, .article-body:not(.article-body-measurement)")
-    .filter({ hasNot: page.locator(".correction-view") })
-    .first();
-
-async function openReader(page: Page) {
-  await page.goto(`${BASE}/#/article/${ARTICLE.id}`);
-  await expect(page.getByRole("heading", { level: 1, name: "The Harbour at Dawn" })).toBeVisible();
-  await expect(readingText(page)).toContainText("ferry leaves at dawn");
-}
-
-function frameFor(page: Page, text: string) {
-  return view(page).locator(".correction-block").filter({ hasText: text }).last();
-}
+const openReader = (page: Page) => openArticle(page, ARTICLE, "ferry leaves at dawn");
 
 test.describe("Hide and unhide a block (#71)", () => {
   test("a hidden block leaves paged and scrolling reading and comes back on unhide", async ({

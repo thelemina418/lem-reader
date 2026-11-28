@@ -31,7 +31,7 @@
 // the chapter back puts them back, named in the preview's `restored`.
 //
 // Chapters: a chapter the correction leaves in place keeps its id and
-// title in the corrected structure (src/content/corrections/structure.ts),
+// title in the corrected structure (src/content/corrections/correctedStructure.ts),
 // so its completions and collection entries carry over untouched; only a
 // chapter that is genuinely removed (its heading hidden) — or whose title
 // changed — is a consequence.
@@ -45,7 +45,6 @@ import {
   ArticleSchema,
   CorrectionsRecordSchema,
   HighlightRecordSchema,
-  LocationRecordSchema,
   type Correction,
   type CorrectionsRecord,
   type LocationRecord,
@@ -76,11 +75,16 @@ import {
   type SameChapter,
 } from "./chapterConsequences";
 import { db } from "./db";
+import { resolveStoredHighlight } from "../annotations/storedHighlight";
+import {
+  ACCEPTANCE_REQUIRED,
+  everyRevision,
+  latestOf,
+  readerRowsSnapshot,
+  STALE_PREVIEW,
+} from "./readerRows";
 
-export const STALE_PREVIEW =
-  "Something changed while this was open. Nothing was changed; try again.";
-export const ACCEPTANCE_REQUIRED =
-  "This correction affects highlights or chapters. Nothing was changed.";
+export { STALE_PREVIEW, ACCEPTANCE_REQUIRED };
 export const NOT_CORRECTABLE = "This article can't be corrected. Nothing was changed.";
 
 export class CorrectionsRefusal extends Error {}
@@ -146,7 +150,7 @@ export interface ContentsChange {
 }
 
 /** Chapters in one structure and not the other (ids carry over for
- * chapters a correction leaves in place — corrections/structure.ts). */
+ * chapters a correction leaves in place — corrections/correctedStructure.ts). */
 function contentsChanges(
   before: WorkStructure | null,
   after: WorkStructure | null,
@@ -206,38 +210,6 @@ async function originalOf(articleId: string): Promise<CanonicalArticle> {
   return parsed.data;
 }
 
-function revisionsOf(table: typeof db.highlights | typeof db.location, articleId: string) {
-  return table
-    .where("[articleId+revision]")
-    .between([articleId, 0], [articleId, Number.MAX_SAFE_INTEGER]);
-}
-
-function everyRevision(table: typeof db.highlights | typeof db.location, articleId: string) {
-  return revisionsOf(table, articleId).toArray() as Promise<unknown[]>;
-}
-
-async function snapshotOf(articleId: string): Promise<string> {
-  const [row, corrections, highlights, locations, completions, collections] = await Promise.all([
-    db.articles.get(articleId),
-    db.corrections.get(articleId),
-    everyRevision(db.highlights, articleId),
-    everyRevision(db.location, articleId),
-    db.completions.toArray(),
-    db.collections.toArray(),
-  ]);
-  return JSON.stringify({ row, corrections, highlights, locations, completions, collections });
-}
-
-/** The latest valid saved position across revisions. */
-function latest(rows: unknown[]): LocationRecord | undefined {
-  return rows
-    .flatMap((row) => {
-      const parsed = LocationRecordSchema.safeParse(row);
-      return parsed.success ? [parsed.data] : [];
-    })
-    .sort((x, y) => (x.savedAt < y.savedAt ? 1 : x.savedAt > y.savedAt ? -1 : 0))[0];
-}
-
 /**
  * Carry a reading offset across a corrections change. When both sides share
  * the same view article (hide / unhide change only what is read, never the
@@ -289,11 +261,12 @@ async function plan(
   // shown article) → where the same words land after.
   const highlights: CorrectionHighlightConsequence[] = [];
   const positions = new Map<string, { start: number; end: number }>();
-  for (const row of await everyRevision(db.highlights, articleId)) {
+  for (const row of await everyRevision(db.highlights, articleId).toArray()) {
     const parsed = HighlightRecordSchema.safeParse(row);
     if (!parsed.success) continue;
     const record = parsed.data;
-    const now = resolveQuoteSelector(before.article, record.quote, record.position);
+    // What the reader shows today (src/annotations/storedHighlight.ts).
+    const now = resolveStoredHighlight(before.article, record);
     if (typeof now === "string") continue; // not shown confidently today — untouched
     let outcome: CorrectionHighlightOutcome;
     // Corrections never change words, so a highlight whose text matches
@@ -322,7 +295,7 @@ async function plan(
     highlights.push({ highlightId: record.id, exact: record.quote.exact, outcome });
   }
 
-  const location = latest(await everyRevision(db.location, articleId));
+  const location = latestOf(await everyRevision(db.location, articleId).toArray());
   let position: CorrectionsPreview["position"] = null;
   if (location) {
     const offset = isSameText(location, before.article)
@@ -414,7 +387,7 @@ export async function previewCorrectionsChange(
   next: readonly Correction[],
   options: PreviewOptions = {},
 ): Promise<CorrectionsPreview> {
-  const snapshot = await snapshotOf(articleId);
+  const snapshot = await readerRowsSnapshot(articleId);
   const { preview } = await plan(articleId, next, options.removedEarlier);
   return { ...preview, snapshot };
 }
@@ -485,7 +458,7 @@ export async function applyCorrectionsChange(
       db.collectionActiveEntries,
     ],
     async () => {
-      if ((await snapshotOf(articleId)) !== preview.snapshot) {
+      if ((await readerRowsSnapshot(articleId)) !== preview.snapshot) {
         throw new CorrectionsRefusal(STALE_PREVIEW);
       }
       const {
@@ -516,12 +489,12 @@ export async function applyCorrectionsChange(
       for (const [id, position] of positions) {
         const row = await db.highlights.get(id);
         if (!row) continue;
-        const { corrections: _old, ...rest } = row;
+        const { fingerprint: _old, ...rest } = row;
         void _old;
         await db.highlights.put({
           ...rest,
           position,
-          ...(stamp.corrections !== undefined ? { corrections: stamp.corrections } : {}),
+          ...(stamp.fingerprint !== undefined ? { fingerprint: stamp.fingerprint } : {}),
         });
       }
 
@@ -529,14 +502,14 @@ export async function applyCorrectionsChange(
         // One position per article (the saved passage) at the current
         // revision, stamped with the new substrate; the reader's savedAt is
         // kept (a correction is not reading).
-        await revisionsOf(db.location, articleId).delete();
+        await everyRevision(db.location, articleId).delete();
         await db.location.put({
           schemaVersion: 1,
           articleId,
           revision: stamp.revision,
           graphemeOffset: fresh.position.offset,
           savedAt: location.savedAt,
-          ...(stamp.corrections !== undefined ? { corrections: stamp.corrections } : {}),
+          ...(stamp.fingerprint !== undefined ? { fingerprint: stamp.fingerprint } : {}),
         });
       }
     },

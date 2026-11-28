@@ -19,7 +19,7 @@
 import { splitParagraphRuns } from "../../pagination/splitBlock";
 import { blockNormalizedText, graphemeClusters, inlineText } from "../normalizeText";
 import type { Block, CanonicalArticle, InlineRun } from "../types";
-import { blockPathKey } from "../correctionView";
+import { BLOCK_KIND_NOUN, blockPathKey } from "../correctionView";
 
 export const SPLIT_MERGE_REASONS = {
   hiddenBlock: "This block is hidden. Unhide it first.",
@@ -33,7 +33,7 @@ export const SPLIT_MERGE_REASONS = {
   mergeKind: "Only paragraphs and headings can be merged.",
   mergeNothingNext: "Nothing comes after this block to merge with.",
   mergeNextKind: (noun: string) =>
-    `The block after this one is a ${noun}; only paragraphs and headings can be merged.`,
+    `The block after this one is ${/^[aeiou]/.test(noun) ? "an" : "a"} ${noun}; only paragraphs and headings can be merged.`,
   mergeNextHidden: "The block after this one is hidden. Unhide it first.",
   mergeNextChanged: "The block it was merged with no longer follows it.",
 } as const;
@@ -49,24 +49,6 @@ export interface PlacedBlock {
 type InlineBlock = Extract<Block, { kind: "paragraph" | "heading" }>;
 const isInline = (block: Block): block is InlineBlock =>
   block.kind === "paragraph" || block.kind === "heading";
-
-function nounFor(block: Block): string {
-  switch (block.kind) {
-    case "blockquote":
-      return "quotation";
-    case "bulleted-list":
-    case "numbered-list":
-      return "list";
-    case "code-block":
-      return "code block";
-    case "footnote-reference":
-      return "footnote reference";
-    case "unsupported":
-      return "block of unsupported content";
-    default:
-      return block.kind;
-  }
-}
 
 // ── Split ──────────────────────────────────────────────────────────────────
 
@@ -143,7 +125,7 @@ export function mergeBlocks(first: Block, next: Block): Block | null {
 export function mergeRefusal(first: Block, next: Block | null, nextHidden: boolean): string | null {
   if (!isInline(first)) return R.mergeKind;
   if (next === null) return R.mergeNothingNext;
-  if (!isInline(next)) return R.mergeNextKind(nounFor(next));
+  if (!isInline(next)) return R.mergeNextKind(BLOCK_KIND_NOUN[next.kind]);
   if (nextHidden) return R.mergeNextHidden;
   return null;
 }

@@ -9,11 +9,8 @@ import { test, expect } from "@playwright/test";
 import { ArticleSchema, type Correction } from "../../../src/content/schema";
 import { normalizeText } from "../../../src/content/normalizeText";
 import { applyCorrections, blockCorrection } from "../../../src/content/corrections/engine";
-import { wipeDatabase } from "../annotations/_fixtures";
 import { seedStoreRows } from "../library/seedStoreRows";
-import { BASE } from "../_base";
-
-const para = (text: string) => ({ kind: "paragraph", content: [{ text, marks: [] }] });
+import { freshLibrary, openReader, para, readingText } from "./_corrections";
 const FERRY = "The ferry leaves at dawn, before the fog has lifted off the water.";
 const SHARE = "Share this article on social media";
 const GULLS = "Gulls follow it out past the breakwater and wheel back toward the town.";
@@ -64,11 +61,7 @@ const hideNewsletter = hideOf(NEWSLETTER, [hideShare]);
 test("the Reprocessing preview lists corrections that no longer fit; apply keeps them as not applied", async ({
   page,
 }) => {
-  await wipeDatabase(page);
-  await page.goto(`${BASE}/#/`);
-  await page.reload();
-  await expect(page.getByRole("heading", { level: 1, name: "Saved articles" })).toBeVisible();
-  await seedStoreRows(page, "articles", [saved]);
+  await freshLibrary(page, [saved]);
   await seedStoreRows(page, "corrections", [
     {
       schemaVersion: 1,
@@ -110,11 +103,8 @@ test("the Reprocessing preview lists corrections that no longer fit; apply keeps
   await expect(page.locator("dialog.edit-metadata")).not.toBeVisible();
 
   // The kept hide still holds in reading; the sign-up is gone with the page.
-  await page.goto(`${BASE}/#/article/${saved.id}`);
-  await expect(page.getByRole("heading", { level: 1, name: saved.provenance.title })).toBeVisible();
-  const reading = page
-    .locator(".page-fragment, .article-body:not(.article-body-measurement)")
-    .first();
+  await openReader(page, saved);
+  const reading = readingText(page);
   await expect(reading).toContainText("ferry leaves at dawn");
   await expect(reading).not.toContainText(SHARE);
 

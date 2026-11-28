@@ -128,7 +128,7 @@ describe("applying a correction", () => {
     expect(row!.position).toEqual({ start, end: start + [..."past the breakwater"].length });
     expect(row!.quote).toEqual(gulls.quote);
     expect(row!.revision).toBe(2);
-    expect(row!.corrections).toMatch(/^c/);
+    expect(row!.fingerprint).toMatch(/^c/);
   });
 
   it("re-anchors the reading position to the same words", async () => {
@@ -154,7 +154,7 @@ describe("applying a correction", () => {
         revision: 2,
         graphemeOffset: [...corrected.slice(0, corrected.indexOf("Gulls follow"))].length,
         savedAt: "2026-11-01T00:00:00.000Z",
-        corrections: expect.stringMatching(/^c/),
+        fingerprint: expect.stringMatching(/^c/),
       },
     ]);
   });

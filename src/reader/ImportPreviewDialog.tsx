@@ -451,7 +451,9 @@ export function ImportPreviewDialog({
               preview.danglingAssetArticles > 0 ||
               preview.detachedArticleNotes > 0 ||
               preview.unresolvedCollections > 0 ||
-              preview.conflictingCollections > 0) && (
+              preview.conflictingCollections > 0 ||
+              preview.corrections.notApplied > 0 ||
+              preview.corrections.setAside > 0) && (
               <ul className="import-preview-warnings">
                 {preview.danglingAssetArticles > 0 && (
                   <li>
@@ -498,6 +500,25 @@ export function ImportPreviewDialog({
                     {preview.conflictingCollections === 1
                       ? "1 collection in the bundle differs from your matching collection — you'll choose for it."
                       : `${preview.conflictingCollections} collections in the bundle differ from your matching collections — you'll choose for each.`}
+                  </li>
+                )}
+                {preview.corrections.notApplied > 0 && (
+                  <li>
+                    {/* Spec #68 / #77: corrections that don't fit their
+                     * winning original are kept as not applied (never
+                     * stripped) — said before the import, not only after. */}
+                    {preview.corrections.notApplied === 1
+                      ? "1 correction won't fit its article and will be kept as not applied."
+                      : `${preview.corrections.notApplied} corrections won't fit their article and will be kept as not applied.`}
+                  </li>
+                )}
+                {preview.corrections.setAside > 0 && (
+                  <li>
+                    {/* Spec #68 / #77: this device's copy wins and keeps its
+                     * own corrections; the incoming ones are set aside. */}
+                    {preview.corrections.setAside === 1
+                      ? "Corrections for 1 article will be set aside: the copy on this device keeps its own corrections."
+                      : `Corrections for ${preview.corrections.setAside} articles will be set aside: the copies on this device keep their own corrections.`}
                   </li>
                 )}
                 {preview.resolution.ambiguous > 0 && (

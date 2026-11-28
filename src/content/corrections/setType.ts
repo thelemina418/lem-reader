@@ -31,7 +31,9 @@ import { blockPathKey, type CorrectionViewBlock } from "../correctionView";
 import type { Block, InlineRun } from "../types";
 import type { BlockTypeChoice, Correction } from "../schema";
 import {
-  REASONS,
+  HIDE_REASONS,
+  notFoundReason,
+  reshapedBlocks,
   blockTargetFor,
   engineStateOf,
   isHiddenUnder,
@@ -329,15 +331,43 @@ function siblingsAt(blocks: readonly Block[], parent: readonly number[]): readon
   return list;
 }
 
+function isHiddenAt(state: EngineState, laid: LaidBlock): boolean {
+  return state.hidden.has(laid.key) || isHiddenUnder(state.hidden, laid.path);
+}
+
+/** Does `block` already have the type `to` gives? */
+function hasType(block: Block, to: BlockTypeChoice): boolean {
+  switch (to.type) {
+    case "paragraph":
+      return block.kind === "paragraph";
+    case "heading":
+      return block.kind === "heading" && block.level === to.level;
+    case "quotation":
+      return block.kind === "blockquote";
+    case "caption":
+      return block.kind === "figure";
+    case "code-block":
+      return block.kind === "code-block";
+  }
+}
+
 /** The engine handler for "set-type" (validity + state change). */
 export function setTypeHandler(
   state: EngineState,
   correction: Extract<Correction, { kind: "set-type" }>,
 ): Step {
   const found = resolveBlockTarget(state.article, correction.target);
-  if (found === "orphan") return { ok: false, reason: REASONS.notFound };
-  if (found === "ambiguous") return { ok: false, reason: REASONS.ambiguous };
-  if (state.hidden.has(found.key) || isHiddenUnder(state.hidden, found.path)) {
+  if (found === "orphan") {
+    // Re-application (Reprocessing): the words may now arrive already in
+    // the chosen type — the correction holds as it stands (applied, no-op).
+    const already = reshapedBlocks(state.article, correction.target).filter((b) =>
+      hasType(b.block, correction.to),
+    );
+    if (already.length === 1 && !isHiddenAt(state, already[0]!)) return { ok: true, state };
+    return { ok: false, reason: notFoundReason(state.article, correction.target) };
+  }
+  if (found === "ambiguous") return { ok: false, reason: HIDE_REASONS.ambiguous };
+  if (isHiddenAt(state, found)) {
     return { ok: false, reason: SET_TYPE_REASONS.hidden };
   }
   const change = convert(state, found, correction.to);
@@ -365,12 +395,14 @@ export function setTypeAvailability(
     id: "availability",
     createdAt: new Date(0).toISOString(),
   });
-  if (!correction) return { available: false, reason: REASONS.noText };
+  if (!correction) return { available: false, reason: HIDE_REASONS.noText };
   const state = engineStateOf(result);
   const found = resolveBlockTarget(state.article, correction.target);
-  if (found === "orphan") return { available: false, reason: REASONS.notFound };
+  if (found === "orphan") {
+    return { available: false, reason: notFoundReason(state.article, correction.target) };
+  }
   if (found === "ambiguous" || found.key !== blockPathKey(block.path)) {
-    return { available: false, reason: REASONS.ambiguous };
+    return { available: false, reason: HIDE_REASONS.ambiguous };
   }
   const step = setTypeHandler(state, correction);
   return step.ok ? { available: true } : { available: false, reason: step.reason };

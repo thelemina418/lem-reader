@@ -6,14 +6,19 @@
 // back to the block on close, Cancel / Esc change nothing, and confirming
 // applies the correction together with the accepted chapter changes.
 import { test, expect, type Page } from "@playwright/test";
-import { wipeDatabase } from "../annotations/_fixtures";
 import { seedStoreRows } from "../library/seedStoreRows";
-import { BASE } from "../_base";
 import { ArticleSchema } from "../../../src/content/schema";
-import { deriveQuoteSelector, normalizeText } from "../../../src/content/normalizeText";
 import { resolveWorkStructure } from "../../../src/content/chapterTargets";
-
-const para = (text: string) => ({ kind: "paragraph", content: [{ text, marks: [] }] });
+import {
+  dialog,
+  frameFor,
+  freshLibrary,
+  highlightRow as highlightOn,
+  openView as openArticleView,
+  para,
+  readingText,
+  view,
+} from "./_corrections";
 const h2 = (text: string) => ({ kind: "heading", level: 2, content: [{ text, marks: [] }] });
 
 const GULLS = "Gulls follow it out past the breakwater and wheel back toward the town.";
@@ -50,21 +55,7 @@ const [, OPEN_WATER] = resolveWorkStructure(canonical)!.destinations.filter(
   (d) => d.kind === "chapter",
 );
 
-function highlightRow() {
-  const exact = "past the breakwater";
-  const text = normalizeText(canonical);
-  const start = [...text.slice(0, text.indexOf(exact))].length;
-  const position = { start, end: start + [...exact].length };
-  return {
-    schemaVersion: 1,
-    id: "h-gulls",
-    articleId: ARTICLE.id,
-    revision: 1,
-    position,
-    quote: deriveQuoteSelector(canonical, position),
-    createdAt: "2026-11-02T00:00:00.000Z",
-  };
-}
+const highlightRow = () => highlightOn(ARTICLE, "h-gulls", "past the breakwater");
 
 const STAMP = "2026-11-02T00:00:00.000Z";
 const chapterTarget = {
@@ -73,31 +64,11 @@ const chapterTarget = {
   destinationId: OPEN_WATER!.id,
 };
 
-test.beforeEach(async ({ page }) => {
-  await wipeDatabase(page);
-  await page.goto(`${BASE}/#/`);
-  await page.reload();
-  await expect(page.getByRole("heading", { level: 1, name: "Saved articles" })).toBeVisible();
-  await seedStoreRows(page, "articles", [ARTICLE]);
-});
+test.beforeEach(async ({ page }) => freshLibrary(page, [ARTICLE]));
 
-const view = (page: Page) => page.locator(".correction-view");
-const dialog = (page: Page) => page.getByRole("alertdialog");
-const frameFor = (page: Page, text: string) =>
-  view(page).locator(".correction-block").filter({ hasText: text }).last();
-const readingText = (page: Page) =>
-  page
-    .locator(".page-fragment, .article-body:not(.article-body-measurement)")
-    .filter({ hasNot: page.locator(".correction-view") })
-    .first();
 const mark = (page: Page) => page.locator('mark.highlight[data-highlight-id="h-gulls"]');
 
-async function openView(page: Page) {
-  await page.goto(`${BASE}/#/article/${ARTICLE.id}`);
-  await expect(page.getByRole("heading", { level: 1, name: "The Harbour at Dawn" })).toBeVisible();
-  await page.keyboard.press("c");
-  await expect(view(page)).toBeVisible();
-}
+const openView = (page: Page) => openArticleView(page, ARTICLE);
 
 async function readStore(page: Page, store: string): Promise<unknown[]> {
   return page.evaluate(

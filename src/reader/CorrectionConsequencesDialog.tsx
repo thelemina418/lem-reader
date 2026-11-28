@@ -14,7 +14,7 @@
 // Nothing here writes: the parent applies on confirm. Cancel leaves
 // everything untouched.
 import { useEffect, useRef, useState } from "react";
-import { ConsequenceChecklist } from "../ingestion/library/reprocessParts";
+import { ConsequenceChecklist } from "../ui/ConsequenceChecklist";
 import { describeCorrection } from "../content/corrections/describe";
 import type { DroppedMark } from "../content/corrections/engine";
 import type {
@@ -27,7 +27,8 @@ const OUTCOME_COPY: Record<CorrectionHighlightOutcome, string> = {
   hidden: "will not show while hidden; returns if you unhide",
   ambiguous: "ambiguous — it will be shown as needing your attention",
   orphan: "orphaned — it will be shown as orphaned, never moved",
-  crosses: "crosses a block boundary that moves — it will no longer match its words exactly",
+  crosses:
+    "crosses a block boundary that moves — it will be shown as orphaned until the boundary is back, never re-attached",
 };
 
 /** Issue #74 — a dropped mark in words. */

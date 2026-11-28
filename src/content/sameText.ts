@@ -13,13 +13,13 @@
 // its stamp is exactly `{ revision }`, so stored rows stay byte-identical.
 // The correction engine registers the fingerprint of every corrected
 // article it builds (`registerCorrectionsFingerprint`); records carry it as
-// their `corrections` field. Consumers must never compare revisions
+// their `fingerprint` field. Consumers must never compare revisions
 // directly for "same text" purposes.
 //
 // #78 — PDF repair rewrites the original's block kinds WITHOUT bumping the
 // revision (it changes structure, not words). A repaired original carries
 // its own `repairStamp` (a fingerprint of the repaired blocks) on the row,
-// and that stamp rides the same `corrections` field of the records saved
+// and that stamp rides the same `fingerprint` field of the records saved
 // against it, so a repaired original is never mistaken for the one before
 // the repair (or after recovery). A corrected article built over a repaired
 // original folds the repair stamp into its corrections fingerprint.
@@ -30,7 +30,7 @@ export interface TextStamp {
   /** Fingerprint of the substrate beyond the revision — the applied
    * corrections, or a PDF repair of the original; absent = the original as
    * ingested. */
-  readonly corrections?: string;
+  readonly fingerprint?: string;
   /** On a repaired original row only (never on a record): its repair stamp. */
   readonly repairStamp?: string;
 }
@@ -46,7 +46,7 @@ export function registerCorrectionsFingerprint(article: object, fingerprint: str
 }
 
 function fingerprintOf(stamp: TextStamp): string | undefined {
-  return stamp.corrections ?? fingerprints.get(stamp) ?? stamp.repairStamp;
+  return stamp.fingerprint ?? fingerprints.get(stamp) ?? stamp.repairStamp;
 }
 
 /** Was this article built by the correction engine (a corrected article,
@@ -76,10 +76,10 @@ export function repairStampOf(blocks: readonly unknown[]): string {
 
 /** The stamp a record saved against `article` carries (and is keyed by). */
 export function textStamp(article: TextStamp): TextStamp {
-  const corrections = fingerprintOf(article);
-  return corrections === undefined
+  const fingerprint = fingerprintOf(article);
+  return fingerprint === undefined
     ? { revision: article.revision }
-    : { revision: article.revision, corrections };
+    : { revision: article.revision, fingerprint };
 }
 
 /**

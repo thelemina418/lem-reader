@@ -152,47 +152,14 @@ import { highlightBases } from "../settings/highlightTint";
 // churn, and measurement sees the same reserved figure boxes the visible
 // pages will (decode is paint, never layout — D20-13).
 import { AssetProvider } from "../content/assets/AssetProvider";
-import type { CorrectionViewBlock } from "../content/correctionView";
-import {
-  applyCorrections,
-  blockCorrection,
-  hideAvailability,
-  mergeAvailability,
-  mergeCorrection,
-  splitAvailability,
-  splitCorrection,
-  unhideAvailability,
-  REASONS as CORRECTION_REASONS,
-  type Availability,
-} from "../content/corrections/engine";
-import {
-  selectionCommands,
-  type SelectionCommand,
-  type SelectionCommands,
-} from "../content/corrections/moveWords";
-import type { TextPositionSelector } from "../content/normalizeText";
+import { applyCorrections } from "../content/corrections/engine";
 import { storedOffsetInShown } from "../content/corrections/positions";
-import {
-  BLOCK_TYPE_CHOICES,
-  blockTypeChoiceLabel,
-  setTypeAvailability,
-  setTypeCorrection,
-} from "../content/corrections/setType";
-import type { BlockTypeChoice, Correction } from "../content/schema";
+import type { Correction } from "../content/schema";
 import { loadCorrections } from "../persistence/correctionsStore";
 import { CorrectionConsequencesDialog } from "../reader/CorrectionConsequencesDialog";
 import { CorrectionsList } from "../reader/CorrectionsList";
-import { useCorrectionChanges } from "../reader/useCorrectionChanges";
-import { describeCorrection } from "../content/corrections/describe";
-import {
-  CorrectionView,
-  type BlockAction,
-  type BlockCaret,
-  type BlockCommand,
-  type CorrectionLanding,
-  type CorrectionViewHandle,
-  type TypeChoiceCommand,
-} from "../reader/CorrectionView";
+import { useCorrectionCommands } from "../reader/useCorrectionCommands";
+import { CorrectionView, type CorrectionViewHandle } from "../reader/CorrectionView";
 import { SelectionToolbar } from "../reader/annotations/SelectionToolbar";
 // Shared annotation panel for passage and drawer entry.
 import { HighlightControls } from "../reader/annotations/HighlightControls";
@@ -467,47 +434,6 @@ function AssignmentEndNav({
 
 /** Issue #57 — keys that scroll the page (reading on from the notes). */
 const SCROLL_KEYS = new Set(["ArrowDown", "ArrowUp", "PageDown", "PageUp", " ", "Home", "End"]);
-
-/** Spec #68 — each block command's words: its button, its consequences
- * dialog title, and what the status region says once it is done. */
-const CORRECTION_COPY: Record<
-  BlockAction,
-  { label: string; title: string; done: (label: string) => string }
-> = {
-  hide: {
-    label: "Hide block",
-    title: "Hide this block?",
-    done: (label) =>
-      `${label} hidden. It stays here, dimmed; press X to unhide it, or Ctrl+Z to undo.`,
-  },
-  unhide: {
-    label: "Unhide block",
-    title: "Unhide this block?",
-    done: (label) => `${label} unhidden. Press Ctrl+Z to undo.`,
-  },
-  split: {
-    label: "Split block",
-    title: "Split this block?",
-    done: (label) => `${label} split in two. Press Ctrl+Z to undo.`,
-  },
-  merge: {
-    label: "Merge with next",
-    title: "Merge these blocks?",
-    done: (label) => `${label} merged with the next block. Press Ctrl+Z to undo.`,
-  },
-};
-
-/** Issue #74 — what the status region says once a Change type applied. */
-function setTypeDone(blockLabel: string, to: BlockTypeChoice, label: string): string {
-  if (to.type === "caption") return `${blockLabel} is now the figure's caption.`;
-  if (to.type === "paragraph" && blockLabel === "Quotation") {
-    return "The quotation's blocks are ordinary blocks again.";
-  }
-  if (to.type === "paragraph" && blockLabel.startsWith("Figure")) {
-    return "The caption is now a paragraph after the figure.";
-  }
-  return `${blockLabel} is now ${to.type === "quotation" ? "a quotation" : label}.`;
-}
 
 /** Spec #68 / #71 — a stable empty corrections list (the pass-through). */
 const NO_CORRECTIONS: readonly Correction[] = Object.freeze([]);
@@ -1138,7 +1064,6 @@ export function ArticleView({
   // PaginatedSurface's initialAnchorOffset), consumed once the reading
   // <article> is mounted again.
   const pendingCorrectionExitRef = useRef<{ offset: number; refocus: boolean } | null>(null);
-  const [correctionAnnouncement, setCorrectionAnnouncement] = useState<string | null>(null);
   const { scheduleLocationSave, saveLocationNow } = useScrollSave(article, articleRef, {
     readingEndOffset: assignment?.endOffset,
     heldOffset: () => excursionRef.current?.offset ?? null,
@@ -1850,8 +1775,32 @@ export function ArticleView({
   // engine's view model (every block, hidden ones marked), whose offset maps
   // translate reading ↔ view coordinates.
   const correctionModel = correctionsResult?.view ?? null;
-  // Where the view lands after a selection command (#73): the moved words.
-  const [correctionLanding, setCorrectionLanding] = useState<CorrectionLanding | null>(null);
+  // Every change to the corrections list — a new correction, Ctrl+Z /
+  // Ctrl+Shift+Z, a list undo, Restore original — takes the one preview →
+  // consequences → apply path, with the session undo history (#76).
+  const handleCorrectionsApplied = useCallback(
+    (next: readonly Correction[]) => {
+      // A paused read-aloud holds chunks in the old text's coordinates:
+      // end it, so the reader's next Play speaks the corrected article
+      // from their place (spec #68 story 9).
+      stopReadAloud();
+      setCorrections(next);
+      invalidateLibrarySnapshot();
+    },
+    [stopReadAloud],
+  );
+  // Every Correction-view command, the list, undo and the announcements
+  // (src/reader/useCorrectionCommands.ts).
+  const correctionCommands = useCorrectionCommands({
+    articleId: originalArticle?.id ?? null,
+    result: correctionsResult,
+    corrections,
+    onApplied: handleCorrectionsApplied,
+    viewUp: correctionEntry !== null,
+  });
+  const { announce: setCorrectionAnnouncement, setLanding: setCorrectionLanding } =
+    correctionCommands;
+  const correctionChanges = correctionCommands.changes;
   // Enter / leave — ONE path shared by the header button and the C shortcut.
   // Entry carries the reading position in (the mode-switch anchor capture);
   // leaving captures the focused or top-visible passage in the view and
@@ -1907,218 +1856,10 @@ export function ArticleView({
     pauseOrResumeReadAloud,
     markProgrammaticScroll,
     saveLocationNow,
+    setCorrectionAnnouncement,
+    setCorrectionLanding,
   ]);
 
-  // Spec #68 / issues #71, #72 — Hide / Unhide on the current block.
-  // Availability comes from the correction engine (one place for every
-  // "unavailable because…"); applying goes through the corrections store's
-  // preview + one-transaction apply, which re-anchors stored highlights and
-  // the reading position. A preview with no consequences applies at once;
-  // one with consequences (a highlight in a hidden block, a chapter a
-  // completion or collection refers to) opens the consequences dialog
-  // first, and Cancel leaves everything untouched.
-  // #75 adds Split at the caret (S) and Merge with the next block (J).
-  const correctionCommandsFor = useCallback(
-    (block: CorrectionViewBlock, caret: BlockCaret): readonly BlockCommand[] => {
-      if (!correctionsResult) return [];
-      const command = (
-        action: BlockAction,
-        shortcut: string,
-        availability: Availability,
-      ): BlockCommand => ({
-        action,
-        label: CORRECTION_COPY[action].label,
-        shortcut,
-        ...(availability.available
-          ? { available: true }
-          : { available: false, reason: availability.reason }),
-      });
-      return [
-        block.hidden
-          ? command("unhide", "X", unhideAvailability(block))
-          : command("hide", "X", hideAvailability(correctionsResult, block)),
-        command("split", "S", splitAvailability(correctionsResult, block, caret)),
-        command("merge", "J", mergeAvailability(correctionsResult, block)),
-      ];
-    },
-    [correctionsResult],
-  );
-  // Every change to the corrections list — a new correction, Ctrl+Z /
-  // Ctrl+Shift+Z, a list undo, Restore original — takes the one preview →
-  // consequences → apply path, with the session undo history (#76).
-  const handleCorrectionsApplied = useCallback(
-    (next: readonly Correction[]) => {
-      // A paused read-aloud holds chunks in the old text's coordinates:
-      // end it, so the reader's next Play speaks the corrected article
-      // from their place (spec #68 story 9).
-      stopReadAloud();
-      setCorrections(next);
-      invalidateLibrarySnapshot();
-    },
-    [stopReadAloud],
-  );
-  const correctionChanges = useCorrectionChanges({
-    articleId: originalArticle?.id ?? null,
-    corrections,
-    onApplied: handleCorrectionsApplied,
-    announce: setCorrectionAnnouncement,
-  });
-  const [correctionsListOpen, setCorrectionsListOpen] = useState(false);
-  const handleCorrectionCommand = useCallback(
-    (block: CorrectionViewBlock, command: BlockCommand, caret: BlockCaret) => {
-      if (!command.available) {
-        setCorrectionAnnouncement(command.reason ?? "That isn't available here.");
-        return;
-      }
-      if (!originalArticle || !correctionsResult) return;
-      const meta = { id: crypto.randomUUID(), createdAt: new Date().toISOString() };
-      const correction =
-        command.action === "split"
-          ? splitCorrection(correctionsResult, block, caret, meta)
-          : command.action === "merge"
-            ? mergeCorrection(correctionsResult, block, meta)
-            : blockCorrection(command.action, correctionsResult, block, meta);
-      if (!correction) {
-        setCorrectionAnnouncement(CORRECTION_REASONS.noText);
-        return;
-      }
-      const copy = CORRECTION_COPY[command.action];
-      const described = describeCorrection(correction);
-      void correctionChanges.run({
-        next: [...corrections, correction],
-        title: copy.title,
-        confirmLabel: copy.label,
-        announce: copy.done(block.label),
-        undoAnnounce: `Undone: ${described}.`,
-        redoAnnounce: `Redone: ${described}.`,
-      });
-    },
-    [originalArticle, correctionsResult, corrections, correctionChanges],
-  );
-  // Spec #68 / issue #73 — the selection commands. Availability and the
-  // correction itself come from the engine (src/content/corrections/
-  // moveWords.ts); applying takes the same change path as every other
-  // correction, and lands the view on the moved words.
-  const correctionSelectionCommands = useCallback(
-    (range: TextPositionSelector): SelectionCommands =>
-      selectionCommands(correctionsResult!, range, {
-        id: crypto.randomUUID(),
-        createdAt: new Date().toISOString(),
-      }),
-    [correctionsResult],
-  );
-  const handleSelectionCommand = useCallback(
-    (command: SelectionCommand) => {
-      if (!command.available || !command.correction) {
-        setCorrectionAnnouncement(command.reason ?? "That isn't available here.");
-        return;
-      }
-      const described = describeCorrection(command.correction);
-      const landing = command.landing ?? null;
-      const own = command.kind === "own-paragraph";
-      void correctionChanges.run({
-        next: [...corrections, command.correction],
-        title: own
-          ? "Make these words their own paragraph?"
-          : `Move these words to the ${command.kind === "move-next" ? "next" : "previous"} block?`,
-        confirmLabel: own ? "Make paragraph" : "Move words",
-        announce: `${described}. Press Ctrl+Z to undo.`,
-        undoAnnounce: `Undone: ${described}.`,
-        redoAnnounce: `Redone: ${described}.`,
-        applied: landing ? () => setCorrectionLanding({ ...landing }) : undefined,
-      });
-    },
-    [corrections, correctionChanges],
-  );
-  const handleUndoListedCorrection = useCallback(
-    (correction: Correction, applied: boolean) => {
-      const described = describeCorrection(correction);
-      void correctionChanges.run({
-        next: corrections.filter((c) => c.id !== correction.id),
-        title: applied ? "Undo this correction?" : "Remove this correction?",
-        confirmLabel: applied ? "Undo correction" : "Remove",
-        announce: applied
-          ? `Undone: ${described}. Press Ctrl+Z to bring it back.`
-          : `Removed from the list: ${described}. Press Ctrl+Z to bring it back.`,
-        undoAnnounce: `Brought back: ${described}.`,
-        redoAnnounce: applied ? `Undone: ${described}.` : `Removed from the list: ${described}.`,
-        reinstate: true,
-      });
-    },
-    [corrections, correctionChanges],
-  );
-  const handleRestoreOriginal = useCallback(() => {
-    void correctionChanges.run({
-      next: [],
-      title: "Restore the original?",
-      confirmLabel: "Restore original",
-      announce:
-        "Original restored. The article reads exactly as it was added. Press Ctrl+Z to undo.",
-      undoAnnounce: "Undone: Restore original. Your corrections are back.",
-      redoAnnounce: "Original restored.",
-      reinstate: true,
-    });
-  }, [correctionChanges]);
-  // Ctrl+Z / Ctrl+Shift+Z (Cmd on macOS) while the view is up — never from
-  // form fields or dialogs, where they stay the field's own undo.
-  const correctionUndoRef = useRef(correctionChanges);
-  correctionUndoRef.current = correctionChanges;
-  const correctionViewUp = correctionEntry !== null;
-  useEffect(() => {
-    if (!correctionViewUp) return;
-    const onKey = (event: KeyboardEvent) => {
-      if (!(event.ctrlKey || event.metaKey) || event.altKey) return;
-      if (event.key !== "z" && event.key !== "Z") return;
-      if (isFormField(event.target)) return;
-      event.preventDefault();
-      if (event.shiftKey) correctionUndoRef.current.redo();
-      else correctionUndoRef.current.undo();
-    };
-    window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
-  }, [correctionViewUp]);
-  // Issue #74 — Change type: every choice with the engine's availability
-  // (one place for "unavailable because…"); a choice goes through the same
-  // run() path (preview → consequences → apply, undoable) as every command.
-  const correctionTypeChoicesFor = useCallback(
-    (block: CorrectionViewBlock): readonly TypeChoiceCommand[] =>
-      BLOCK_TYPE_CHOICES.map(({ to, label }) => {
-        if (!correctionsResult) return { to, label, available: false };
-        const availability = setTypeAvailability(correctionsResult, block, to);
-        return availability.available
-          ? { to, label, available: true }
-          : { to, label, available: false, reason: availability.reason };
-      }),
-    [correctionsResult],
-  );
-  const handleChangeType = useCallback(
-    (block: CorrectionViewBlock, choice: TypeChoiceCommand) => {
-      if (!choice.available) {
-        setCorrectionAnnouncement(choice.reason ?? "That isn't available here.");
-        return;
-      }
-      if (!originalArticle || !correctionsResult) return;
-      const correction = setTypeCorrection(correctionsResult, block, choice.to, {
-        id: crypto.randomUUID(),
-        createdAt: new Date().toISOString(),
-      });
-      if (!correction) {
-        setCorrectionAnnouncement(CORRECTION_REASONS.noText);
-        return;
-      }
-      const label = blockTypeChoiceLabel(choice.to);
-      const described = describeCorrection(correction);
-      void correctionChanges.run({
-        next: [...corrections, correction],
-        title: `Change this block to ${label}?`,
-        confirmLabel: `Change to ${label}`,
-        announce: `${setTypeDone(block.label, choice.to, label)} Press Ctrl+Z to undo.`,
-        undoAnnounce: `Undone: ${described}.`,
-        redoAnnounce: `Redone: ${described}.`,
-      });
-    },
-    [originalArticle, correctionsResult, corrections, correctionChanges],
-  );
   useEffect(() => {
     if (!correctionToggleHandlerRef) return;
     correctionToggleHandlerRef.current = handleToggleCorrectionView;
@@ -3936,7 +3677,7 @@ export function ArticleView({
             StatusRegion primitive (issue #98) in its visually-hidden variant. */}
         <StatusRegion className="visually-hidden">{annotationAnnouncement}</StatusRegion>
         {/* Issue #70 — the Correction view's enter/leave announcement. */}
-        <StatusRegion className="visually-hidden">{correctionAnnouncement}</StatusRegion>
+        <StatusRegion className="visually-hidden">{correctionCommands.announcement}</StatusRegion>
         {/* Plan 09-05 (D9-06, PORT-03): a SECOND visually-hidden polite
             region for the per-article highlights-export result ("Exported N
             highlights for this article." / "Export didn't complete."). Kept
@@ -4039,22 +3780,24 @@ export function ArticleView({
                 ref={correctionViewRef}
                 model={correctionModel}
                 entryOffset={correctionEntry.viewOffset}
-                commandsFor={correctionCommandsFor}
-                onCommand={handleCorrectionCommand}
-                typeChoicesFor={correctionTypeChoicesFor}
-                onChangeType={handleChangeType}
-                selectionCommandsFor={correctionsResult ? correctionSelectionCommands : undefined}
-                onSelectionCommand={handleSelectionCommand}
-                landing={correctionLanding}
+                commandsFor={correctionCommands.commandsFor}
+                onCommand={correctionCommands.onCommand}
+                typeChoicesFor={correctionCommands.typeChoicesFor}
+                onChangeType={correctionCommands.onChangeType}
+                selectionCommandsFor={
+                  correctionsResult ? correctionCommands.selectionCommandsFor : undefined
+                }
+                onSelectionCommand={correctionCommands.onSelectionCommand}
+                landing={correctionCommands.landing}
                 busy={correctionChanges.busy || correctionChanges.pending !== null}
                 headerExtras={
                   <CorrectionsList
                     corrections={corrections}
                     outcomes={correctionsResult?.outcomes ?? []}
-                    open={correctionsListOpen}
-                    onOpenChange={setCorrectionsListOpen}
-                    onUndo={handleUndoListedCorrection}
-                    onRestoreOriginal={handleRestoreOriginal}
+                    open={correctionCommands.listOpen}
+                    onOpenChange={correctionCommands.setListOpen}
+                    onUndo={correctionCommands.undoListed}
+                    onRestoreOriginal={correctionCommands.restoreOriginal}
                     busy={correctionChanges.busy || correctionChanges.pending !== null}
                   />
                 }

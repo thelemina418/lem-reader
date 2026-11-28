@@ -7,13 +7,16 @@
 // moved sentence. Unavailable commands say why; each command is announced.
 // A highlight across the moved boundary asks first (Cancel changes nothing).
 import { test, expect, type Page } from "@playwright/test";
-import { modeToggle, switchMode, wipeDatabase } from "../annotations/_fixtures";
+import { modeToggle, switchMode } from "../annotations/_fixtures";
 import { seedStoreRows } from "../library/seedStoreRows";
-import { BASE } from "../_base";
-import { ArticleSchema } from "../../../src/content/schema";
-import { deriveQuoteSelector, normalizeText } from "../../../src/content/normalizeText";
-
-const para = (text: string) => ({ kind: "paragraph", content: [{ text, marks: [] }] });
+import {
+  freshLibrary,
+  highlightRow as highlightOn,
+  openReader as openArticle,
+  para,
+  status,
+  view,
+} from "./_corrections";
 const filler = (n: number) =>
   para(
     `Paragraph ${n}. The tide turns slowly in the harbour, and the boats swing on their moorings ` +
@@ -70,43 +73,11 @@ const MADE_OWN =
 const FIGURE = 7;
 const PARAGRAPH = 8;
 
-const canonical = ArticleSchema.parse(ARTICLE);
-function highlightRow(id: string, exact: string) {
-  const text = normalizeText(canonical);
-  const start = [...text.slice(0, text.indexOf(exact))].length;
-  const position = { start, end: start + [...exact].length };
-  return {
-    schemaVersion: 1,
-    id,
-    articleId: ARTICLE.id,
-    revision: 1,
-    position,
-    quote: deriveQuoteSelector(canonical, position),
-    createdAt: "2026-11-02T00:00:00.000Z",
-  };
-}
+const highlightRow = (id: string, exact: string) => highlightOn(ARTICLE, id, exact);
 
-test.beforeEach(async ({ page }) => {
-  await wipeDatabase(page);
-  await page.goto(`${BASE}/#/`);
-  await page.reload();
-  await expect(page.getByRole("heading", { level: 1, name: "Saved articles" })).toBeVisible();
-  await seedStoreRows(page, "articles", [ARTICLE]);
-});
+test.beforeEach(async ({ page }) => freshLibrary(page, [ARTICLE]));
 
-const view = (page: Page) => page.locator(".correction-view");
-const status = (page: Page, text: string | RegExp) =>
-  page.getByRole("status").filter({ hasText: text });
-const surface = (page: Page) =>
-  page
-    .locator(".page-fragment, .article-body:not(.article-body-measurement)")
-    .filter({ hasNot: page.locator(".correction-view") });
-
-async function openReader(page: Page) {
-  await page.goto(`${BASE}/#/article/${ARTICLE.id}`);
-  await expect(page.getByRole("heading", { level: 1, name: "The Harbour at Dawn" })).toBeVisible();
-  await expect(surface(page).first()).toContainText("Leaving port");
-}
+const openReader = (page: Page) => openArticle(page, ARTICLE, "Leaving port");
 
 /** Keyboard only: enter the view, ArrowDown to the figure, select the stray
  * words from the caption's end with Shift+←, one word at a time. */
@@ -227,7 +198,7 @@ test.describe("Move words to the next block — the caption example (#73)", () =
       .toContain(STRAY);
   });
 
-  test("a highlight across the moved boundary asks first; Cancel changes nothing", async ({
+  test("a highlight across the moved boundary asks first; Cancel changes nothing; it isn't re-attached", async ({
     page,
   }) => {
     await seedStoreRows(page, "highlights", [
@@ -259,6 +230,22 @@ test.describe("Move words to the next block — the caption example (#73)", () =
     await dialog.getByRole("button", { name: "Move words" }).click();
     await expect(status(page, MOVED_NEXT)).toHaveCount(1);
     await expect(frameText(page, PARAGRAPH)).toHaveText(`${STRAY} ${REST}`);
+
+    // Spec #68 — what the dialog said is what the reader does: the highlight
+    // across the moved boundary is not quietly re-attached by its context;
+    // the one inside the moved words still shows.
+    await page.keyboard.press("c");
+    await expect(view(page)).toBeHidden();
+    await expect(
+      page.locator('mark.highlight[data-highlight-id="h-inside"]').first(),
+    ).toBeVisible();
+    // Shown as orphaned (the dashed, unresolved mark at its stored place),
+    // never as a confident mark.
+    const across = page.locator('mark.highlight[data-highlight-id="h-across"]');
+    await expect(across.first()).toHaveClass(/\bunresolved\b/);
+    await expect(
+      page.locator('mark.highlight[data-highlight-id="h-across"]:not(.unresolved)'),
+    ).toHaveCount(0);
   });
 
   test("make the stray words their own paragraph with P", async ({ page }) => {

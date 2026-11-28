@@ -1,4 +1,4 @@
-// src/content/corrections/structure.ts
+// src/content/corrections/correctedStructure.ts
 // Spec #68 / issue #72 — the corrected article's chapters. Pure.
 //
 // The corrected article's structure is derived from the corrected blocks

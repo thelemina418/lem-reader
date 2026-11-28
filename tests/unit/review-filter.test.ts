@@ -36,6 +36,7 @@ import {
 } from "../../src/content/normalizeText";
 import type { TextPositionSelector, TextQuoteSelector } from "../../src/content/normalizeText";
 import { findAllOccurrences } from "../../src/annotations/resolution";
+import { applyCorrections, blockCorrection } from "../../src/content/corrections/engine";
 
 // ── Fixture construction (schema-validated, single source of truth) ──────────
 
@@ -364,6 +365,51 @@ describe("deriveReviewSections — join + tri-state classification", () => {
 });
 
 // ── Filters (D10-08 — AND-composed; "all" never silently filters tri-state) ──
+
+describe("deriveReviewSections — corrected articles (spec #68, story 74)", () => {
+  // The reader hides a block; Review receives the article AS READ (hidden
+  // block absent). A highlight inside it is "hidden while its block is
+  // hidden" — never orphaned — and matches again once the block is unhidden.
+  const original = zebra;
+  const inHidden = makeHighlight({
+    id: "hl-in-hidden",
+    articleId: "zebra-piece",
+    anchor: uniqueAnchor(original, "market fills with voices"),
+    createdAt: "2026-01-05T10:00:00.000Z",
+  });
+  const hideMarket = () => {
+    const before = applyCorrections(original, []);
+    const block = before.view.allBlocks.find((b) => b.path.join(".") === "1")!;
+    return blockCorrection("hide", before, block, {
+      id: "c-hide-market",
+      createdAt: "2026-11-27T10:00:00.000Z",
+    })!;
+  };
+
+  it("lists a highlight inside a hidden block as hidden, not orphaned, with no jump target", () => {
+    const hide = hideMarket();
+    const asRead = applyCorrections(original, [hide]).article;
+    const derivation = derive([asRead], [inHidden], [], noFilters, "date");
+    const entry = derivation.sections[0]!.entries[0]!;
+    expect(hlStatus(entry)).toBe("hidden");
+    expect(entry.kind === "highlight" && entry.resolvedPosition).toBeFalsy();
+    expect(derivation.orphanEntries).toHaveLength(0);
+  });
+
+  it("the confidence filter keeps hidden rows out of 'orphan' and in 'hidden'", () => {
+    const asRead = applyCorrections(original, [hideMarket()]).article;
+    const orphans = derive(
+      [asRead],
+      [inHidden],
+      [],
+      { ...noFilters, confidence: "orphan" },
+      "date",
+    );
+    expect(orphans.sections).toEqual([]);
+    const hidden = derive([asRead], [inHidden], [], { ...noFilters, confidence: "hidden" }, "date");
+    expect(hidden.sections[0]!.entries.map(hlId)).toEqual(["hl-in-hidden"]);
+  });
+});
 
 describe("deriveReviewSections — filters", () => {
   it("confidence 'all' includes confident AND ambiguous AND orphan rows", () => {

@@ -42,7 +42,8 @@ import {
   engineStateOf,
   isHiddenUnder,
   layoutOf,
-  REASONS,
+  HIDE_REASONS,
+  notFoundReason,
   resolveBlockTarget,
   type CorrectionsResult,
   type EngineState,
@@ -335,8 +336,8 @@ function locate(
 ): { laid: LaidBlock; region: Region; s: number; e: number } | { reason: string } {
   const { article } = state;
   const found = resolveBlockTarget(article, correction.target);
-  if (found === "orphan") return { reason: REASONS.notFound };
-  if (found === "ambiguous") return { reason: REASONS.ambiguous };
+  if (found === "orphan") return { reason: notFoundReason(article, correction.target) };
+  if (found === "ambiguous") return { reason: HIDE_REASONS.ambiguous };
   const region = regionOf(found, article.lang);
   if (!region) return { reason: MOVE_REASONS.notText };
   const { clusters } = articleGraphemeIndex(article);
@@ -357,7 +358,7 @@ function locate(
     if (atEdge.length > 0) candidates = atEdge;
   }
   if (candidates.length === 0) return { reason: MOVE_REASONS.wordsNotFound };
-  if (candidates.length > 1) return { reason: REASONS.ambiguous };
+  if (candidates.length > 1) return { reason: HIDE_REASONS.ambiguous };
   const s = candidates[0]!;
   return { laid: found, region, s, e: s + exact.length };
 }
@@ -435,7 +436,7 @@ export function selectionCommands(
   const snapped = snap(clusters, region, selection.start, selection.end);
   if (!snapped) return unavailable(MOVE_REASONS.notText);
   const target = blockTargetFor(article, startBlock.path);
-  if (!target) return unavailable(REASONS.noText);
+  if (!target) return unavailable(HIDE_REASONS.noText);
   const words = deriveQuoteSelector(article, snapped);
   const commands = ORDER.map((kind): SelectionCommand => {
     const correction: MoveWords | OwnParagraph =
@@ -453,7 +454,7 @@ export function selectionCommands(
     // Re-application must find the same words the reader selected.
     const at = locate(state, correction);
     if ("reason" in at || at.s !== snapped.start) {
-      return { kind, available: false, reason: REASONS.ambiguous };
+      return { kind, available: false, reason: HIDE_REASONS.ambiguous };
     }
     return { kind, available: true, correction, landing: p.landing };
   });

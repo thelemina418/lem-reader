@@ -44,11 +44,12 @@ import {
 import type { BlockTarget, Correction } from "../schema";
 import type { TextQuoteSelector } from "../normalizeText";
 import { fingerprintText, registerCorrectionsFingerprint } from "../sameText";
-import { correctedStructure } from "./structure";
+import { correctedStructure } from "./correctedStructure";
 import { setTypeHandler } from "./setType";
 import type { Block, CanonicalArticle, InlineRun } from "../types";
 import { moveWords, ownParagraph } from "./moveWords";
 import {
+  BLOCK_KIND_NOUN,
   blockPathKey,
   buildCorrectionView,
   correctionBlockId,
@@ -106,10 +107,16 @@ export type Step =
 
 // ── Calm reasons (shared by availability and re-application) ───────────────
 
-export const REASONS = {
+export const HIDE_REASONS = {
   notFound: "Its text is no longer in this article.",
+  /** The words are still a whole block, but of another kind or nesting. */
+  reshaped: (noun: string) =>
+    `Its text is still here, but its block is now ${/^[aeiou]/.test(noun) ? "an" : "a"} ${noun}, so it wasn't changed.`,
+  reshapedSeveral:
+    "Its text is still here, but in a different kind of block, so it wasn't changed.",
   ambiguous: "Its text now appears in more than one place, so it can't be placed with confidence.",
-  noText: "This block has no text to find it by, so the change couldn't be kept reliably.",
+  noText:
+    "This block has no text, and none around it, to find it by, so the change couldn't be kept reliably.",
   alreadyHidden: "This block is already hidden.",
   insideHidden: "The quotation around this block is hidden. Unhide the quotation instead.",
   notHidden: "This block isn't hidden.",
@@ -161,6 +168,7 @@ export function resolveBlockTarget(
   article: CanonicalArticle,
   target: BlockTarget,
 ): LaidBlock | "orphan" | "ambiguous" {
+  if (target.quote.exact.length === 0) return resolveTextlessTarget(article, target);
   const { clusters } = articleGraphemeIndex(article);
   const exact = graphemeClusters(target.quote.exact, article.lang);
   const laid = layoutOf(article);
@@ -184,15 +192,85 @@ export function resolveBlockTarget(
   return narrowed.length === 1 ? narrowed[0]! : "ambiguous";
 }
 
+/** Blocks that hold exactly the target's words but no longer match its kind
+ * or depth — e.g. Reprocessing now delivers the paragraph as a heading. */
+export function reshapedBlocks(article: CanonicalArticle, target: BlockTarget): LaidBlock[] {
+  if (target.quote.exact.length === 0) return [];
+  const { clusters } = articleGraphemeIndex(article);
+  const exact = graphemeClusters(target.quote.exact, article.lang);
+  const laid = layoutOf(article);
+  const out: LaidBlock[] = [];
+  for (const start of findAllOccurrences(clusters, exact)) {
+    const end = start + exact.length;
+    for (const b of laid) {
+      if (b.start !== start || b.end !== end) continue;
+      if (b.block.kind === target.kind && b.depth === target.depth) continue;
+      out.push(b);
+    }
+  }
+  return out;
+}
+
+/** Why a target that resolved to "orphan" isn't applied: its words are gone,
+ * or they are still here in a block whose kind or shape changed. */
+export function notFoundReason(article: CanonicalArticle, target: BlockTarget): string {
+  // A quotation and its only child share a range: name the innermost block.
+  const all = reshapedBlocks(article, target);
+  const reshaped = all.filter(
+    (b) => !all.some((o) => o !== b && o.depth > b.depth && o.start === b.start),
+  );
+  if (reshaped.length === 0) return HIDE_REASONS.notFound;
+  if (reshaped.length > 1) return HIDE_REASONS.reshapedSeveral;
+  return HIDE_REASONS.reshaped(BLOCK_KIND_NOUN[reshaped[0]!.block.kind]);
+}
+
+/** The image source a text-less figure is also known by. */
+function mediaSrc(block: Block): string | undefined {
+  return block.kind === "figure" ? (block.src ?? block.originalSrc) : undefined;
+}
+
+/** Story 53 — a block with no text (an image with no alt or caption) is
+ * found by the text either side of it and its image source. Its context is
+ * all the evidence there is, so it must match exactly: a single block of
+ * the same kind, depth and source with that prefix and suffix around it. */
+function resolveTextlessTarget(
+  article: CanonicalArticle,
+  target: BlockTarget,
+): LaidBlock | "orphan" | "ambiguous" {
+  const { clusters } = articleGraphemeIndex(article);
+  const candidates = layoutOf(article).filter(
+    (b) =>
+      b.end === b.start &&
+      b.block.kind === target.kind &&
+      b.depth === target.depth &&
+      mediaSrc(b.block) === target.src &&
+      matchesContext(clusters, b.start, 0, target.quote, article.lang),
+  );
+  if (candidates.length === 0) return "orphan";
+  return candidates.length === 1 ? candidates[0]! : "ambiguous";
+}
+
 /** The text target for the block at `path` in `article`; null when the
- * block has no text to be found by (a figure with no alt or caption). */
+ * block can't be found by text (a text-less block with no text around it). */
 export function blockTargetFor(
   article: CanonicalArticle,
   path: readonly number[],
 ): BlockTarget | null {
   const key = blockPathKey(path);
   const laid = layoutOf(article).find((b) => b.key === key);
-  if (!laid || laid.end <= laid.start) return null;
+  if (!laid) return null;
+  if (laid.end <= laid.start) {
+    // Story 53: no words of its own — the text around it, like a highlight.
+    const quote = deriveQuoteSelector(article, { start: laid.start, end: laid.start });
+    if (quote.prefix.length === 0 && quote.suffix.length === 0) return null;
+    const src = mediaSrc(laid.block);
+    return {
+      quote,
+      kind: laid.block.kind,
+      depth: laid.depth,
+      ...(src !== undefined ? { src } : {}),
+    };
+  }
   return {
     quote: deriveQuoteSelector(article, { start: laid.start, end: laid.end }),
     kind: laid.block.kind,
@@ -247,8 +325,10 @@ type Handler<K extends Correction["kind"]> = (
 const KINDS: { [K in Correction["kind"]]: Handler<K> } = {
   hide(state, correction) {
     const found = resolveBlockTarget(state.article, correction.target);
-    if (found === "orphan") return { ok: false, reason: REASONS.notFound };
-    if (found === "ambiguous") return { ok: false, reason: REASONS.ambiguous };
+    if (found === "orphan") {
+      return { ok: false, reason: notFoundReason(state.article, correction.target) };
+    }
+    if (found === "ambiguous") return { ok: false, reason: HIDE_REASONS.ambiguous };
     const reason = hideRefusal(state, found);
     if (reason) return { ok: false, reason };
     const hidden = new Set(state.hidden);
@@ -257,12 +337,16 @@ const KINDS: { [K in Correction["kind"]]: Handler<K> } = {
   },
   unhide(state, correction) {
     const found = resolveBlockTarget(state.article, correction.target);
-    if (found === "orphan") return { ok: false, reason: REASONS.notFound };
-    if (found === "ambiguous") return { ok: false, reason: REASONS.ambiguous };
+    if (found === "orphan") {
+      return { ok: false, reason: notFoundReason(state.article, correction.target) };
+    }
+    if (found === "ambiguous") return { ok: false, reason: HIDE_REASONS.ambiguous };
     if (!state.hidden.has(found.key)) {
       return {
         ok: false,
-        reason: isHiddenUnder(state.hidden, found.path) ? REASONS.insideHidden : REASONS.notHidden,
+        reason: isHiddenUnder(state.hidden, found.path)
+          ? HIDE_REASONS.insideHidden
+          : HIDE_REASONS.notHidden,
       };
     }
     const hidden = new Set(state.hidden);
@@ -272,8 +356,10 @@ const KINDS: { [K in Correction["kind"]]: Handler<K> } = {
   // #75 — split at a separator inside the block (./splitMerge.ts).
   split(state, correction) {
     const found = resolveBlockTarget(state.article, correction.target);
-    if (found === "orphan") return { ok: false, reason: REASONS.notFound };
-    if (found === "ambiguous") return { ok: false, reason: REASONS.ambiguous };
+    if (found === "orphan") {
+      return { ok: false, reason: notFoundReason(state.article, correction.target) };
+    }
+    if (found === "ambiguous") return { ok: false, reason: HIDE_REASONS.ambiguous };
     if (isHiddenAt(state.hidden, found.path)) {
       return { ok: false, reason: SPLIT_MERGE_REASONS.hiddenBlock };
     }
@@ -292,8 +378,10 @@ const KINDS: { [K in Correction["kind"]]: Handler<K> } = {
   // #75 — merge with the next block, which must still be the one merged.
   merge(state, correction) {
     const found = resolveBlockTarget(state.article, correction.target);
-    if (found === "orphan") return { ok: false, reason: REASONS.notFound };
-    if (found === "ambiguous") return { ok: false, reason: REASONS.ambiguous };
+    if (found === "orphan") {
+      return { ok: false, reason: notFoundReason(state.article, correction.target) };
+    }
+    if (found === "ambiguous") return { ok: false, reason: HIDE_REASONS.ambiguous };
     if (isHiddenAt(state.hidden, found.path)) {
       return { ok: false, reason: SPLIT_MERGE_REASONS.hiddenBlock };
     }
@@ -333,12 +421,12 @@ function isHiddenAt(hidden: ReadonlySet<string>, path: readonly number[]): boole
 /** Engine-level validity of hiding `block` (holds for re-application too). */
 function hideRefusal(state: EngineState, block: LaidBlock): string | null {
   if (state.hidden.has(block.key) || isHiddenUnder(state.hidden, block.path)) {
-    return REASONS.alreadyHidden;
+    return HIDE_REASONS.alreadyHidden;
   }
-  if (holdsFootnoteReference(block.block)) return REASONS.footnoteReference;
+  if (holdsFootnoteReference(block.block)) return HIDE_REASONS.footnoteReference;
   const hidden = new Set(state.hidden);
   hidden.add(block.key);
-  if (!anythingLeftToRead(state.article, hidden)) return REASONS.lastBlock;
+  if (!anythingLeftToRead(state.article, hidden)) return HIDE_REASONS.lastBlock;
   return null;
 }
 
@@ -384,7 +472,7 @@ function finish(
   const blocks = buildCorrectedBlocks(state.article.blocks, [], state.hidden);
   // The corrected article never carries the original's frozen structure
   // snapshot: its chapters are derived from the corrected blocks, keeping
-  // unchanged chapters' ids and titles (./structure.ts, #72) — and nothing
+  // unchanged chapters' ids and titles (./correctedStructure.ts, #72) — and nothing
   // is ever written back onto the original row (ADR 0014).
   const { structure: _frozen, ...rest } = state.article;
   void _frozen;
@@ -520,15 +608,16 @@ export function hideAvailability(
   block: CorrectionViewBlock,
 ): Availability {
   const laid = laidFor(result, block);
-  if (!laid) return { available: false, reason: REASONS.notFound };
-  if (laid.end <= laid.start) return { available: false, reason: REASONS.noText };
+  if (!laid) return { available: false, reason: HIDE_REASONS.notFound };
   const state = engineStateOf(result);
   const refusal = hideRefusal(state, laid);
   if (refusal) return { available: false, reason: refusal };
-  // The target must be findable again: unique by text in this article.
+  // The target must be findable again: unique by text in this article (a
+  // text-less block by the text around it, story 53).
   const target = blockTargetFor(result.view.article, block.path);
-  if (!target || resolveBlockTarget(result.view.article, target) !== laid) {
-    return { available: false, reason: REASONS.ambiguous };
+  if (!target) return { available: false, reason: HIDE_REASONS.noText };
+  if (resolveBlockTarget(result.view.article, target) !== laid) {
+    return { available: false, reason: HIDE_REASONS.ambiguous };
   }
   return { available: true };
 }
@@ -536,19 +625,19 @@ export function hideAvailability(
 /** Can the reader unhide this block now? */
 export function unhideAvailability(block: CorrectionViewBlock): Availability {
   if (block.hiddenDirectly) return { available: true };
-  if (block.hidden) return { available: false, reason: REASONS.insideHidden };
-  return { available: false, reason: REASONS.notHidden };
+  if (block.hidden) return { available: false, reason: HIDE_REASONS.insideHidden };
+  return { available: false, reason: HIDE_REASONS.notHidden };
 }
 
 /** The view block's laid entry when it is targetable: present, with text,
  * and found again uniquely by that text. A string is the reason not. */
 function targetableLaid(result: CorrectionsResult, block: CorrectionViewBlock): LaidBlock | string {
   const laid = laidFor(result, block);
-  if (!laid) return REASONS.notFound;
-  if (laid.end <= laid.start) return REASONS.noText;
+  if (!laid) return HIDE_REASONS.notFound;
+  if (laid.end <= laid.start) return HIDE_REASONS.noText;
   const target = blockTargetFor(result.view.article, block.path);
   if (!target || resolveBlockTarget(result.view.article, target) !== laid) {
-    return REASONS.ambiguous;
+    return HIDE_REASONS.ambiguous;
   }
   return laid;
 }

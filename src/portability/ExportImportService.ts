@@ -836,7 +836,7 @@ export async function applyImport(plan: ResolvedImportPlan): Promise<void> {
         savedAt: location.savedAt,
         // Spec #68 / #77 — the substrate stamp rides with the offset (a
         // position saved on a corrected article stays trusted there).
-        ...(location.corrections !== undefined ? { corrections: location.corrections } : {}),
+        ...(location.fingerprint !== undefined ? { fingerprint: location.fingerprint } : {}),
       };
       await db.location.put(row);
     }
