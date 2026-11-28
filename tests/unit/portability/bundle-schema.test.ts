@@ -13,6 +13,7 @@ import { describe, expect, it } from "vitest";
 import {
   ExportBundleSchema,
   BUNDLE_FILENAME,
+  BUNDLE_WRITER_VERSION,
   resolveAppVersion,
 } from "../../../src/portability/bundle";
 
@@ -197,6 +198,67 @@ describe("ExportBundleSchema (D9-04 envelope)", () => {
       schemaVersion: 10,
     });
     expect(v10.success).toBe(false);
+  });
+
+  // ── Spec #68 / issue #77: v12 — the corrections block ──────────────────
+
+  const correctionsRecord = () => ({
+    schemaVersion: 1 as const,
+    articleId: sampleArticle().id,
+    corrections: [
+      {
+        kind: "hide" as const,
+        id: "hide-1",
+        createdAt: "2026-11-27T10:00:00.000Z",
+        target: {
+          quote: { exact: "Share this", prefix: "", suffix: "" },
+          kind: "paragraph" as const,
+          depth: 0,
+        },
+      },
+    ],
+    updatedAt: "2026-11-27T10:00:00.000Z",
+  });
+
+  it("parses a v12 bundle with a corrections block, retaining each ordered record", () => {
+    expect(BUNDLE_WRITER_VERSION).toBe(12);
+    const result = ExportBundleSchema.safeParse({
+      ...sampleBundle(),
+      schemaVersion: 12,
+      starterRemoved: true,
+      corrections: [correctionsRecord()],
+    });
+    expect(result.success).toBe(true);
+    if (result.success) {
+      expect(result.data.schemaVersion).toBe(12);
+      expect(result.data.corrections).toEqual([correctionsRecord()]);
+    }
+  });
+
+  it("an older bundle without a corrections block hydrates it to undefined", () => {
+    const v11 = ExportBundleSchema.safeParse({
+      ...sampleBundle(),
+      schemaVersion: 11,
+      starterRemoved: true,
+    });
+    expect(v11.success).toBe(true);
+    if (v11.success) expect(v11.data.corrections).toBeUndefined();
+  });
+
+  it("rejects a malformed corrections record (CorrectionsRecordSchema composition) and schemaVersion 13", () => {
+    const bad = ExportBundleSchema.safeParse({
+      ...sampleBundle(),
+      schemaVersion: 12,
+      starterRemoved: true,
+      corrections: [{ ...correctionsRecord(), corrections: [{ kind: "rewrite" }] }],
+    });
+    expect(bad.success).toBe(false);
+    const v13 = ExportBundleSchema.safeParse({
+      ...sampleBundle(),
+      schemaVersion: 13,
+      starterRemoved: true,
+    });
+    expect(v13.success).toBe(false);
   });
 
   // ── Phase 17 (17-04 Task 1): v3 — overrides ride ArticleSchema ──────────

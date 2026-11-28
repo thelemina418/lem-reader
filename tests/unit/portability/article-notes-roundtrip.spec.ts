@@ -32,6 +32,7 @@ import type { Overrides } from "../../../src/portability/conflicts";
 import { computeManifest } from "../../../src/portability/manifest";
 import fakeIndexedDB, { IDBKeyRange } from "fake-indexeddb";
 import { Dexie } from "dexie";
+import { BUNDLE_WRITER_VERSION } from "../../../src/portability/bundle";
 
 Dexie.dependencies.indexedDB = fakeIndexedDB;
 Dexie.dependencies.IDBKeyRange = IDBKeyRange;
@@ -194,7 +195,7 @@ describe("article notes bundle v8 (issue #211)", () => {
       schemaVersion: number;
       articleNotes?: unknown[];
     };
-    expect(bundleJson.schemaVersion).toBe(11); // #41 moved the writer version
+    expect(bundleJson.schemaVersion).toBe(BUNDLE_WRITER_VERSION); // #41 moved the writer version
     expect(bundleJson.articleNotes).toEqual([]);
 
     // The note-free library still emits the field (presence is the v8
@@ -204,7 +205,7 @@ describe("article notes bundle v8 (issue #211)", () => {
     await db.open();
     entries = unzipSync((await buildBundle()).bytes);
     bundleJson = JSON.parse(strFromU8(entries["bundle.json"]!));
-    expect(bundleJson.schemaVersion).toBe(11); // #41 moved the writer version
+    expect(bundleJson.schemaVersion).toBe(BUNDLE_WRITER_VERSION); // #41 moved the writer version
     expect(bundleJson.articleNotes).toEqual([]);
   });
 

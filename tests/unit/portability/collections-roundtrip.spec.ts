@@ -35,6 +35,7 @@ import type { Overrides } from "../../../src/portability/conflicts";
 import { computeManifest } from "../../../src/portability/manifest";
 import fakeIndexedDB, { IDBKeyRange } from "fake-indexeddb";
 import { Dexie } from "dexie";
+import { BUNDLE_WRITER_VERSION } from "../../../src/portability/bundle";
 
 Dexie.dependencies.indexedDB = fakeIndexedDB;
 Dexie.dependencies.IDBKeyRange = IDBKeyRange;
@@ -171,7 +172,7 @@ describe("bundle v10 — collections round trip (issue #248)", () => {
       completions?: unknown[];
       collectionActiveEntries?: unknown[];
     };
-    expect(bundleJson.schemaVersion).toBe(11);
+    expect(bundleJson.schemaVersion).toBe(BUNDLE_WRITER_VERSION);
     expect(bundleJson.collections).toEqual([]);
     expect(bundleJson.completions).toEqual([]);
     expect(bundleJson.collectionActiveEntries).toEqual([]);
@@ -223,7 +224,11 @@ describe("bundle v10 — collections round trip (issue #248)", () => {
     const { validateBundle } = await loadService();
     const entries = {
       "bundle.json": new TextEncoder().encode(
-        JSON.stringify({ schemaVersion: 12, exportedAt: "x", appVersion: "x" }),
+        JSON.stringify({
+          schemaVersion: BUNDLE_WRITER_VERSION + 1,
+          exportedAt: "x",
+          appVersion: "x",
+        }),
       ),
       "manifest.json": new TextEncoder().encode(JSON.stringify({})),
     };

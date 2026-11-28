@@ -47,6 +47,7 @@ import type { z } from "zod";
 import { unzipSync, strFromU8 } from "fflate";
 import fakeIndexedDB, { IDBKeyRange } from "fake-indexeddb";
 import { Dexie } from "dexie";
+import { BUNDLE_WRITER_VERSION } from "../../../src/portability/bundle";
 
 // Dexie 4 captures `indexedDB` + `IDBKeyRange` on `Dexie.dependencies` at
 // dexie-module-load time. Install BOTH onto `Dexie.dependencies` (the
@@ -308,7 +309,7 @@ describe("buildBundle (09-04 Task 1)", () => {
     const entries = await buildEntries();
 
     const bundle = ExportBundleSchema.parse(JSON.parse(strFromU8(entries["bundle.json"]!)));
-    expect(bundle.schemaVersion).toBe(11); // writers preserve starter removal; v10 carries collections (#248)
+    expect(bundle.schemaVersion).toBe(BUNDLE_WRITER_VERSION); // writers preserve starter removal; v10 carries collections (#248)
     expect(bundle.articles).toHaveLength(2);
     expect(bundle.articles.map((a) => a.id).sort()).toEqual(["art-plain", "art-with-source"]);
     // Fixtures NEVER serialize (ARCHITECTURE L615) — the highlight's fixture
@@ -400,7 +401,7 @@ describe("buildBundle (09-04 Task 1)", () => {
     // since 12-07; the version bumped to 4 for assets — 20-05, to 5
     // for reading sessions — issue #37, and to 6 for subscriptions —
     // issue #121).
-    expect(bundle.schemaVersion).toBe(11);
+    expect(bundle.schemaVersion).toBe(BUNDLE_WRITER_VERSION);
     expect(bundle.books).toEqual([book]);
 
     // Chapters ride articles as ordinary articles — ingestionMeta.bookId
@@ -420,7 +421,7 @@ describe("buildBundle (09-04 Task 1)", () => {
     const entries = await buildEntries();
 
     const bundle = ExportBundleSchema.parse(JSON.parse(strFromU8(entries["bundle.json"]!)));
-    expect(bundle.schemaVersion).toBe(11); // writers preserve starter removal; v10 carries collections (#248)
+    expect(bundle.schemaVersion).toBe(BUNDLE_WRITER_VERSION); // writers preserve starter removal; v10 carries collections (#248)
     expect(bundle.books).toEqual([]);
   });
 

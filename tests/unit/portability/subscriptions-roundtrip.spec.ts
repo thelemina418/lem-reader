@@ -28,6 +28,7 @@ import type { Overrides } from "../../../src/portability/conflicts";
 import { computeManifest } from "../../../src/portability/manifest";
 import fakeIndexedDB, { IDBKeyRange } from "fake-indexeddb";
 import { Dexie } from "dexie";
+import { BUNDLE_WRITER_VERSION } from "../../../src/portability/bundle";
 
 Dexie.dependencies.indexedDB = fakeIndexedDB;
 Dexie.dependencies.IDBKeyRange = IDBKeyRange;
@@ -179,7 +180,7 @@ describe("subscriptions bundle v6 (issue #121)", () => {
       schemaVersion: number;
       subscriptions?: SubscriptionRecord[];
     };
-    expect(bundleJson.schemaVersion).toBe(11); // #41 moved the writer version
+    expect(bundleJson.schemaVersion).toBe(BUNDLE_WRITER_VERSION); // #41 moved the writer version
     expect(bundleJson.subscriptions).toEqual([sampleSubscription()]);
 
     // The subscription-free library still emits the field (presence is the
@@ -188,7 +189,7 @@ describe("subscriptions bundle v6 (issue #121)", () => {
     await db.open();
     entries = unzipSync((await buildBundle()).bytes);
     bundleJson = JSON.parse(strFromU8(entries["bundle.json"]!));
-    expect(bundleJson.schemaVersion).toBe(11); // #41 moved the writer version
+    expect(bundleJson.schemaVersion).toBe(BUNDLE_WRITER_VERSION); // #41 moved the writer version
     expect(bundleJson.subscriptions).toEqual([]);
   });
 

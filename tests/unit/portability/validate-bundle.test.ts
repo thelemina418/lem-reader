@@ -46,6 +46,7 @@ import { seedCustomTheme } from "../../../src/settings/customTheme";
 import { zipSync } from "fflate";
 import fakeIndexedDB, { IDBKeyRange } from "fake-indexeddb";
 import { Dexie } from "dexie";
+import { BUNDLE_WRITER_VERSION } from "../../../src/portability/bundle";
 
 // Dexie 4 captures `indexedDB` + `IDBKeyRange` on `Dexie.dependencies` at
 // dexie-module-load time (needed for the round-trip case's buildBundle
@@ -258,7 +259,7 @@ describe("validateBundle — refusal kinds (09-04 Task 2)", () => {
     // newer-version refusal must win.
     const damaged: Record<string, unknown> = {
       ...bundle,
-      schemaVersion: 12,
+      schemaVersion: BUNDLE_WRITER_VERSION + 1,
       articles: "not-an-array",
     };
     delete damaged.fixtureIds;
@@ -271,7 +272,7 @@ describe("validateBundle — refusal kinds (09-04 Task 2)", () => {
     if (!result.ok) {
       expect(result.refusal).toEqual({
         kind: "newer-schema-version",
-        bundleVersion: 12,
+        bundleVersion: BUNDLE_WRITER_VERSION + 1,
       });
     }
   });
@@ -443,7 +444,7 @@ describe("validateBundle — refusal kinds (09-04 Task 2)", () => {
     // before any schema parse, manifest check, or transaction (v9 AND v10
     // pass now — #236 made structure-capable bundles parse, #248 made
     // collection-capable bundles parse).
-    const v12 = { ...bundle, schemaVersion: 12 };
+    const v12 = { ...bundle, schemaVersion: BUNDLE_WRITER_VERSION + 1 };
     const v12Result = await validateBundle(
       zipFileOf({
         "bundle.json": bundleJsonOf(v12),
@@ -454,7 +455,7 @@ describe("validateBundle — refusal kinds (09-04 Task 2)", () => {
     if (!v12Result.ok) {
       expect(v12Result.refusal).toEqual({
         kind: "newer-schema-version",
-        bundleVersion: 12,
+        bundleVersion: BUNDLE_WRITER_VERSION + 1,
       });
     }
   });
@@ -605,7 +606,7 @@ describe("validateBundle — round trip (09-04 Task 2)", () => {
 
     expect(result.ok).toBe(true);
     if (result.ok) {
-      expect(result.bundle.schemaVersion).toBe(11); // writers preserve starter removal; v10 adds collections (#248)
+      expect(result.bundle.schemaVersion).toBe(BUNDLE_WRITER_VERSION); // writers preserve starter removal; v10 adds collections (#248)
       expect(result.bundle.articles.map((a) => a.id)).toEqual(["example-article"]);
       expect(result.bundle.preferences).toEqual(samplePrefs());
       expect(result.manifest.algorithm).toBe("sha256");
