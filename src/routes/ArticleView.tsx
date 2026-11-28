@@ -24,7 +24,10 @@
 import { speechSynthesisAvailable, SPEECH_BROWSER_NOTICE } from "../readaloud/webSpeech";
 import { RestoreStarterButton } from "../reader/RestoreStarterButton";
 import { STARTER_ARTICLE_ID, isStarterRemoved } from "../persistence/starterArticleStore";
-import { onLibrarySnapshotInvalidated } from "../ingestion/library/librarySnapshotBus";
+import {
+  invalidateLibrarySnapshot,
+  onLibrarySnapshotInvalidated,
+} from "../ingestion/library/librarySnapshotBus";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { CSSProperties } from "react";
 import { openArticle } from "../content/repository";
@@ -149,8 +152,27 @@ import { highlightBases } from "../settings/highlightTint";
 // churn, and measurement sees the same reserved figure boxes the visible
 // pages will (decode is paint, never layout — D20-13).
 import { AssetProvider } from "../content/assets/AssetProvider";
-import { correctionViewFromArticle } from "../content/correctionView";
-import { CorrectionView, type CorrectionViewHandle } from "../reader/CorrectionView";
+import type { CorrectionViewBlock } from "../content/correctionView";
+import {
+  applyCorrections,
+  blockCorrection,
+  hideAvailability,
+  unhideAvailability,
+  REASONS as CORRECTION_REASONS,
+} from "../content/corrections/engine";
+import { storedOffsetInShown } from "../content/corrections/positions";
+import type { Correction } from "../content/schema";
+import {
+  applyCorrectionsChange,
+  CorrectionsRefusal,
+  loadCorrections,
+  previewAddCorrection,
+} from "../persistence/correctionsStore";
+import {
+  CorrectionView,
+  type BlockCommand,
+  type CorrectionViewHandle,
+} from "../reader/CorrectionView";
 import { SelectionToolbar } from "../reader/annotations/SelectionToolbar";
 // Shared annotation panel for passage and drawer entry.
 import { HighlightControls } from "../reader/annotations/HighlightControls";
@@ -426,6 +448,9 @@ function AssignmentEndNav({
 /** Issue #57 — keys that scroll the page (reading on from the notes). */
 const SCROLL_KEYS = new Set(["ArrowDown", "ArrowUp", "PageDown", "PageUp", " ", "Home", "End"]);
 
+/** Spec #68 / #71 — a stable empty corrections list (the pass-through). */
+const NO_CORRECTIONS: readonly Correction[] = Object.freeze([]);
+
 export function ArticleView({
   articleId,
   jumpHighlightId,
@@ -450,7 +475,18 @@ export function ArticleView({
     if (articleId !== STARTER_ARTICLE_ID || !starterRemoved) return;
     return onLibrarySnapshotInvalidated(() => setArticleReload((value) => value + 1));
   }, [articleId, starterRemoved]);
-  const [article, setArticle] = useState<CanonicalArticle | null>(null);
+  // Spec #68 / issue #71 — the original as stored, plus its ordered
+  // corrections; `article` (what every reading surface reads) is the
+  // correction engine's corrected article — the original object itself
+  // when there are no corrections. Memoized on the corrections change, so
+  // measurement/pagination key on a stable identity.
+  const [originalArticle, setArticle] = useState<CanonicalArticle | null>(null);
+  const [corrections, setCorrections] = useState<readonly Correction[]>(NO_CORRECTIONS);
+  const correctionsResult = useMemo(
+    () => (originalArticle ? applyCorrections(originalArticle, corrections) : null),
+    [originalArticle, corrections],
+  );
+  const article = correctionsResult?.article ?? null;
   const [status, setStatus] = useState<"loading" | "ready" | "error">("loading");
   // Phase 18 Plan 18-03 (ORNT-06, D18-05/08): the restoration marker mount
   // state — replaces the retired ResumeBanner's showResumeBanner flag. The
@@ -1030,7 +1066,11 @@ export function ArticleView({
   const [correctionEntry, setCorrectionEntry] = useState<{
     from: "paginated" | "scrolling";
     offset: number;
+    /** The entry position in VIEW coordinates (stable while corrections
+     * change underneath the view — hide/unhide never move view offsets). */
+    viewOffset: number;
   } | null>(null);
+  const [correctionBusy, setCorrectionBusy] = useState(false);
   const correctionActiveRef = useRef(false);
   correctionActiveRef.current = correctionEntry !== null;
   const correctionViewRef = useRef<CorrectionViewHandle | null>(null);
@@ -1746,14 +1786,10 @@ export function ArticleView({
     };
   }, [article, articleEl]);
 
-  // Spec #68 / issue #70 — the Correction view. Until corrections exist the
-  // view model is the article's own blocks (correctionViewFromArticle); the
-  // correction engine (#71) replaces this derivation with its view model,
-  // whose offset maps translate reading ↔ view coordinates.
-  const correctionModel = useMemo(
-    () => (article ? correctionViewFromArticle(article) : null),
-    [article],
-  );
+  // Spec #68 / issues #70, #71 — the Correction view renders the correction
+  // engine's view model (every block, hidden ones marked), whose offset maps
+  // translate reading ↔ view coordinates.
+  const correctionModel = correctionsResult?.view ?? null;
   // Enter / leave — ONE path shared by the header button and the C shortcut.
   // Entry carries the reading position in (the mode-switch anchor capture);
   // leaving captures the focused or top-visible passage in the view and
@@ -1769,13 +1805,19 @@ export function ArticleView({
         pauseOrResumeReadAloud();
       }
       markProgrammaticScroll();
-      setCorrectionEntry({ from: effectiveMode, offset });
+      // The entry passage is the saved position until the reader leaves:
+      // flush any pending save now, against the text as it reads now, so a
+      // late debounced save can never land after a correction (#71).
+      saveLocationNow(offset);
+      setCorrectionEntry({
+        from: effectiveMode,
+        offset,
+        viewOffset: correctionModel.viewOffsetFor(offset),
+      });
       setCorrectionAnnouncement("Correction view. Every block shows its outline and type.");
       return;
     }
-    const viewOffset =
-      correctionViewRef.current?.captureOffset() ??
-      correctionModel.viewOffsetFor(correctionEntry.offset);
+    const viewOffset = correctionViewRef.current?.captureOffset() ?? correctionEntry.viewOffset;
     const offset = correctionModel.readingOffsetFor(viewOffset);
     const active = document.activeElement;
     const refocus =
@@ -1801,7 +1843,79 @@ export function ArticleView({
     readAloudContinuationPending,
     pauseOrResumeReadAloud,
     markProgrammaticScroll,
+    saveLocationNow,
   ]);
+
+  // Spec #68 / issue #71 — Hide / Unhide on the current block. Availability
+  // comes from the correction engine (one place for every "unavailable
+  // because…"); applying goes through the corrections store's preview +
+  // one-transaction apply, which re-anchors stored highlights and the
+  // reading position. A preview with consequences (chapters a collection
+  // or completion refers to) is not applied in this slice (#72 adds the
+  // consequences dialog) — the reader is told why.
+  const correctionCommandFor = useCallback(
+    (block: CorrectionViewBlock): BlockCommand => {
+      if (!correctionsResult) return { action: "hide", available: false };
+      if (block.hidden) {
+        const availability = unhideAvailability(block);
+        return availability.available
+          ? { action: "unhide", available: true }
+          : { action: "unhide", available: false, reason: availability.reason };
+      }
+      const highlights = (highlightApiRef.current?.highlights ?? []).flatMap((h) =>
+        h.resolvedPosition ? [h.resolvedPosition] : [],
+      );
+      const availability = hideAvailability(correctionsResult, block, { highlights });
+      return availability.available
+        ? { action: "hide", available: true }
+        : { action: "hide", available: false, reason: availability.reason };
+    },
+    [correctionsResult],
+  );
+  const handleCorrectionCommand = useCallback(
+    async (block: CorrectionViewBlock, command: BlockCommand) => {
+      if (!command.available) {
+        setCorrectionAnnouncement(command.reason ?? "That isn't available here.");
+        return;
+      }
+      if (!originalArticle || !correctionsResult) return;
+      const correction = blockCorrection(command.action, correctionsResult, block, {
+        id: crypto.randomUUID(),
+        createdAt: new Date().toISOString(),
+      });
+      if (!correction) {
+        setCorrectionAnnouncement(CORRECTION_REASONS.noText);
+        return;
+      }
+      setCorrectionBusy(true);
+      try {
+        const preview = await previewAddCorrection(originalArticle.id, correction);
+        if (!preview.clean) {
+          setCorrectionAnnouncement(
+            "This block can't be hidden yet: hiding it would change chapters that your collections or progress refer to. Nothing was changed.",
+          );
+          return;
+        }
+        await applyCorrectionsChange(preview);
+        setCorrections(preview.corrections);
+        invalidateLibrarySnapshot();
+        setCorrectionAnnouncement(
+          command.action === "hide"
+            ? `${block.label} hidden. It stays here, dimmed; press X to unhide it.`
+            : `${block.label} unhidden.`,
+        );
+      } catch (error) {
+        setCorrectionAnnouncement(
+          error instanceof CorrectionsRefusal
+            ? error.message
+            : "The correction couldn't be saved. Nothing was changed.",
+        );
+      } finally {
+        setCorrectionBusy(false);
+      }
+    },
+    [originalArticle, correctionsResult],
+  );
   useEffect(() => {
     if (!correctionToggleHandlerRef) return;
     correctionToggleHandlerRef.current = handleToggleCorrectionView;
@@ -2204,6 +2318,7 @@ export function ArticleView({
     setSessionModeOverride(null);
     // Issue #70 — the Correction view belongs to the article it was entered on.
     setCorrectionEntry(null);
+    setCorrections(NO_CORRECTIONS);
     pendingCorrectionExitRef.current = null;
     // Phase 5 Plan 05-02: reset annotation state on article swap so a stale
     // announcement from the previous article doesn't flash. The selection-
@@ -2239,10 +2354,14 @@ export function ArticleView({
     Promise.all([
       openArticle(articleId),
       articleId === STARTER_ARTICLE_ID ? isStarterRemoved() : Promise.resolve(false),
+      // Spec #68 / #71 — the corrections load with the article (never
+      // throws; a failed read reads as the original).
+      loadCorrections(articleId),
     ])
-      .then(([a, removed]) => {
+      .then(([a, removed, loadedCorrections]) => {
         if (cancelled) return;
         setStarterRemoved(removed);
+        setCorrections(loadedCorrections);
         setArticle(a);
         setStatus(a ? "ready" : "error");
         // Plan 12-06 (D12-08 + D12-05) + Issue #8 — the epub-chapter
@@ -2850,7 +2969,24 @@ export function ArticleView({
     // function has returned — so the holder pattern bridges the two).
     let cancelOpeningLanding: (() => void) | null = null;
     loadLocation(article.id, textStamp(article).revision)
-      .then((result) => {
+      .then((stored) => {
+        // Spec #68 / #71 — a stored position is trusted directly only when
+        // it was saved against the text as it reads now; one saved against
+        // the uncorrected original is carried by quote (the one helper).
+        const result =
+          stored.ok && stored.location && originalArticle && corrections.length > 0
+            ? {
+                ...stored,
+                location: {
+                  ...stored.location,
+                  graphemeOffset: storedOffsetInShown(
+                    stored.location,
+                    originalArticle,
+                    corrections,
+                  ),
+                },
+              }
+            : stored;
         if (cancelled) return;
         // Fall-through cases (reading continues from the top in all of
         // them; what differs is HOW HONEST the fall-through is — issue #98):
@@ -3035,8 +3171,11 @@ export function ArticleView({
     // mounted. Explicit continue owns its own landing (the pending-offset
     // guard above); ordinary scope changes rerun the shared resume gate.
     // hasAppHistory is read per arrival, never a restore trigger itself.
+    // Spec #68 / #71 — keyed on the ORIGINAL: a correction made while the
+    // article is open changes `article` but is not a new arrival (the store
+    // already re-anchored the saved position; the view's exit lands it).
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [article, chapterScope]);
+  }, [originalArticle, chapterScope]);
 
   // Plan 14-03 Task 3 (D14-06) — error parity: a failed open is a truthful
   // destination, so an in-app arrival at the error branch announces via its
@@ -3695,7 +3834,10 @@ export function ArticleView({
             <CorrectionView
               ref={correctionViewRef}
               model={correctionModel}
-              entryOffset={correctionModel.viewOffsetFor(correctionEntry.offset)}
+              entryOffset={correctionEntry.viewOffset}
+              commandFor={correctionCommandFor}
+              onCommand={handleCorrectionCommand}
+              busy={correctionBusy}
             />
           ) : (
             <>

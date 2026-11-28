@@ -52,7 +52,11 @@ export function carryOffset(
  * best we can do is the stored offset clamped into the shown article.
  */
 export function storedOffsetInShown(
-  stored: { readonly graphemeOffset: number; readonly revision: number; readonly corrections?: string },
+  stored: {
+    readonly graphemeOffset: number;
+    readonly revision: number;
+    readonly corrections?: string;
+  },
   original: CanonicalArticle,
   corrections: readonly Correction[],
 ): number {

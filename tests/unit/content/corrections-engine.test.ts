@@ -34,7 +34,10 @@ const heading = (level: 2 | 3, text: string): Block => ({
   content: [{ text, marks: [] }],
 });
 
-const makeArticle = (blocks: Block[], overrides: Partial<CanonicalArticle> = {}): CanonicalArticle =>
+const makeArticle = (
+  blocks: Block[],
+  overrides: Partial<CanonicalArticle> = {},
+): CanonicalArticle =>
   ArticleSchema.parse({
     id: "corrections-article",
     revision: 1,
@@ -179,7 +182,8 @@ describe("hide", () => {
       { kind: "unsupported", originalKind: "embed", plainDescription: "An embedded video." },
     ]);
     let corrections: Correction[] = [];
-    for (const path of [[1], [2], [3]]) corrections = [...corrections, hide(article, path, corrections)];
+    for (const path of [[1], [2], [3]])
+      corrections = [...corrections, hide(article, path, corrections)];
     const result = applyCorrections(article, corrections);
     expect(result.outcomes.every((o) => o.status === "applied")).toBe(true);
     expect(normalizeText(result.article)).toBe("Body.");
@@ -370,7 +374,10 @@ describe("view ↔ reading offsets", () => {
       [
         paragraph("Alpha."),
         paragraph("Share this"),
-        { kind: "blockquote", children: [paragraph("Quote one."), paragraph("Ad"), paragraph("Quote two.")] },
+        {
+          kind: "blockquote",
+          children: [paragraph("Quote one."), paragraph("Ad"), paragraph("Quote two.")],
+        },
         paragraph("Omega."),
       ],
       { footnotes: [{ id: "fn-1", content: [{ text: "A note.", marks: [] }] }] },

@@ -34,11 +34,7 @@
 
 import { findAllOccurrences, matchesContext } from "../../annotations/resolution";
 import { footnoteRefOf } from "../footnoteReferences";
-import {
-  articleGraphemeIndex,
-  deriveQuoteSelector,
-  graphemeClusters,
-} from "../normalizeText";
+import { articleGraphemeIndex, deriveQuoteSelector, graphemeClusters } from "../normalizeText";
 import type { BlockTarget, Correction } from "../schema";
 import { registerCorrectionsFingerprint } from "../sameText";
 import type { Block, CanonicalArticle, InlineRun } from "../types";
@@ -51,8 +47,7 @@ import {
 } from "../correctionView";
 
 export type CorrectionOutcome =
-  | { readonly status: "applied" }
-  | { readonly status: "not-applied"; readonly reason: string };
+  { readonly status: "applied" } | { readonly status: "not-applied"; readonly reason: string };
 
 export interface CorrectionsResult {
   /** The corrected article (hidden blocks absent). The original object when
@@ -145,7 +140,11 @@ function resolveBlockTarget(
   for (const start of findAllOccurrences(clusters, exact)) {
     const end = start + exact.length;
     const block = laid.find(
-      (b) => b.start === start && b.end === end && b.block.kind === target.kind && b.depth === target.depth,
+      (b) =>
+        b.start === start &&
+        b.end === end &&
+        b.block.kind === target.kind &&
+        b.depth === target.depth,
     );
     if (block) candidates.push(block);
   }
@@ -272,7 +271,8 @@ function buildCorrectedBlocks(
       // A quotation with every child hidden is absent from reading.
       if (children.length === 0) return;
       const unchanged =
-        children.length === block.children.length && children.every((c, j) => c === block.children[j]);
+        children.length === block.children.length &&
+        children.every((c, j) => c === block.children[j]);
       out.push(unchanged ? block : { ...block, children });
       return;
     }
@@ -359,7 +359,11 @@ export function applyCorrections(
   corrections: readonly Correction[] = EMPTY,
 ): CorrectionsResult {
   const cached = memo.get(original);
-  if (cached && (cached.corrections === corrections || (corrections.length === 0 && cached.corrections.length === 0))) {
+  if (
+    cached &&
+    (cached.corrections === corrections ||
+      (corrections.length === 0 && cached.corrections.length === 0))
+  ) {
     return cached.result;
   }
   const result = run(original, corrections);
@@ -379,8 +383,7 @@ export function correctedArticle(
 // ── Command availability (the Correction view's Hide / Unhide) ─────────────
 
 export type Availability =
-  | { readonly available: true }
-  | { readonly available: false; readonly reason: string };
+  { readonly available: true } | { readonly available: false; readonly reason: string };
 
 export interface AvailabilityContext {
   /** Highlight ranges in READING coordinates (the corrected article). */

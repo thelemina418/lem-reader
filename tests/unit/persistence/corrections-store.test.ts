@@ -198,7 +198,8 @@ describe("applying a correction", () => {
 
   it("unhide restores the original substrate exactly", async () => {
     const db = await seed();
-    const { previewAddCorrection, applyCorrectionsChange, previewCorrectionsChange } = await store();
+    const { previewAddCorrection, applyCorrectionsChange, previewCorrectionsChange } =
+      await store();
     const hide = hideOf([1]);
     await applyCorrectionsChange(await previewAddCorrection(saved.id, hide));
     const result = applyCorrections(saved, [hide]);
@@ -246,7 +247,8 @@ describe("applying a correction", () => {
     const { previewAddCorrection, applyCorrectionsChange } = await store();
     const preview = await previewAddCorrection(saved.id, hideOf([1]));
     const put = db.location.put.bind(db.location);
-    db.location.put = (() => Promise.reject(new Error("disk full"))) as typeof db.location.put;
+    db.location.put = (() =>
+      Promise.reject(new Error("disk full"))) as unknown as typeof db.location.put;
     try {
       await expect(applyCorrectionsChange(preview)).rejects.toThrow();
     } finally {

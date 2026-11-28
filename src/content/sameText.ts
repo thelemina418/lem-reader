@@ -51,6 +51,7 @@ export function textStamp(article: TextStamp): TextStamp {
  */
 export function isSameText(stored: TextStamp, shown: TextStamp): boolean {
   return (
-    stored.revision === shown.revision && (fingerprintOf(stored) ?? "") === (fingerprintOf(shown) ?? "")
+    stored.revision === shown.revision &&
+    (fingerprintOf(stored) ?? "") === (fingerprintOf(shown) ?? "")
   );
 }
