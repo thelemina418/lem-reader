@@ -30,7 +30,7 @@ import {
 import { resolveWorkStructure } from "../content/chapterTargets";
 import { bundledFixtures } from "../fixtures";
 import { saveWorkStructure } from "../persistence/structureStore";
-import { textStamp } from "../content/sameText";
+import { isCorrectedArticle, textStamp } from "../content/sameText";
 
 export type WorkStructureOrigin = "saved" | "derived" | null;
 export type WorkStructureSaveOutcome =
@@ -91,7 +91,7 @@ export function useWorkStructure(article: CanonicalArticle | null): WorkStructur
     // Spec #68 / #71 (ADR 0014) — a corrected article's structure is derived
     // from the corrected blocks and never written onto the original row (the
     // snapshot there describes the original as ingested).
-    if (textStamp(article).corrections !== undefined) return;
+    if (isCorrectedArticle(article)) return;
     let cancelled = false;
     void saveWorkStructure(article.id, textStamp(article).revision, structure).then((outcome) => {
       if (cancelled) return;

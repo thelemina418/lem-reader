@@ -474,6 +474,12 @@ export const ArticleSchema = z.object({
   // revision/range compatibility against the winning row before accepting a
   // snapshot (an invalid snapshot is stripped, never trusted as structure).
   structure: WorkStructureSchema.optional(),
+  // Spec #68 / #78 — set by an explicit PDF repair, which rewrites block
+  // kinds without a revision bump: the repaired original's own text identity
+  // (src/content/sameText.ts), so records saved against the unrepaired
+  // original are never trusted for the repaired one. Absent = never
+  // repaired (or recovered). Additive-optional (Pitfall 9).
+  repairStamp: z.string().min(1).optional(),
   // Issue #114 — the IMMUTABLE added-to-library stamp (Recently added is the
   // trustworthy default order for the mixed article+book list). Stamped ONCE
   // at the save seams (DexieLibrarySource.save / saveBook) the moment the row

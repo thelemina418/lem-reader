@@ -50,7 +50,11 @@ export async function saveWorkStructure(
     return await db.transaction("rw", db.articles, async (): Promise<SaveStructureOutcome> => {
       const row = await db.articles.get(articleId);
       if (row === undefined) return { saved: false, reason: "missing-row" };
-      if (!isSameText(row, { revision })) return { saved: false, reason: "revision-changed" };
+      // The row must still be the text the structure was derived from: the
+      // same revision AND the same substrate (a PDF repair re-stamps the
+      // row without a revision bump, #78).
+      if (row.revision !== revision || !isSameText(row, structure))
+        return { saved: false, reason: "revision-changed" };
       // Established snapshots are frozen. A lazy save computed before an
       // explicit repair must not replace that repair at the same text revision.
       const current = ArticleSchema.safeParse(row);

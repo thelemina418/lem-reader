@@ -43,7 +43,7 @@ import {
 } from "../normalizeText";
 import type { BlockTarget, Correction } from "../schema";
 import type { TextQuoteSelector } from "../normalizeText";
-import { registerCorrectionsFingerprint } from "../sameText";
+import { fingerprintText, registerCorrectionsFingerprint } from "../sameText";
 import { correctedStructure } from "./structure";
 import { setTypeHandler } from "./setType";
 import type { Block, CanonicalArticle, InlineRun } from "../types";
@@ -364,20 +364,6 @@ function buildCorrectedBlocks(
   return out;
 }
 
-/** A short, stable fingerprint of a string (cyrb53 — not cryptographic). */
-function fingerprintText(text: string): string {
-  let h1 = 0xdeadbeef;
-  let h2 = 0x41c6ce57;
-  for (let i = 0; i < text.length; i++) {
-    const ch = text.charCodeAt(i);
-    h1 = Math.imul(h1 ^ ch, 2654435761);
-    h2 = Math.imul(h2 ^ ch, 1597334677);
-  }
-  h1 = Math.imul(h1 ^ (h1 >>> 16), 2246822507) ^ Math.imul(h2 ^ (h2 >>> 13), 3266489909);
-  h2 = Math.imul(h2 ^ (h2 >>> 16), 2246822507) ^ Math.imul(h1 ^ (h1 >>> 13), 3266489909);
-  return (4294967296 * (2097151 & h2) + (h1 >>> 0)).toString(36);
-}
-
 function finish(
   original: CanonicalArticle,
   state: EngineState,
@@ -404,7 +390,10 @@ function finish(
   };
   // The fingerprint is a function of the corrected substrate itself, so two
   // correction lists that read the same (hide then unhide) share a stamp.
-  const fingerprint = `c${fingerprintText(JSON.stringify(blocks))}`;
+  // Over a PDF-repaired original (#78) the repair stamp is folded in, so the
+  // same corrections over the repaired and the unrepaired original differ.
+  const repaired = original.repairStamp === undefined ? "" : `${original.repairStamp}:`;
+  const fingerprint = `c${fingerprintText(repaired + JSON.stringify(blocks))}`;
   registerCorrectionsFingerprint(article, fingerprint);
   // Set on the object itself (not a copy) so the fingerprint registration
   // and every per-object cache stay with the one corrected article.

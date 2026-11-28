@@ -1,14 +1,31 @@
+// PDF structural repair. Spec #68 / #78: the reader's corrections are
+// re-applied to the repaired original inside the preview (by finding their
+// text, through the one engine), so chapter consequences and chapters
+// before/after are what the reader reads; corrections that no longer fit
+// are listed and stay in the corrections list as not applied. A repair
+// changes block kinds without a revision bump, so the repaired original
+// carries its own `repairStamp` (src/content/sameText.ts) and the saved
+// reading position is re-stamped in the same transaction (by repair and by
+// recovery), carried by quote when corrections change what is read.
 import { z } from "zod";
 import {
   ArticleSchema,
   CollectionSchema,
   CollectionActiveEntrySchema,
   CompletionRecordSchema,
+  LocationRecordSchema,
   type CanonicalArticle,
+  type LocationRecord,
 } from "../content/schema";
 import { deriveWorkStructure } from "../content/structure";
+import { normalizeText } from "../content/normalizeText";
+import { carryOffset } from "../content/corrections/positions";
+import { reapplyCorrections, type NotAppliedCorrection } from "../content/corrections/reapply";
+import { isSameText, repairStampOf, textStamp, type TextStamp } from "../content/sameText";
+import type { Correction } from "../content/schema";
 import { db } from "./db";
 import { chapterConsequences, type ChapterConsequence } from "./chapterConsequences";
+import { loadCorrections } from "./correctionsStore";
 
 export class PdfRepairRefusal extends Error {}
 
@@ -42,6 +59,81 @@ export interface PdfRepairPreview {
   consequences: RepairConsequence[];
   chaptersBefore: string[];
   chaptersAfter: string[];
+  /** The reader's corrections re-applied to the repaired original (#78). */
+  corrections: {
+    reapplied: readonly Correction[];
+    notApplied: readonly NotAppliedCorrection[];
+  };
+  /** Snapshot of the reader data apply re-stamps (corrections, positions). */
+  readerData: string;
+}
+
+const structureOf = (article: CanonicalArticle) =>
+  article.structure ??
+  deriveWorkStructure({ ...article, provenanceTitle: article.provenance.title });
+
+function everyLocation(articleId: string) {
+  return db.location
+    .where("[articleId+revision]")
+    .between([articleId, 0], [articleId, Number.MAX_SAFE_INTEGER]);
+}
+
+async function readerDataOf(articleId: string): Promise<string> {
+  return JSON.stringify({
+    corrections: await db.corrections.get(articleId),
+    locations: await everyLocation(articleId).toArray(),
+  });
+}
+
+/** Inside a transaction: move the saved reading position from `before` to
+ * `after` (the article as the reader sees it before and after the row
+ * changes), stamped with `after`'s text identity. Offsets carry unchanged
+ * when only the stamp moves (repair keeps every D-05 coordinate); otherwise
+ * by quote. A position that can't be matched is left as it was. */
+async function restampLocation(
+  articleId: string,
+  original: CanonicalArticle,
+  before: CanonicalArticle,
+  after: CanonicalArticle,
+): Promise<void> {
+  const rows = (await everyLocation(articleId).toArray()).flatMap((row) => {
+    const parsed = LocationRecordSchema.safeParse(row);
+    return parsed.success ? [parsed.data] : [];
+  });
+  const latest = rows.sort((x, y) =>
+    x.savedAt < y.savedAt ? 1 : x.savedAt > y.savedAt ? -1 : 0,
+  )[0];
+  if (!latest) return;
+  const offset = carriedOffset(latest, original, before, after);
+  if (offset === null) return;
+  const stamp: TextStamp = textStamp(after);
+  await everyLocation(articleId).delete();
+  const record: LocationRecord = {
+    schemaVersion: 1,
+    articleId,
+    ...stamp,
+    graphemeOffset: offset,
+    savedAt: latest.savedAt,
+  };
+  await db.location.put(record);
+}
+
+function carriedOffset(
+  location: LocationRecord,
+  original: CanonicalArticle,
+  before: CanonicalArticle,
+  after: CanonicalArticle,
+): number | null {
+  const from = isSameText(location, before)
+    ? before
+    : isSameText(location, original)
+      ? original
+      : null;
+  if (from === null) return null;
+  // Same normalized text: the coordinates are identical (a repair alone).
+  if (from === after || normalizeText(from) === normalizeText(after))
+    return location.graphemeOffset;
+  return carryOffset(from, after, location.graphemeOffset);
 }
 
 /** No writes. The candidate comes from explicitly processing the original PDF
@@ -95,26 +187,35 @@ export async function previewPdfRepair(
     }
     return block;
   });
-  const proposed = ArticleSchema.parse({ ...article, blocks, structure: undefined });
+  // The repaired original's own text identity (#78): the same revision, a
+  // new stamp. Set before deriving so the structure carries it too.
+  const proposed = ArticleSchema.parse({
+    ...article,
+    blocks,
+    structure: undefined,
+    repairStamp: repairStampOf(blocks),
+  });
   proposed.structure = deriveWorkStructure({
     ...proposed,
     provenanceTitle: proposed.provenance.title,
   });
-  const oldStructure =
-    article.structure ??
-    deriveWorkStructure({ ...article, provenanceTitle: article.provenance.title });
-  const consequences = await chapterConsequences(articleId, oldStructure, proposed.structure);
+  const readerData = await readerDataOf(articleId);
+  const carry = reapplyCorrections(article, proposed, await loadCorrections(articleId));
+  const oldStructure = structureOf(carry.before.article);
+  const newStructure = structureOf(carry.after.article);
+  const consequences = await chapterConsequences(articleId, oldStructure, newStructure);
+  const chapterTitles = (structure: typeof oldStructure) =>
+    structure?.destinations.filter((d) => d.kind === "chapter").map((d) => d.title) ?? [];
   return {
     articleId,
     original: JSON.stringify(row),
     proposed,
     changes,
     consequences,
-    chaptersBefore:
-      oldStructure?.destinations.filter((d) => d.kind === "chapter").map((d) => d.title) ?? [],
-    chaptersAfter:
-      proposed.structure?.destinations.filter((d) => d.kind === "chapter").map((d) => d.title) ??
-      [],
+    chaptersBefore: chapterTitles(oldStructure),
+    chaptersAfter: chapterTitles(newStructure),
+    corrections: { reapplied: carry.reapplied, notApplied: carry.notApplied },
+    readerData,
   };
 }
 
@@ -126,10 +227,21 @@ export async function applyPdfRepair(
 ): Promise<void> {
   await db.transaction(
     "rw",
-    [db.articles, db.pdfRepairs, db.completions, db.collections, db.collectionActiveEntries],
+    [
+      db.articles,
+      db.pdfRepairs,
+      db.completions,
+      db.collections,
+      db.collectionActiveEntries,
+      db.corrections,
+      db.location,
+    ],
     async () => {
       const row = await db.articles.get(preview.articleId);
-      if (JSON.stringify(row) !== preview.original)
+      if (
+        JSON.stringify(row) !== preview.original ||
+        (await readerDataOf(preview.articleId)) !== preview.readerData
+      )
         throw new PdfRepairRefusal(
           "This work changed after the preview. Preview it again before applying.",
         );
@@ -154,6 +266,7 @@ export async function applyPdfRepair(
         ...row!,
         blocks: fresh.proposed.blocks,
         structure: fresh.proposed.structure,
+        repairStamp: fresh.proposed.repairStamp,
       };
       const backup = Backup.parse({ article: row, appliedArticle: JSON.stringify(repaired) });
       for (const consequence of fresh.consequences) {
@@ -192,6 +305,10 @@ export async function applyPdfRepair(
       }
       await db.pdfRepairs.put({ articleId: preview.articleId, value: backup });
       await db.articles.put(repaired);
+      const corrections = await loadCorrections(preview.articleId);
+      const before = ArticleSchema.parse(row);
+      const carry = reapplyCorrections(before, fresh.proposed, corrections);
+      await restampLocation(preview.articleId, before, carry.before.article, carry.after.article);
     },
   );
 }
@@ -206,7 +323,15 @@ export async function hasPdfRepairRecovery(articleId: string): Promise<boolean> 
 export async function recoverPdfRepair(articleId: string): Promise<void> {
   await db.transaction(
     "rw",
-    [db.articles, db.pdfRepairs, db.completions, db.collections, db.collectionActiveEntries],
+    [
+      db.articles,
+      db.pdfRepairs,
+      db.completions,
+      db.collections,
+      db.collectionActiveEntries,
+      db.corrections,
+      db.location,
+    ],
     async () => {
       const record = await db.pdfRepairs.get(articleId);
       if (!record) throw new PdfRepairRefusal("No recovery version is available for this work.");
@@ -241,11 +366,21 @@ export async function recoverPdfRepair(articleId: string): Promise<void> {
             "Chapter completion changed after repair. The recovery version has been kept.",
           );
       }
-      await db.articles.put({
-        ...current,
+      const { repairStamp: _repaired, ...unstamped } = current;
+      void _repaired;
+      const restored = {
+        ...unstamped,
         blocks: backup.article.blocks,
         structure: backup.article.structure,
-      });
+        ...(backup.article.repairStamp !== undefined
+          ? { repairStamp: backup.article.repairStamp }
+          : {}),
+      };
+      await db.articles.put(restored);
+      const corrections = await loadCorrections(articleId);
+      const repairedArticle = ArticleSchema.parse(current);
+      const carry = reapplyCorrections(repairedArticle, ArticleSchema.parse(restored), corrections);
+      await restampLocation(articleId, repairedArticle, carry.before.article, carry.after.article);
       for (const completion of backup.completions) await db.completions.put(completion);
       for (const item of backup.collections) {
         await db.collections.put(item.before);

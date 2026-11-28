@@ -12,7 +12,12 @@ import {
   type BookReprocessPreview,
 } from "../../persistence/reprocessStore";
 import { StatusRegion } from "../../ui/StatusRegion";
-import { ConsequenceChecklist, HighlightOutcomes, useReprocessRun } from "./reprocessParts";
+import {
+  ConsequenceChecklist,
+  CorrectionsOutcome,
+  HighlightOutcomes,
+  useReprocessRun,
+} from "./reprocessParts";
 import "./pdfRepair.css";
 
 interface ReprocessBookDialogProps {
@@ -147,6 +152,11 @@ export function ReprocessBookDialog({ open, book, onSaved, onCancel }: Reprocess
                   </details>
                 )}
                 <HighlightOutcomes highlights={preview.highlights} noun="book" />
+                <CorrectionsOutcome
+                  reapplied={preview.correctionsReapplied}
+                  notApplied={preview.correctionsNotApplied}
+                  version="new version"
+                />
                 {preview.positionsUnmatched.length > 0 && (
                   <p>
                     Your reading position in {preview.positionsUnmatched.join(", ")} cannot be
