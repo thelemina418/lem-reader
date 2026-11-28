@@ -47,6 +47,7 @@ import { fingerprintText, registerCorrectionsFingerprint } from "../sameText";
 import { correctedStructure } from "./structure";
 import { setTypeHandler } from "./setType";
 import type { Block, CanonicalArticle, InlineRun } from "../types";
+import { moveWords, ownParagraph } from "./moveWords";
 import {
   blockPathKey,
   buildCorrectionView,
@@ -130,7 +131,7 @@ export interface LaidBlock {
 
 const layouts = new WeakMap<CanonicalArticle, readonly LaidBlock[]>();
 
-function layoutOf(article: CanonicalArticle): readonly LaidBlock[] {
+export function layoutOf(article: CanonicalArticle): readonly LaidBlock[] {
   let laid = layouts.get(article);
   if (laid) return laid;
   // The pass-through view model already walks every block with D-05 offsets.
@@ -319,6 +320,9 @@ const KINDS: { [K in Correction["kind"]]: Handler<K> } = {
     };
   },
   "set-type": setTypeHandler,
+  // Issue #73 (./moveWords.ts). Called lazily: the module cycle is safe.
+  "move-words": (state, correction) => moveWords(state, correction),
+  "own-paragraph": (state, correction) => ownParagraph(state, correction),
 };
 
 /** Hidden itself or inside a hidden quotation. */
@@ -500,7 +504,10 @@ export function engineStateOf(result: CorrectionsResult): EngineState {
   return { article: result.view.article, hidden };
 }
 
-function laidFor(result: CorrectionsResult, block: CorrectionViewBlock): LaidBlock | undefined {
+export function laidFor(
+  result: CorrectionsResult,
+  block: CorrectionViewBlock,
+): LaidBlock | undefined {
   const key = blockPathKey(block.path);
   return layoutOf(result.view.article).find((b) => b.key === key);
 }

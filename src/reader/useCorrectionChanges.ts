@@ -45,6 +45,9 @@ export interface CorrectionChange {
   readonly redoAnnounce: string;
   /** Offer the session's removed rows (undo-like changes only). */
   readonly reinstate?: boolean;
+  /** Called once this change itself is applied (not on a later undo or
+   * redo) — e.g. to land on the moved words (#73). */
+  readonly applied?: () => void;
 }
 
 interface Step {
@@ -147,6 +150,7 @@ export function useCorrectionChanges({ articleId, corrections, onApplied, announ
       }
       setHistoryTick((n) => n + 1);
       onApplied(preview.corrections);
+      if (history === "push") change.applied?.();
       announce(
         preview.restored.length > 0
           ? `${change.announce} ${restoredSummary(preview)}`

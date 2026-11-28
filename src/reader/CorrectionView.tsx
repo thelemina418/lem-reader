@@ -22,6 +22,15 @@
 // of doing nothing. Split needs a caret: a collapsed selection in the block
 // (or the moving end of a selection — where Shift+arrow keys leave it).
 //
+// Selection commands (#73): selecting text (pointer, touch, or Shift+←/→
+// a word at a time on a focused block) shows the selection command surface
+// in the command bar — never the selection toolbar. Each command (move to
+// the next / previous block, own paragraph) has a key (]  [  P) and, when
+// it doesn't apply, the engine's reason. The bar is fixed, so touch readers
+// reach the commands from a selection with a tap, never a drag. After a
+// command the owner passes a `landing`: the moved words' block is focused
+// and becomes the precise passage leaving returns to.
+//
 // Position: the owner passes the entry offset (view coordinates); on mount
 // the view lands that block under the header and focuses it. The owner
 // calls `captureOffset()` on leave: the focused block when it is in view,
@@ -48,10 +57,21 @@ import {
   type CorrectionViewModel,
 } from "../content/correctionView";
 import { isFormField } from "./PageTurnControls";
-import { domPointToIntraBlockGraphemeOffset } from "../annotations/capture";
-import { blockNormalizedText, graphemeClusters } from "../content/normalizeText";
+import { captureSelection, domPointToIntraBlockGraphemeOffset } from "../annotations/capture";
+import {
+  blockNormalizedText,
+  graphemeClusters,
+  type TextPositionSelector,
+} from "../content/normalizeText";
 import type { Block } from "../content/types";
 import type { BlockTypeChoice } from "../content/schema";
+import {
+  MOVE_REASONS,
+  type SelectionCommand,
+  type SelectionCommandKind,
+  type SelectionCommands,
+} from "../content/corrections/moveWords";
+import { CORRECTION_SHORTCUTS, SELECTION_COMMAND_KEYS } from "./correctionShortcuts";
 
 /** Header band height — the same line the reading anchors measure from. */
 const HEADER_PX = 48;
@@ -91,6 +111,37 @@ export interface TypeChoiceCommand {
   readonly reason?: string;
 }
 
+/** Where to land after a command: a block path in the NEW model and the
+ * offset of the moved words inside it. A new object per command. */
+export interface CorrectionLanding {
+  readonly path: readonly number[];
+  readonly offset: number;
+}
+
+const SELECTION_LABELS: Record<SelectionCommandKind, string> = {
+  "move-next": "Move to next block",
+  "move-previous": "Move to previous block",
+  "own-paragraph": "Make own paragraph",
+};
+
+function excerpt(words: string): string {
+  const list = words.split(/\s+/);
+  return list.length <= 6 ? words : `${list.slice(0, 5).join(" ")}…`;
+}
+
+/** A frame's text nodes, without the type label(s). */
+function frameTextNodes(frame: HTMLElement): Text[] {
+  const nodes: Text[] = [];
+  const walker = document.createTreeWalker(frame, NodeFilter.SHOW_TEXT, {
+    acceptNode: (node) =>
+      node.parentElement?.closest(".correction-block-label") || !node.textContent?.trim()
+        ? NodeFilter.FILTER_REJECT
+        : NodeFilter.FILTER_ACCEPT,
+  });
+  for (let n = walker.nextNode(); n; n = walker.nextNode()) nodes.push(n as Text);
+  return nodes;
+}
+
 interface CorrectionViewProps {
   model: CorrectionViewModel;
   /** Where the reader was on entry, in view coordinates. */
@@ -101,6 +152,12 @@ interface CorrectionViewProps {
   onCommand?: (block: CorrectionViewBlock, command: BlockCommand, caret: BlockCaret) => void;
   /** True while a command is being applied. */
   busy?: boolean;
+  /** The selection commands for a view-coordinate selection (#73). */
+  selectionCommandsFor?: (range: TextPositionSelector) => SelectionCommands;
+  /** Run a selection command (the owner previews, applies, announces). */
+  onSelectionCommand?: (command: SelectionCommand, words: string) => void;
+  /** Land here after a command (see CorrectionLanding). */
+  landing?: CorrectionLanding | null;
   /** Rendered at the end of the view's header (the corrections list, #76). */
   headerExtras?: React.ReactNode;
   /** Issue #74 — the Change type choices for a block; absent → no menu. */
@@ -165,6 +222,9 @@ export const CorrectionView = forwardRef<CorrectionViewHandle, CorrectionViewPro
       commandsFor,
       onCommand,
       busy = false,
+      selectionCommandsFor,
+      onSelectionCommand,
+      landing = null,
       headerExtras,
       typeChoicesFor,
       onChangeType,
@@ -174,6 +234,7 @@ export const CorrectionView = forwardRef<CorrectionViewHandle, CorrectionViewPro
     const headingId = useId();
     const reasonId = useId();
     const typeMenuId = useId();
+    const selectionReasonId = useId();
     const bodyRef = useRef<HTMLDivElement>(null);
     const { article, blocks } = model;
     // The current block: the focused frame, or the last one focused.
@@ -235,10 +296,14 @@ export const CorrectionView = forwardRef<CorrectionViewHandle, CorrectionViewPro
     // paint (no visible jump; nothing animates).
     const readerFocusedRef = useRef(false);
     const entryFrameRef = useRef<HTMLElement | null>(null);
+    // The precise passage for a block: the entry offset on the entry block,
+    // or the moved words after a command. Leaving on that block returns it.
+    const anchorRef = useRef<{ id: string; offset: number } | null>(null);
     useLayoutEffect(() => {
       const landed = frameAt(entryOffset);
       entryFrameRef.current = landed;
       if (!landed) return;
+      anchorRef.current = { id: landed.dataset.correctionId ?? "", offset: entryOffset };
       const top = landed.getBoundingClientRect().top + window.scrollY - LANDING_LINE_PX;
       window.scrollTo({ top: Math.max(0, top), behavior: "instant" });
       landed.focus({ preventScroll: true });
@@ -278,16 +343,103 @@ export const CorrectionView = forwardRef<CorrectionViewHandle, CorrectionViewPro
               chosen = candidate;
             }
           }
-          if (chosen === null) return entryOffset;
-          // Still on the entry block: keep the entry's precise offset (a
-          // paged entry may sit mid-block) so a round trip never drifts.
-          if (chosen === entryFrameRef.current) return entryOffset;
+          const anchor = anchorRef.current;
+          if (chosen === null) return anchor?.offset ?? entryOffset;
+          // Still on the anchored block: keep its precise offset (a paged
+          // entry may sit mid-block; moved words sit mid-block after a move)
+          // so a round trip never drifts.
+          if (anchor && chosen.dataset.correctionId === anchor.id) return anchor.offset;
           const block = model.blockById(chosen.dataset.correctionId ?? "");
-          return block?.viewStart ?? entryOffset;
+          return block?.viewStart ?? anchor?.offset ?? entryOffset;
         },
       }),
       [model, entryOffset],
     );
+
+    // A correction that changes the blocks re-renders the column: land on
+    // the moved words when the owner says where; otherwise an anchor into
+    // the old text is stale and is dropped.
+    const shownArticleRef = useRef(model.article);
+    const appliedLandingRef = useRef<CorrectionLanding | null>(null);
+    useLayoutEffect(() => {
+      const changed = shownArticleRef.current !== model.article;
+      shownArticleRef.current = model.article;
+      if (landing && landing !== appliedLandingRef.current) {
+        appliedLandingRef.current = landing;
+        const key = blockPathKey(landing.path);
+        const block = model.allBlocks.find((b) => blockPathKey(b.path) === key);
+        const el = block
+          ? bodyRef.current?.querySelector<HTMLElement>(`[data-correction-id="${block.id}"]`)
+          : null;
+        if (block && el) {
+          window.getSelection()?.removeAllRanges();
+          anchorRef.current = { id: block.id, offset: block.viewStart + landing.offset };
+          readerFocusedRef.current = true;
+          el.focus();
+          setCurrentId(block.id);
+          return;
+        }
+      }
+      if (changed) anchorRef.current = null;
+    }, [model, landing]);
+
+    // The selection, as the engine sees it (#73).
+    const [selection, setSelection] = useState<SelectionCommands | null>(null);
+    const [selectionReason, setSelectionReason] = useState("");
+    useEffect(() => {
+      if (!selectionCommandsFor) return;
+      const update = () => {
+        const root = bodyRef.current;
+        const sel = window.getSelection();
+        if (!root || !sel || sel.isCollapsed || sel.rangeCount === 0) {
+          setSelection(null);
+          return;
+        }
+        const range = sel.getRangeAt(0);
+        if (!root.contains(range.startContainer) && !root.contains(range.endContainer)) {
+          setSelection(null);
+          return;
+        }
+        const captured = captureSelection(model.article, root);
+        if (!captured.ok) {
+          // In the view but not words one command can act on.
+          if (captured.reason === "empty" || captured.reason === "empty-span") {
+            setSelection(null);
+            return;
+          }
+          setSelection({
+            range: null,
+            words: "",
+            commands: (["move-next", "move-previous", "own-paragraph"] as const).map((kind) => ({
+              kind,
+              available: false,
+              reason: MOVE_REASONS.oneBlock,
+            })),
+          });
+          return;
+        }
+        setSelection(selectionCommandsFor(captured.position));
+      };
+      update();
+      document.addEventListener("selectionchange", update);
+      return () => document.removeEventListener("selectionchange", update);
+    }, [model, selectionCommandsFor]);
+    useEffect(() => setSelectionReason(""), [selection]);
+
+    const runSelection = useCallback(
+      (kind: SelectionCommandKind) => {
+        if (!selection || busy) return;
+        const command = selection.commands.find((c) => c.kind === kind);
+        if (!command) return;
+        if (!command.available) setSelectionReason(command.reason ?? "");
+        onSelectionCommand?.(command, selection.words);
+      },
+      [selection, busy, onSelectionCommand],
+    );
+    const runSelectionRef = useRef(runSelection);
+    runSelectionRef.current = runSelection;
+    const hasSelectionRef = useRef(false);
+    hasSelectionRef.current = selection !== null;
 
     // The caret: where the selection's moving end sits, tracked so the
     // command bar's availability follows it. A caret in a frame makes that
@@ -325,21 +477,38 @@ export const CorrectionView = forwardRef<CorrectionViewHandle, CorrectionViewPro
 
     // X / S / J — the current block's commands. Plain keys only (Ctrl/Cmd+X
     // stays cut), never from form fields or dialogs (the isFormField
-    // contract).
+    // contract). ] [ P — the selection commands (#73); Esc clears the
+    // selection.
     useEffect(() => {
-      if (!commandsFor) return;
+      if (!commandsFor && !selectionCommandsFor) return;
       const onKey = (event: KeyboardEvent) => {
         if (event.ctrlKey || event.metaKey || event.altKey) return;
         if (isFormField(event.target)) return;
-        const key = event.key.toUpperCase();
-        const command = runRef.current.commands.find((c) => c.shortcut === key);
+        const key = event.key.length === 1 ? event.key.toLowerCase() : event.key;
+        if (selectionCommandsFor) {
+          const kind = (Object.keys(SELECTION_COMMAND_KEYS) as SelectionCommandKind[]).find(
+            (k) => SELECTION_COMMAND_KEYS[k] === key,
+          );
+          if (kind) {
+            if (!hasSelectionRef.current) return;
+            event.preventDefault();
+            runSelectionRef.current(kind);
+            return;
+          }
+          if (key === "Escape" && hasSelectionRef.current) {
+            window.getSelection()?.removeAllRanges();
+            return;
+          }
+        }
+        if (!commandsFor) return;
+        const command = runRef.current.commands.find((c) => c.shortcut === key.toUpperCase());
         if (!command) return;
         event.preventDefault();
         runRef.current.run(command);
       };
       window.addEventListener("keydown", onKey);
       return () => window.removeEventListener("keydown", onKey);
-    }, [commandsFor]);
+    }, [commandsFor, selectionCommandsFor]);
 
     // Issue #74 — Change type: T (or the button) opens the choices for the
     // current block; a choice runs it, Escape closes and returns focus to
@@ -412,6 +581,37 @@ export const CorrectionView = forwardRef<CorrectionViewHandle, CorrectionViewPro
     // Block-by-block movement: ArrowDown / ArrowUp on a focused block move
     // focus to the neighbouring block (Tab works too — each block is a stop).
     const onKeyDown = (event: React.KeyboardEvent<HTMLDivElement>) => {
+      // Shift+← / Shift+→ on a focused block: select its words a word at a
+      // time — from its end backwards, or its start forwards — so keyboard
+      // readers select without caret browsing (#73).
+      if (
+        (event.key === "ArrowLeft" || event.key === "ArrowRight") &&
+        event.shiftKey &&
+        !event.altKey &&
+        !event.ctrlKey &&
+        !event.metaKey
+      ) {
+        const frame = frameOf(document.activeElement);
+        const sel = window.getSelection();
+        if (!frame || !sel || !bodyRef.current?.contains(frame)) return;
+        event.preventDefault();
+        const forward = event.key === "ArrowRight";
+        // A collapsed caret doesn't count (Firefox parks one at the start
+        // of a block it focuses): start from the block's edge instead.
+        const inFrame =
+          !sel.isCollapsed &&
+          sel.rangeCount > 0 &&
+          sel.anchorNode !== null &&
+          frame.contains(sel.anchorNode);
+        if (!inFrame) {
+          const nodes = frameTextNodes(frame);
+          const edge = forward ? nodes[0] : nodes[nodes.length - 1];
+          if (!edge) return;
+          sel.collapse(edge, forward ? 0 : edge.length);
+        }
+        sel.modify("extend", forward ? "forward" : "backward", "word");
+        return;
+      }
       if (event.key !== "ArrowDown" && event.key !== "ArrowUp") return;
       if (event.altKey || event.ctrlKey || event.metaKey || event.shiftKey) return;
       const at = event.target as HTMLElement;
@@ -423,6 +623,7 @@ export const CorrectionView = forwardRef<CorrectionViewHandle, CorrectionViewPro
       const next = frames[event.key === "ArrowDown" ? i + 1 : i - 1];
       if (!next) return;
       event.preventDefault();
+      window.getSelection()?.removeAllRanges();
       next.focus();
     };
 
@@ -436,16 +637,24 @@ export const CorrectionView = forwardRef<CorrectionViewHandle, CorrectionViewPro
           </h1>
           <p className="correction-view-article">{effectiveTitle(article)}</p>
           <p className="correction-view-help">
-            Each block shows its outline and type. Move between blocks with Tab or the arrow keys.
-            {commandsFor
-              ? " Press X to hide or unhide the current block, S to split it at the caret, J to merge it with the next block."
-              : null}
-            {typeChoicesFor ? " Press T to change its type." : null}
-            {headerExtras
-              ? " Ctrl+Z undoes your last change and Ctrl+Shift+Z redoes it; L lists every correction."
-              : null}{" "}
-            Press C, or the Correction view button, to go back to reading.
+            Each block shows its outline and type. Selecting text offers corrections.
           </p>
+          <h2 className="correction-shortcuts-title">Keyboard shortcuts</h2>
+          <dl className="correction-shortcuts">
+            {CORRECTION_SHORTCUTS.map((shortcut) => (
+              <div key={shortcut.label} className="correction-shortcut">
+                <dt>
+                  {shortcut.keys.map((k, i) => (
+                    <span key={k}>
+                      {i > 0 ? " " : null}
+                      <kbd>{k}</kbd>
+                    </span>
+                  ))}
+                </dt>
+                <dd>{shortcut.label}</dd>
+              </div>
+            ))}
+          </dl>
           {headerExtras}
         </header>
         {commandsFor && (
@@ -532,6 +741,51 @@ export const CorrectionView = forwardRef<CorrectionViewHandle, CorrectionViewPro
                     );
                   })}
                 </ul>
+              </div>
+            ) : null}
+            {selection ? (
+              <div
+                className="correction-selection-commands"
+                role="group"
+                aria-label="Selection commands"
+              >
+                <span className="correction-commands-current">
+                  {selection.words ? `Selected: “${excerpt(selection.words)}”` : "Selection"}
+                </span>
+                {selection.commands.map((c) => {
+                  const key = SELECTION_COMMAND_KEYS[c.kind].toUpperCase();
+                  return (
+                    <button
+                      key={c.kind}
+                      type="button"
+                      className="correction-command"
+                      data-command={c.kind}
+                      aria-disabled={!c.available || busy ? "true" : undefined}
+                      aria-describedby={!c.available ? `${selectionReasonId}-${c.kind}` : undefined}
+                      aria-keyshortcuts={key}
+                      // Keep the text selection when the button is pressed.
+                      onPointerDown={(e) => e.preventDefault()}
+                      onMouseDown={(e) => e.preventDefault()}
+                      onClick={() => runSelection(c.kind)}
+                    >
+                      {SELECTION_LABELS[c.kind]} <kbd>{key}</kbd>
+                    </button>
+                  );
+                })}
+                {selection.commands.map((c) =>
+                  !c.available && c.reason ? (
+                    <span
+                      key={c.kind}
+                      id={`${selectionReasonId}-${c.kind}`}
+                      className="visually-hidden"
+                    >
+                      {c.reason}
+                    </span>
+                  ) : null,
+                )}
+                {selectionReason ? (
+                  <span className="correction-commands-reason">{selectionReason}</span>
+                ) : null}
               </div>
             ) : null}
           </div>

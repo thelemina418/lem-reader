@@ -1,7 +1,8 @@
-// Spec #68 / issues #71, #74, #75 — the structure-changing kinds together.
-// Hide keeps a block hidden by its path key; split / merge (#75) shift the
-// keys after them with shiftHidden, set-type (#74) re-keys them when it
-// wraps, unwraps or moves a caption. Applied in sequence from the original,
+// Spec #68 / issues #71, #73, #74, #75 — the structure-changing kinds
+// together. Hide keeps a block hidden by its path key; split / merge (#75)
+// and own-paragraph (#73) shift the keys after them with shiftHidden,
+// set-type (#74) re-keys them when it wraps, unwraps or moves a caption;
+// move-words (#73) moves only a separator, so no key changes. Applied in sequence from the original,
 // each step must see the keys the previous one left — so a block hidden
 // first stays hidden (and only it) through every later change, and the
 // words never change. (applyCorrections memoizes on list identity, so each
@@ -17,6 +18,12 @@ import {
   splitCorrection,
 } from "../../../src/content/corrections/engine";
 import { setTypeCorrection } from "../../../src/content/corrections/setType";
+import {
+  MOVE_REASONS,
+  selectionCommands,
+  type SelectionCommand,
+  type SelectionCommandKind,
+} from "../../../src/content/corrections/moveWords";
 import { blockNormalizedText, normalizeText } from "../../../src/content/normalizeText";
 
 const p = (text: string): Block => ({ kind: "paragraph", content: [{ text, marks: [] }] });
@@ -198,5 +205,152 @@ describe("hide + split + set-type + merge in sequence", () => {
     expect(result.outcomes.at(-1)).toEqual({ status: "applied" });
     expect(blockWith(corrections, SECRET).block.path).toEqual([3]);
     expectSecretHiddenOnly(corrections);
+  });
+});
+
+/** The words of an article in reading order (the view's article holds the
+ * hidden blocks too). */
+const wordsInOrder = (a: CanonicalArticle) => normalizeText(a).split(/\s+/).filter(Boolean);
+
+/** The selection command `kind` for `selected` inside the block whose text
+ * is `text` (after `corrections`), selected the way the view captures it:
+ * view coordinates. */
+function selectionCommand(
+  corrections: readonly Correction[],
+  text: string,
+  selected: string,
+  kind: SelectionCommandKind,
+): SelectionCommand {
+  const { result, block } = blockWith(corrections, text);
+  const at = text.indexOf(selected);
+  expect(at).toBeGreaterThanOrEqual(0);
+  const start = block.viewStart + at;
+  const commands = selectionCommands(result, { start, end: start + selected.length }, meta());
+  return commands.commands.find((c) => c.kind === kind)!;
+}
+
+function run(corrections: Correction[], command: SelectionCommand) {
+  expect(command.available, command.reason).toBe(true);
+  corrections.push(command.correction!);
+}
+
+describe("hide + own-paragraph + move-words + split + set-type in sequence", () => {
+  it("keeps the hidden block hidden and every word in order through each step", () => {
+    const corrections: Correction[] = [];
+    const order = wordsInOrder(article);
+    const expectInOrder = () => {
+      const result = expectSecretHiddenOnly(corrections);
+      expect(wordsInOrder(result.view.article)).toEqual(order);
+      return result;
+    };
+    const texts = () =>
+      applyCorrections(article, [...corrections]).article.blocks.map((b) => blockNormalizedText(b));
+
+    // 1. Hide block 3.
+    {
+      const { result, block } = blockWith(corrections, SECRET);
+      corrections.push(blockCorrection("hide", result, block, meta())!);
+    }
+    expectInOrder();
+
+    // 2. Make "words" its own paragraph (two blocks inserted before the
+    //    hidden one: the words before, the words, the words after).
+    run(
+      corrections,
+      selectionCommand(corrections, "Opening words here.", "words", "own-paragraph"),
+    );
+    expectInOrder();
+    expect(texts()).toEqual([
+      "Opening",
+      "words",
+      "here.",
+      "Alpha beta. Gamma delta.",
+      "Quoted line to wrap.",
+      "Closing words there.",
+    ]);
+
+    // 3. Move "Gamma delta." to the next block (only the separator moves:
+    //    no key changes, the hidden block stays put).
+    run(
+      corrections,
+      selectionCommand(corrections, "Alpha beta. Gamma delta.", "Gamma delta.", "move-next"),
+    );
+    expectInOrder();
+    expect(texts()).toEqual([
+      "Opening",
+      "words",
+      "here.",
+      "Alpha beta.",
+      "Gamma delta. Quoted line to wrap.",
+      "Closing words there.",
+    ]);
+
+    // 4. Next to the hidden block, moving into it is refused either way.
+    expect(
+      selectionCommand(corrections, "Gamma delta. Quoted line to wrap.", "to wrap.", "move-next"),
+    ).toMatchObject({ available: false, reason: MOVE_REASONS.nextHidden });
+    expect(
+      selectionCommand(corrections, "Closing words there.", "Closing", "move-previous"),
+    ).toMatchObject({ available: false, reason: MOVE_REASONS.previousHidden });
+
+    // 5. Move "Alpha" up into the previous block.
+    run(corrections, selectionCommand(corrections, "Alpha beta.", "Alpha", "move-previous"));
+    expectInOrder();
+
+    // 6. Split before "Quoted" (a block inserted before the hidden one),
+    //    then wrap "Quoted line to wrap." in a quotation and make "line"
+    //    its own paragraph inside it (keys shift inside the quotation only).
+    {
+      const text = "Gamma delta. Quoted line to wrap.";
+      const { result, block } = blockWith(corrections, text);
+      corrections.push(splitCorrection(result, block, text.indexOf(" Quoted"), meta())!);
+    }
+    expectInOrder();
+    {
+      const { result, block } = blockWith(corrections, "Quoted line to wrap.");
+      corrections.push(setTypeCorrection(result, block, { type: "quotation" }, meta())!);
+    }
+    expectInOrder();
+    run(
+      corrections,
+      selectionCommand(corrections, "Quoted line to wrap.", "line", "own-paragraph"),
+    );
+    {
+      const result = expectInOrder();
+      expect(result.view.allBlocks.find((b) => b.hiddenDirectly)?.path).toEqual([6]);
+    }
+
+    // 7. After the hidden block: own paragraph, then move words back up.
+    run(
+      corrections,
+      selectionCommand(corrections, "Closing words there.", "Closing", "own-paragraph"),
+    );
+    expectInOrder();
+    run(corrections, selectionCommand(corrections, "words there.", "words", "move-previous"));
+    {
+      const result = expectInOrder();
+      expect(result.article.blocks.map((b) => b.kind)).toEqual([
+        "paragraph",
+        "paragraph",
+        "paragraph",
+        "paragraph",
+        "paragraph",
+        "blockquote",
+        "paragraph",
+        "paragraph",
+      ]);
+      expect(normalizeText(result.article).split("\n")).toEqual([
+        "Opening",
+        "words",
+        "here. Alpha",
+        "beta.",
+        "Gamma delta.",
+        "Quoted",
+        "line",
+        "to wrap.",
+        "Closing words",
+        "there.",
+      ]);
+    }
   });
 });

@@ -27,6 +27,7 @@ const OUTCOME_COPY: Record<CorrectionHighlightOutcome, string> = {
   hidden: "will not show while hidden; returns if you unhide",
   ambiguous: "ambiguous — it will be shown as needing your attention",
   orphan: "orphaned — it will be shown as orphaned, never moved",
+  crosses: "crosses a block boundary that moves — it will no longer match its words exactly",
 };
 
 /** Issue #74 — a dropped mark in words. */

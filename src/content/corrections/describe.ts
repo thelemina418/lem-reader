@@ -98,6 +98,10 @@ const DESCRIBERS: { [K in Correction["kind"]]: Describer<K> } = {
       done: `Changed ${words} from ${capitalized(BLOCK_NOUN[c.target.kind])} to ${typeLabel(c.to)}`,
     };
   },
+  "move-words": (c) => ({
+    done: `Moved “${excerpt(c.words.exact)}” to the ${c.direction === "next" ? "next" : "previous"} block`,
+  }),
+  "own-paragraph": (c) => ({ done: `Made “${excerpt(c.words.exact)}” its own paragraph` }),
 };
 
 /** "Hid the paragraph “Share this article”" — one sentence, no full stop. */

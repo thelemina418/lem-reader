@@ -127,7 +127,12 @@ export async function loadAllCorrectionRecords(): Promise<CorrectionsRecord[]> {
   }
 }
 
-export type CorrectionHighlightOutcome = "confident" | "ambiguous" | "orphan" | "hidden";
+/** "crosses" (#73): the highlight's words are all still there, but a block
+ * boundary inside or at its edge moved, so its exact quote no longer
+ * matches — found only by its surrounding context. Reported, never
+ * re-anchored. */
+export type CorrectionHighlightOutcome =
+  "confident" | "ambiguous" | "orphan" | "hidden" | "crosses";
 
 export interface CorrectionHighlightConsequence {
   readonly highlightId: string;
@@ -292,22 +297,27 @@ async function plan(
     if (typeof now === "string") continue; // not shown confidently today — untouched
     let outcome: CorrectionHighlightOutcome;
     // Corrections never change words, so a highlight whose text matches
-    // exactly today must match exactly after; one whose words now span a
-    // merged or split boundary is reported, never re-attached by the loose
-    // prefix/suffix fallback (#75). A highlight already shown only by that
-    // fallback (its words changed in an earlier revision) keeps the rule
-    // it is shown by.
-    const then =
-      typeof resolveQuoteSelectorExact(before.article, record.quote) === "string"
-        ? resolveQuoteSelector(after.article, record.quote, now)
-        : resolveQuoteSelectorExact(after.article, record.quote);
+    // exactly today must match exactly after. One whose words now span a
+    // moved, merged or split boundary is found only by its context: it is
+    // reported as crossing the boundary, never re-attached by the loose
+    // prefix/suffix fallback (#73, #75). A highlight already shown only by
+    // that fallback (its words changed in an earlier revision) keeps the
+    // rule it is shown by.
+    const exactToday = typeof resolveQuoteSelectorExact(before.article, record.quote) !== "string";
+    const then = exactToday
+      ? resolveQuoteSelectorExact(after.article, record.quote)
+      : resolveQuoteSelector(after.article, record.quote, now);
     if (typeof then !== "string") {
       outcome = "confident";
       positions.set(record.id, then);
     } else {
       // Still in the view article but inside a hidden block → hidden while
       // the block is hidden (matches again on unhide).
-      outcome = isHiddenByCorrections(after, record.quote) ? "hidden" : then;
+      outcome = isHiddenByCorrections(after, record.quote)
+        ? "hidden"
+        : exactToday && typeof resolveQuoteSelector(after.article, record.quote, now) !== "string"
+          ? "crosses" // its words are all there; only a boundary moved
+          : then;
     }
     highlights.push({ highlightId: record.id, exact: record.quote.exact, outcome });
   }

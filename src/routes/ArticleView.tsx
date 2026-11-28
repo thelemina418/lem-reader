@@ -165,6 +165,12 @@ import {
   REASONS as CORRECTION_REASONS,
   type Availability,
 } from "../content/corrections/engine";
+import {
+  selectionCommands,
+  type SelectionCommand,
+  type SelectionCommands,
+} from "../content/corrections/moveWords";
+import type { TextPositionSelector } from "../content/normalizeText";
 import { storedOffsetInShown } from "../content/corrections/positions";
 import {
   BLOCK_TYPE_CHOICES,
@@ -183,6 +189,7 @@ import {
   type BlockAction,
   type BlockCaret,
   type BlockCommand,
+  type CorrectionLanding,
   type CorrectionViewHandle,
   type TypeChoiceCommand,
 } from "../reader/CorrectionView";
@@ -1843,6 +1850,8 @@ export function ArticleView({
   // engine's view model (every block, hidden ones marked), whose offset maps
   // translate reading ↔ view coordinates.
   const correctionModel = correctionsResult?.view ?? null;
+  // Where the view lands after a selection command (#73): the moved words.
+  const [correctionLanding, setCorrectionLanding] = useState<CorrectionLanding | null>(null);
   // Enter / leave — ONE path shared by the header button and the C shortcut.
   // Entry carries the reading position in (the mode-switch anchor capture);
   // leaving captures the focused or top-visible passage in the view and
@@ -1862,12 +1871,13 @@ export function ArticleView({
       // flush any pending save now, against the text as it reads now, so a
       // late debounced save can never land after a correction (#71).
       saveLocationNow(offset);
+      setCorrectionLanding(null);
       setCorrectionEntry({
         from: effectiveMode,
         offset,
         viewOffset: correctionModel.viewOffsetFor(offset),
       });
-      setCorrectionAnnouncement("Correction view. Every block shows its outline and type.");
+      setCorrectionAnnouncement("Correction view. Selecting text offers corrections.");
       return;
     }
     const viewOffset = correctionViewRef.current?.captureOffset() ?? correctionEntry.viewOffset;
@@ -1984,6 +1994,41 @@ export function ArticleView({
       });
     },
     [originalArticle, correctionsResult, corrections, correctionChanges],
+  );
+  // Spec #68 / issue #73 — the selection commands. Availability and the
+  // correction itself come from the engine (src/content/corrections/
+  // moveWords.ts); applying takes the same change path as every other
+  // correction, and lands the view on the moved words.
+  const correctionSelectionCommands = useCallback(
+    (range: TextPositionSelector): SelectionCommands =>
+      selectionCommands(correctionsResult!, range, {
+        id: crypto.randomUUID(),
+        createdAt: new Date().toISOString(),
+      }),
+    [correctionsResult],
+  );
+  const handleSelectionCommand = useCallback(
+    (command: SelectionCommand) => {
+      if (!command.available || !command.correction) {
+        setCorrectionAnnouncement(command.reason ?? "That isn't available here.");
+        return;
+      }
+      const described = describeCorrection(command.correction);
+      const landing = command.landing ?? null;
+      const own = command.kind === "own-paragraph";
+      void correctionChanges.run({
+        next: [...corrections, command.correction],
+        title: own
+          ? "Make these words their own paragraph?"
+          : `Move these words to the ${command.kind === "move-next" ? "next" : "previous"} block?`,
+        confirmLabel: own ? "Make paragraph" : "Move words",
+        announce: `${described}. Press Ctrl+Z to undo.`,
+        undoAnnounce: `Undone: ${described}.`,
+        redoAnnounce: `Redone: ${described}.`,
+        applied: landing ? () => setCorrectionLanding({ ...landing }) : undefined,
+      });
+    },
+    [corrections, correctionChanges],
   );
   const handleUndoListedCorrection = useCallback(
     (correction: Correction, applied: boolean) => {
@@ -3998,6 +4043,9 @@ export function ArticleView({
                 onCommand={handleCorrectionCommand}
                 typeChoicesFor={correctionTypeChoicesFor}
                 onChangeType={handleChangeType}
+                selectionCommandsFor={correctionsResult ? correctionSelectionCommands : undefined}
+                onSelectionCommand={handleSelectionCommand}
+                landing={correctionLanding}
                 busy={correctionChanges.busy || correctionChanges.pending !== null}
                 headerExtras={
                   <CorrectionsList

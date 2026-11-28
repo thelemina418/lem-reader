@@ -108,7 +108,7 @@ describe("merging blocks", () => {
     expect(byId.get("h-across")).toEqual({
       highlightId: "h-across",
       exact: "the gulls\nfollow it",
-      outcome: "orphan",
+      outcome: "crosses", // its words are all there; only the boundary moved
     });
     expect(byId.get("h-within")?.outcome).toBe("confident");
     expect(preview.clean).toBe(false);
@@ -148,7 +148,7 @@ describe("splitting a block", () => {
     const preview = await previewAddCorrection(saved.id, splitBefore([1], "The fog"));
     expect(normalizeText(preview.proposed)).toContain("breakwater.\nThe fog");
     const byId = new Map(preview.highlights.map((h) => [h.highlightId, h.outcome]));
-    expect(byId.get("h-fog")).toBe("orphan");
+    expect(byId.get("h-fog")).toBe("crosses");
     expect(byId.get("h-within")).toBe("confident");
     expect(preview.clean).toBe(false);
   });
