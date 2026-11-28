@@ -82,9 +82,7 @@ test.describe("Hide and unhide a block (#71)", () => {
       "Current block: Paragraph",
     );
     await page.keyboard.press("x");
-    await expect(
-      page.getByRole("status").filter({ hasText: "Paragraph hidden." }),
-    ).toHaveCount(1);
+    await expect(page.getByRole("status").filter({ hasText: "Paragraph hidden." })).toHaveCount(1);
     // Still in the view, dimmed and labelled — never deleted.
     await expect(chrome).toHaveAttribute("data-hidden", "true");
     await expect(chrome).toHaveAttribute("aria-label", "Paragraph, hidden");
