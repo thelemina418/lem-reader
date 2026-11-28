@@ -27,6 +27,7 @@ import {
   REASONS,
   splitCorrection,
 } from "../../../src/content/corrections/engine";
+import { setTypeCorrection } from "../../../src/content/corrections/setType";
 import { isSameText, textStamp } from "../../../src/content/sameText";
 import type {
   EpubIngestionSuccess,
@@ -270,9 +271,7 @@ describe("reprocessing a corrected URL article", () => {
 });
 
 describe("reprocessing an article with a hidden block and a split paragraph", () => {
-  // A paragraph run together at ingest; the reader split it. (#73/#74's
-  // moved-caption kinds are not on the integration branch yet; a split is
-  // the structure-changing kind that is.)
+  // A paragraph run together at ingest; the reader split it.
   const RUN = "The tide turns at noon. The boats come home by dusk.";
   const article = ArticleSchema.parse({
     ...saved,
@@ -325,6 +324,81 @@ describe("reprocessing an article with a hidden block and a split paragraph", ()
       "The boats come home by dusk.",
       GULLS,
     ]);
+  });
+});
+
+describe("reprocessing an article with a hidden block and a moved caption", () => {
+  // The caption was extracted as a stray paragraph after its figure; the
+  // reader made it the figure's caption (set-type caption, #74) and hid the
+  // share chrome.
+  const CAPTION = "The morning ferry at the quay, 1932.";
+  const figure = (alt: string, caption: string[] = []) => ({
+    kind: "figure" as const,
+    alt,
+    caption: caption.map((text) => ({ text, marks: [] })),
+  });
+  const article = ArticleSchema.parse({
+    ...saved,
+    blocks: [para(FERRY), para(SHARE), figure("A ferry at the quay"), para(CAPTION), para(GULLS)],
+  });
+  const hide = hideOf(article, SHARE);
+  const caption = (() => {
+    const result = applyCorrections(article, [hide]);
+    const graphemes = [...normalizeText(result.view.article)];
+    const block = result.view.allBlocks.find(
+      (b) => graphemes.slice(b.viewStart, b.viewEnd).join("") === CAPTION,
+    )!;
+    return setTypeCorrection(
+      result,
+      block,
+      { type: "caption" },
+      {
+        id: "caption-ferry",
+        createdAt: "2026-11-27T10:01:00.000Z",
+      },
+    )!;
+  })();
+
+  it("keeps the block hidden and the caption on its figure in the new version", async () => {
+    const { db } = await import("../../../src/persistence/db");
+    await db.articles.put(article);
+    await db.corrections.put({
+      schemaVersion: 1,
+      articleId: article.id,
+      corrections: [hide, caption],
+      updatedAt: "2026-11-27T10:01:00.000Z",
+    });
+    const { previewReprocess, applyReprocess } = await reprocess();
+    const fresh = ArticleSchema.parse({
+      ...refetched().article,
+      blocks: [
+        para(FERRY),
+        para(NEW_PASSAGE),
+        para(SHARE),
+        figure("A ferry at the quay"),
+        para(CAPTION),
+        para(GULLS),
+      ],
+    });
+    const preview = await previewReprocess(article.id, {
+      article: fresh,
+      confidence: { state: "confident" },
+      assets: [],
+    });
+    expect(preview.corrections.reapplied.map((c) => c.id)).toEqual([hide.id, caption.id]);
+    expect(preview.corrections.notApplied).toEqual([]);
+    expect(preview.changes).toEqual([{ kind: "added", text: NEW_PASSAGE }]);
+
+    await applyReprocess(preview);
+    const { result } = await shownFromLibrary(article.id);
+    expect(result.outcomes.map((o) => o.status)).toEqual(["applied", "applied"]);
+    expect(result.article.blocks).toEqual([
+      para(FERRY),
+      para(NEW_PASSAGE),
+      figure("A ferry at the quay", [CAPTION]),
+      para(GULLS),
+    ]);
+    expect(normalizeText(result.article)).not.toContain(SHARE);
   });
 });
 
