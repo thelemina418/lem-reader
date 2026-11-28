@@ -49,12 +49,14 @@ import {
   type Correction,
   type CorrectionsRecord,
   type LocationRecord,
+  type WorkStructure,
 } from "../content/schema";
 import type { CanonicalArticle } from "../content/types";
 import {
   applyCorrections,
   isHiddenByCorrections,
   type CorrectionOutcome,
+  type DroppedMark,
 } from "../content/corrections/engine";
 import { carryOffset } from "../content/corrections/positions";
 import { graphemeLength, mainTextLength, resolveQuoteSelector } from "../content/normalizeText";
@@ -133,6 +135,34 @@ export interface CorrectionHighlightConsequence {
   readonly outcome: CorrectionHighlightOutcome;
 }
 
+export interface ContentsChange {
+  readonly change: "added" | "removed";
+  readonly title: string;
+}
+
+/** Chapters in one structure and not the other (ids carry over for
+ * chapters a correction leaves in place — corrections/structure.ts). */
+function contentsChanges(
+  before: WorkStructure | null,
+  after: WorkStructure | null,
+): ContentsChange[] {
+  const chapters = (s: WorkStructure | null) =>
+    (s?.destinations ?? []).filter((d) => d.kind === "chapter");
+  const was = chapters(before);
+  const now = chapters(after);
+  const ids = (list: typeof was) => new Set(list.map((d) => d.id));
+  const wasIds = ids(was);
+  const nowIds = ids(now);
+  return [
+    ...was
+      .filter((d) => !nowIds.has(d.id))
+      .map((d) => ({ change: "removed" as const, title: d.title })),
+    ...now
+      .filter((d) => !wasIds.has(d.id))
+      .map((d) => ({ change: "added" as const, title: d.title })),
+  ];
+}
+
 export interface CorrectionsPreview {
   readonly articleId: string;
   readonly corrections: readonly Correction[];
@@ -153,6 +183,12 @@ export interface CorrectionsPreview {
    * back (session history only, #76) — and their plain-words labels. */
   readonly reinstate: RemovedChapterRows;
   readonly restored: readonly string[];
+  /** Issue #74 — chapters the change adds to or removes from the contents
+   * (by identity: an unchanged chapter keeps its id). */
+  readonly contents: readonly ContentsChange[];
+  /** Issue #74 — marks the change drops (a code block holds plain text only),
+   * by the words that carried them. */
+  readonly droppedMarks: readonly DroppedMark[];
   /** True when nothing needs the reader's acceptance. */
   readonly clean: boolean;
   /** Snapshot identity of everything apply reads. */
@@ -287,13 +323,22 @@ async function plan(
     position = offset === null ? { unmatched: true } : { offset };
   }
 
+  const beforeStructure = resolveWorkStructure(before.article);
   const afterStructure = resolveWorkStructure(after.article);
   const chapters = await chapterConsequences(
     articleId,
-    resolveWorkStructure(before.article),
+    beforeStructure,
     afterStructure,
     sameChapter,
   );
+  const contents = contentsChanges(beforeStructure, afterStructure);
+  // Marks dropped by the corrections this change adds (earlier ones were
+  // told about when they were made).
+  const existing = new Set(current.map((c) => c.id));
+  const droppedMarks = next.flatMap((c, i) => {
+    const outcome = after.outcomes[i];
+    return !existing.has(c.id) && outcome?.status === "applied" ? (outcome.droppedMarks ?? []) : [];
+  });
 
   // Later corrections that fit today and would not after this change.
   const appliedNow = new Set(
@@ -323,6 +368,8 @@ async function plan(
   const clean =
     chapters.length === 0 &&
     laterNotApplied.length === 0 &&
+    contents.length === 0 &&
+    droppedMarks.length === 0 &&
     highlights.every((h) => h.outcome === "confident");
   return {
     preview: {
@@ -336,6 +383,8 @@ async function plan(
       laterNotApplied,
       reinstate,
       restored,
+      contents,
+      droppedMarks,
       clean,
     },
     positions,

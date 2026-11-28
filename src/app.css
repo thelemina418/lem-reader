@@ -7821,6 +7821,12 @@ dialog.reprocess-book {
   font-size: 0.875rem;
   min-width: 0;
 }
+/* The read-aloud bar stays up in the view (paused, #70) on the chrome layer
+   above this bar: the commands stack ABOVE its band (stack, never overlap —
+   the mark-read / chapter-nav precedent), so no command sits under it. */
+body:has(.readaloud-bar) .correction-commands {
+  padding-block-end: calc(var(--space-xs) * 2 + var(--readaloud-h, var(--readaloud-idle-h)));
+}
 .correction-view:has(.correction-commands) {
   padding-block-end: 10rem;
 }
@@ -7924,6 +7930,50 @@ dialog.reprocess-book {
   gap: var(--space-xs) var(--space-sm);
   margin-block-start: var(--space-sm);
 }
+/* Issue #74 — the Change type choices open inside the command bar (still
+   out of flow), scrolling within themselves at small heights. Unavailable
+   choices stay listed with their reason. No motion. */
+.correction-type-menu {
+  flex-basis: 100%;
+  max-height: 50vh;
+  overflow-y: auto;
+}
+.correction-type-menu ul {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(min(100%, 10rem), 1fr));
+  gap: var(--space-xs);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.correction-type-menu li {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+.correction-type-choice {
+  min-height: 44px;
+  padding-inline: var(--space-sm);
+  font: inherit;
+  color: var(--ink);
+  background: var(--surface);
+  border: 1px solid var(--hairline-strong, var(--hairline));
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+}
+.correction-type-choice[aria-disabled="true"] {
+  color: var(--ink-soft);
+  cursor: not-allowed;
+}
+.correction-type-choice:focus-visible {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: 2px;
+}
+.correction-type-reason {
+  font-size: 0.75rem;
+  color: var(--ink-soft);
+  overflow-wrap: anywhere;
+}
 /* Block content keeps its reading typography; the frame owns the outer
    rhythm, so the block's own first/last margins collapse into the frame. */
 .correction-block > [data-block-index] {
@@ -7951,8 +8001,12 @@ dialog.reprocess-book {
   .correction-commands {
     border-top-color: CanvasText;
   }
-  .correction-command[aria-disabled="true"] {
+  .correction-command[aria-disabled="true"],
+  .correction-type-choice[aria-disabled="true"] {
     color: GrayText;
+  }
+  .correction-type-choice {
+    border-color: CanvasText;
   }
   .correction-block-label {
     color: CanvasText;

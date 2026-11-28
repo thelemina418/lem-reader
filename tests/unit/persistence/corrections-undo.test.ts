@@ -5,7 +5,7 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import fakeIndexedDB, { IDBKeyRange } from "fake-indexeddb";
 import { Dexie } from "dexie";
-import { ArticleSchema, type Correction } from "../../../src/content/schema";
+import { ArticleSchema, type BlockTypeChoice, type Correction } from "../../../src/content/schema";
 import { deriveQuoteSelector, normalizeText } from "../../../src/content/normalizeText";
 import {
   applyCorrections,
@@ -314,7 +314,11 @@ describe("undo brings back what an accepted consequence removed", () => {
       "Bring back finished status for chapter “Noon”.",
       "Put chapter “Noon” back in “Harbour plan”.",
     ]);
-    await applyCorrectionsChange(undo);
+    // The chapter coming back is a contents change (#74), so the undo goes
+    // through the consequences step like any other.
+    expect(undo.contents).toEqual([{ change: "added", title: "Noon" }]);
+    expect(undo.clean).toBe(false);
+    await applyCorrectionsChange(undo, { acceptConsequences: true });
     expect(await db.completions.toArray()).toEqual(before.completions);
     expect((await db.collections.get("harbour-plan"))!.entries).toEqual(before.entries);
     void noon;
@@ -347,5 +351,28 @@ describe("describing a correction", () => {
       "Unhid the paragraph “Gulls follow it out past the breakwater…”",
     );
     expect(describeCorrection(correctionOf(work, "hide", [2]))).toBe("Hid the heading “Noon”");
+  });
+
+  it("describes a change of type by the words it touched (#74)", () => {
+    const base = correctionOf(saved, "hide", [1]);
+    const setType = (to: BlockTypeChoice, kind = base.target.kind): Correction => ({
+      kind: "set-type",
+      id: "st",
+      createdAt: base.createdAt,
+      target: { ...base.target, kind },
+      to,
+    });
+    expect(describeCorrection(setType({ type: "heading", level: 2 }))).toBe(
+      "Changed “Share this article” from Paragraph to Heading 2",
+    );
+    expect(describeCorrection(setType({ type: "caption" }))).toBe(
+      "Made “Share this article” the caption of the figure",
+    );
+    expect(describeCorrection(setType({ type: "quotation" }))).toBe(
+      "Made the paragraph “Share this article” a quotation",
+    );
+    expect(describeCorrection(setType({ type: "paragraph" }, "blockquote"))).toBe(
+      "Turned the quotation “Share this article” back into ordinary blocks",
+    );
   });
 });

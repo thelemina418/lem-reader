@@ -45,6 +45,7 @@ import type { BlockTarget, Correction } from "../schema";
 import type { TextQuoteSelector } from "../normalizeText";
 import { registerCorrectionsFingerprint } from "../sameText";
 import { correctedStructure } from "./structure";
+import { setTypeHandler } from "./setType";
 import type { Block, CanonicalArticle, InlineRun } from "../types";
 import {
   blockPathKey,
@@ -65,8 +66,16 @@ import {
   SPLIT_MERGE_REASONS,
 } from "./splitMerge";
 
+/** A mark a correction dropped (issue #74: a code block holds plain text
+ * only), named by the words that carried it. */
+export interface DroppedMark {
+  readonly mark: "link" | "em" | "strong" | "code";
+  readonly text: string;
+}
+
 export type CorrectionOutcome =
-  { readonly status: "applied" } | { readonly status: "not-applied"; readonly reason: string };
+  | { readonly status: "applied"; readonly droppedMarks?: readonly DroppedMark[] }
+  | { readonly status: "not-applied"; readonly reason: string };
 
 export interface CorrectionsResult {
   /** The corrected article (hidden blocks absent). The original object when
@@ -82,7 +91,7 @@ export interface CorrectionsResult {
 
 // ── Engine state ────────────────────────────────────────────────────────────
 
-interface EngineState {
+export interface EngineState {
   /** The view article: every block, hidden ones included. Hide/unhide never
    * change it; later kinds (split, merge, move words…) do. */
   readonly article: CanonicalArticle;
@@ -90,7 +99,9 @@ interface EngineState {
   readonly hidden: ReadonlySet<string>;
 }
 
-type Step = { ok: true; state: EngineState } | { ok: false; reason: string };
+export type Step =
+  | { ok: true; state: EngineState; dropped?: readonly DroppedMark[] }
+  | { ok: false; reason: string };
 
 // ── Calm reasons (shared by availability and re-application) ───────────────
 
@@ -108,7 +119,7 @@ export const REASONS = {
 
 // ── Block layout of the view article (memoized per article object) ─────────
 
-interface LaidBlock {
+export interface LaidBlock {
   readonly block: Block;
   readonly path: readonly number[];
   readonly key: string;
@@ -145,7 +156,7 @@ function layoutOf(article: CanonicalArticle): readonly LaidBlock[] {
 }
 
 /** Find a block target in `article` by text. */
-function resolveBlockTarget(
+export function resolveBlockTarget(
   article: CanonicalArticle,
   target: BlockTarget,
 ): LaidBlock | "orphan" | "ambiguous" {
@@ -188,12 +199,12 @@ export function blockTargetFor(
   };
 }
 
-function runsHoldReference(runs: readonly InlineRun[]): boolean {
+export function runsHoldReference(runs: readonly InlineRun[]): boolean {
   return runs.some((run) => footnoteRefOf(run) !== undefined);
 }
 
 /** Does this block hold a footnote reference (inline or legacy block)? */
-function holdsFootnoteReference(block: Block): boolean {
+export function holdsFootnoteReference(block: Block): boolean {
   switch (block.kind) {
     case "heading":
     case "paragraph":
@@ -213,7 +224,7 @@ function holdsFootnoteReference(block: Block): boolean {
   }
 }
 
-function isHiddenUnder(hidden: ReadonlySet<string>, path: readonly number[]): boolean {
+export function isHiddenUnder(hidden: ReadonlySet<string>, path: readonly number[]): boolean {
   for (let n = 1; n < path.length; n++) {
     if (hidden.has(blockPathKey(path.slice(0, n)))) return true;
   }
@@ -307,6 +318,7 @@ const KINDS: { [K in Correction["kind"]]: Handler<K> } = {
       },
     };
   },
+  "set-type": setTypeHandler,
 };
 
 /** Hidden itself or inside a hidden quotation. */
@@ -439,7 +451,11 @@ function run(original: CanonicalArticle, corrections: readonly Correction[]): Co
     const step = handler(state, correction as never);
     if (step.ok) {
       state = step.state;
-      outcomes.push({ status: "applied" });
+      outcomes.push(
+        step.dropped && step.dropped.length > 0
+          ? { status: "applied", droppedMarks: step.dropped }
+          : { status: "applied" },
+      );
     } else {
       outcomes.push({ status: "not-applied", reason: step.reason });
     }
@@ -489,7 +505,7 @@ export function correctedArticle(
 export type Availability =
   { readonly available: true } | { readonly available: false; readonly reason: string };
 
-function engineStateOf(result: CorrectionsResult): EngineState {
+export function engineStateOf(result: CorrectionsResult): EngineState {
   const hidden = new Set<string>();
   for (const b of result.view.allBlocks) if (b.hiddenDirectly) hidden.add(blockPathKey(b.path));
   return { article: result.view.article, hidden };

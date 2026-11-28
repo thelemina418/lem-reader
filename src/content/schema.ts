@@ -1233,11 +1233,43 @@ export const MergeCorrectionSchema = z.object({
   next: BlockTargetSchema,
 });
 
+/** Issue #74 — the block type a "set-type" correction gives its target.
+ * "quotation" wraps the block in a quotation (on a quotation: no-op refusal;
+ * "paragraph" on a quotation lifts its blocks out). "caption" makes a
+ * paragraph the caption of the figure next to it; "paragraph" on a figure
+ * takes its caption out as a paragraph after it. */
+export const BlockTypeChoiceSchema = z.discriminatedUnion("type", [
+  z.object({ type: z.literal("paragraph") }),
+  z.object({
+    type: z.literal("heading"),
+    level: z.union([
+      z.literal(1),
+      z.literal(2),
+      z.literal(3),
+      z.literal(4),
+      z.literal(5),
+      z.literal(6),
+    ]),
+  }),
+  z.object({ type: z.literal("quotation") }),
+  z.object({ type: z.literal("caption") }),
+  z.object({ type: z.literal("code-block") }),
+]);
+export type BlockTypeChoice = z.infer<typeof BlockTypeChoiceSchema>;
+
+export const SetTypeCorrectionSchema = z.object({
+  kind: z.literal("set-type"),
+  ...correctionBase,
+  target: BlockTargetSchema,
+  to: BlockTypeChoiceSchema,
+});
+
 export const CorrectionSchema = z.discriminatedUnion("kind", [
   HideCorrectionSchema,
   UnhideCorrectionSchema,
   SplitCorrectionSchema,
   MergeCorrectionSchema,
+  SetTypeCorrectionSchema,
 ]);
 export type Correction = z.infer<typeof CorrectionSchema>;
 

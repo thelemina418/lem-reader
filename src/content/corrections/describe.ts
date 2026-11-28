@@ -10,7 +10,7 @@
 // correction is described just as well as an applied one.
 
 import { graphemeClusters } from "../normalizeText";
-import type { BlockTarget, Correction } from "../schema";
+import type { BlockTarget, BlockTypeChoice, Correction } from "../schema";
 
 /** The first words of a quote, at most `max` graphemes-ish, with "…". */
 export function excerpt(text: string, max = 40): string {
@@ -47,6 +47,26 @@ export function blockPhrase(target: BlockTarget): string {
   return `the ${BLOCK_NOUN[target.kind]} “${excerpt(target.quote.exact)}”`;
 }
 
+/** The type a set-type correction gives, in words ("Heading 2"). */
+function typeLabel(to: BlockTypeChoice): string {
+  switch (to.type) {
+    case "paragraph":
+      return "Paragraph";
+    case "heading":
+      return `Heading ${to.level}`;
+    case "quotation":
+      return "Quotation";
+    case "caption":
+      return "Caption";
+    case "code-block":
+      return "Code block";
+  }
+}
+
+function capitalized(noun: string): string {
+  return noun.charAt(0).toUpperCase() + noun.slice(1);
+}
+
 type Describer<K extends Correction["kind"]> = (correction: Extract<Correction, { kind: K }>) => {
   /** Past tense, for the list and "Undid: …" ("Hid the paragraph “…”"). */
   readonly done: string;
@@ -63,6 +83,21 @@ const DESCRIBERS: { [K in Correction["kind"]]: Describer<K> } = {
   merge: (c) => ({
     done: `Merged ${blockPhrase(c.next)} into the ${BLOCK_NOUN[c.target.kind]} before`,
   }),
+  // #74 — the words never change; only the block type holding them does.
+  "set-type": (c) => {
+    const words = `“${excerpt(c.target.quote.exact)}”`;
+    if (c.to.type === "caption") return { done: `Made ${words} the caption of the figure` };
+    if (c.to.type === "quotation") return { done: `Made ${blockPhrase(c.target)} a quotation` };
+    if (c.to.type === "paragraph" && c.target.kind === "blockquote") {
+      return { done: `Turned the quotation ${words} back into ordinary blocks` };
+    }
+    if (c.to.type === "paragraph" && c.target.kind === "figure") {
+      return { done: `Took the caption of the figure ${words} out as a paragraph` };
+    }
+    return {
+      done: `Changed ${words} from ${capitalized(BLOCK_NOUN[c.target.kind])} to ${typeLabel(c.to)}`,
+    };
+  },
 };
 
 /** "Hid the paragraph “Share this article”" — one sentence, no full stop. */

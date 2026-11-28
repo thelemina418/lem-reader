@@ -166,7 +166,13 @@ import {
   type Availability,
 } from "../content/corrections/engine";
 import { storedOffsetInShown } from "../content/corrections/positions";
-import type { Correction } from "../content/schema";
+import {
+  BLOCK_TYPE_CHOICES,
+  blockTypeChoiceLabel,
+  setTypeAvailability,
+  setTypeCorrection,
+} from "../content/corrections/setType";
+import type { BlockTypeChoice, Correction } from "../content/schema";
 import { loadCorrections } from "../persistence/correctionsStore";
 import { CorrectionConsequencesDialog } from "../reader/CorrectionConsequencesDialog";
 import { CorrectionsList } from "../reader/CorrectionsList";
@@ -178,6 +184,7 @@ import {
   type BlockCaret,
   type BlockCommand,
   type CorrectionViewHandle,
+  type TypeChoiceCommand,
 } from "../reader/CorrectionView";
 import { SelectionToolbar } from "../reader/annotations/SelectionToolbar";
 // Shared annotation panel for passage and drawer entry.
@@ -482,6 +489,18 @@ const CORRECTION_COPY: Record<
     done: (label) => `${label} merged with the next block. Press Ctrl+Z to undo.`,
   },
 };
+
+/** Issue #74 — what the status region says once a Change type applied. */
+function setTypeDone(blockLabel: string, to: BlockTypeChoice, label: string): string {
+  if (to.type === "caption") return `${blockLabel} is now the figure's caption.`;
+  if (to.type === "paragraph" && blockLabel === "Quotation") {
+    return "The quotation's blocks are ordinary blocks again.";
+  }
+  if (to.type === "paragraph" && blockLabel.startsWith("Figure")) {
+    return "The caption is now a paragraph after the figure.";
+  }
+  return `${blockLabel} is now ${to.type === "quotation" ? "a quotation" : label}.`;
+}
 
 /** Spec #68 / #71 — a stable empty corrections list (the pass-through). */
 const NO_CORRECTIONS: readonly Correction[] = Object.freeze([]);
@@ -2013,6 +2032,48 @@ export function ArticleView({
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
   }, [correctionViewUp]);
+  // Issue #74 — Change type: every choice with the engine's availability
+  // (one place for "unavailable because…"); a choice goes through the same
+  // run() path (preview → consequences → apply, undoable) as every command.
+  const correctionTypeChoicesFor = useCallback(
+    (block: CorrectionViewBlock): readonly TypeChoiceCommand[] =>
+      BLOCK_TYPE_CHOICES.map(({ to, label }) => {
+        if (!correctionsResult) return { to, label, available: false };
+        const availability = setTypeAvailability(correctionsResult, block, to);
+        return availability.available
+          ? { to, label, available: true }
+          : { to, label, available: false, reason: availability.reason };
+      }),
+    [correctionsResult],
+  );
+  const handleChangeType = useCallback(
+    (block: CorrectionViewBlock, choice: TypeChoiceCommand) => {
+      if (!choice.available) {
+        setCorrectionAnnouncement(choice.reason ?? "That isn't available here.");
+        return;
+      }
+      if (!originalArticle || !correctionsResult) return;
+      const correction = setTypeCorrection(correctionsResult, block, choice.to, {
+        id: crypto.randomUUID(),
+        createdAt: new Date().toISOString(),
+      });
+      if (!correction) {
+        setCorrectionAnnouncement(CORRECTION_REASONS.noText);
+        return;
+      }
+      const label = blockTypeChoiceLabel(choice.to);
+      const described = describeCorrection(correction);
+      void correctionChanges.run({
+        next: [...corrections, correction],
+        title: `Change this block to ${label}?`,
+        confirmLabel: `Change to ${label}`,
+        announce: `${setTypeDone(block.label, choice.to, label)} Press Ctrl+Z to undo.`,
+        undoAnnounce: `Undone: ${described}.`,
+        redoAnnounce: `Redone: ${described}.`,
+      });
+    },
+    [originalArticle, correctionsResult, corrections, correctionChanges],
+  );
   useEffect(() => {
     if (!correctionToggleHandlerRef) return;
     correctionToggleHandlerRef.current = handleToggleCorrectionView;
@@ -3935,6 +3996,8 @@ export function ArticleView({
                 entryOffset={correctionEntry.viewOffset}
                 commandsFor={correctionCommandsFor}
                 onCommand={handleCorrectionCommand}
+                typeChoicesFor={correctionTypeChoicesFor}
+                onChangeType={handleChangeType}
                 busy={correctionChanges.busy || correctionChanges.pending !== null}
                 headerExtras={
                   <CorrectionsList

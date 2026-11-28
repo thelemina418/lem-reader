@@ -51,6 +51,7 @@ import { isFormField } from "./PageTurnControls";
 import { domPointToIntraBlockGraphemeOffset } from "../annotations/capture";
 import { blockNormalizedText, graphemeClusters } from "../content/normalizeText";
 import type { Block } from "../content/types";
+import type { BlockTypeChoice } from "../content/schema";
 
 /** Header band height — the same line the reading anchors measure from. */
 const HEADER_PX = 48;
@@ -80,6 +81,16 @@ export interface BlockCommand {
  * normalized text, or null when the caret isn't in it. */
 export type BlockCaret = number | null;
 
+/** Issue #74 — one "Change type" choice for a block (computed by the owner
+ * from the engine's validity rules). */
+export interface TypeChoiceCommand {
+  readonly to: BlockTypeChoice;
+  readonly label: string;
+  readonly available: boolean;
+  /** Why it is unavailable (shown beside the choice). */
+  readonly reason?: string;
+}
+
 interface CorrectionViewProps {
   model: CorrectionViewModel;
   /** Where the reader was on entry, in view coordinates. */
@@ -92,6 +103,10 @@ interface CorrectionViewProps {
   busy?: boolean;
   /** Rendered at the end of the view's header (the corrections list, #76). */
   headerExtras?: React.ReactNode;
+  /** Issue #74 — the Change type choices for a block; absent → no menu. */
+  typeChoicesFor?: (block: CorrectionViewBlock) => readonly TypeChoiceCommand[];
+  /** Run a Change type choice (the owner previews, applies, announces). */
+  onChangeType?: (block: CorrectionViewBlock, choice: TypeChoiceCommand) => void;
 }
 
 function frameOf(el: Element | null): HTMLElement | null {
@@ -144,11 +159,21 @@ function inViewport(el: HTMLElement): boolean {
 
 export const CorrectionView = forwardRef<CorrectionViewHandle, CorrectionViewProps>(
   function CorrectionView(
-    { model, entryOffset, commandsFor, onCommand, busy = false, headerExtras },
+    {
+      model,
+      entryOffset,
+      commandsFor,
+      onCommand,
+      busy = false,
+      headerExtras,
+      typeChoicesFor,
+      onChangeType,
+    },
     ref,
   ) {
     const headingId = useId();
     const reasonId = useId();
+    const typeMenuId = useId();
     const bodyRef = useRef<HTMLDivElement>(null);
     const { article, blocks } = model;
     // The current block: the focused frame, or the last one focused.
@@ -316,6 +341,74 @@ export const CorrectionView = forwardRef<CorrectionViewHandle, CorrectionViewPro
       return () => window.removeEventListener("keydown", onKey);
     }, [commandsFor]);
 
+    // Issue #74 — Change type: T (or the button) opens the choices for the
+    // current block; a choice runs it, Escape closes and returns focus to
+    // the block. Unavailable choices stay listed with their reason.
+    const [typeMenuOpen, setTypeMenuOpen] = useState(false);
+    const typeMenuRef = useRef<HTMLDivElement>(null);
+    const typeChoices = current && typeChoicesFor ? typeChoicesFor(current) : [];
+    const currentIdRef = useRef(currentId);
+    currentIdRef.current = currentId;
+    const focusCurrentBlock = useCallback(() => {
+      const id = currentIdRef.current;
+      const el = id
+        ? bodyRef.current?.querySelector<HTMLElement>(`[data-correction-id="${id}"]`)
+        : null;
+      el?.focus();
+    }, []);
+    const openTypeMenu = useCallback(() => {
+      if (!currentIdRef.current || busy) return;
+      setTypeMenuOpen(true);
+    }, [busy]);
+    const closeTypeMenu = useCallback(() => {
+      setTypeMenuOpen(false);
+      focusCurrentBlock();
+    }, [focusCurrentBlock]);
+    useEffect(() => {
+      if (!typeMenuOpen) return;
+      const menu = typeMenuRef.current;
+      const first =
+        menu?.querySelector<HTMLElement>("button:not([aria-disabled='true'])") ??
+        menu?.querySelector<HTMLElement>("button");
+      first?.focus();
+    }, [typeMenuOpen]);
+    const openTypeMenuRef = useRef(openTypeMenu);
+    openTypeMenuRef.current = openTypeMenu;
+    useEffect(() => {
+      if (!typeChoicesFor) return;
+      const onKey = (event: KeyboardEvent) => {
+        if (event.ctrlKey || event.metaKey || event.altKey) return;
+        if (isFormField(event.target)) return;
+        if (event.key !== "t" && event.key !== "T") return;
+        event.preventDefault();
+        openTypeMenuRef.current();
+      };
+      window.addEventListener("keydown", onKey);
+      return () => window.removeEventListener("keydown", onKey);
+    }, [typeChoicesFor]);
+    const chooseType = (choice: TypeChoiceCommand) => {
+      // An unavailable choice says why beside it; the menu stays open.
+      if (!current || busy || !choice.available) return;
+      setTypeMenuOpen(false);
+      focusCurrentBlock();
+      onChangeType?.(current, choice);
+    };
+    const onTypeMenuKeyDown = (event: React.KeyboardEvent<HTMLDivElement>) => {
+      if (event.key === "Escape") {
+        event.preventDefault();
+        event.stopPropagation();
+        closeTypeMenu();
+        return;
+      }
+      if (event.key !== "ArrowDown" && event.key !== "ArrowUp") return;
+      const items = Array.from(typeMenuRef.current?.querySelectorAll<HTMLElement>("button") ?? []);
+      const i = items.indexOf(document.activeElement as HTMLElement);
+      const next = items[event.key === "ArrowDown" ? i + 1 : i - 1];
+      if (!next) return;
+      event.preventDefault();
+      next.focus();
+    };
+
     // Block-by-block movement: ArrowDown / ArrowUp on a focused block move
     // focus to the neighbouring block (Tab works too — each block is a stop).
     const onKeyDown = (event: React.KeyboardEvent<HTMLDivElement>) => {
@@ -347,6 +440,7 @@ export const CorrectionView = forwardRef<CorrectionViewHandle, CorrectionViewPro
             {commandsFor
               ? " Press X to hide or unhide the current block, S to split it at the caret, J to merge it with the next block."
               : null}
+            {typeChoicesFor ? " Press T to change its type." : null}
             {headerExtras
               ? " Ctrl+Z undoes your last change and Ctrl+Shift+Z redoes it; L lists every correction."
               : null}{" "}
@@ -392,6 +486,53 @@ export const CorrectionView = forwardRef<CorrectionViewHandle, CorrectionViewPro
               <span className="correction-commands-reason" aria-hidden="true">
                 {askedReason}
               </span>
+            ) : null}
+            {typeChoicesFor && (
+              <button
+                type="button"
+                className="correction-command"
+                aria-expanded={typeMenuOpen}
+                aria-controls={typeMenuId}
+                aria-disabled={!current || busy ? "true" : undefined}
+                aria-keyshortcuts="T"
+                onClick={() => (typeMenuOpen ? closeTypeMenu() : openTypeMenu())}
+              >
+                Change type <kbd>T</kbd>
+              </button>
+            )}
+            {typeChoicesFor && typeMenuOpen && current ? (
+              <div
+                id={typeMenuId}
+                ref={typeMenuRef}
+                className="correction-type-menu"
+                role="group"
+                aria-label={`Change ${current.label} to`}
+                onKeyDown={onTypeMenuKeyDown}
+              >
+                <ul>
+                  {typeChoices.map((choice) => {
+                    const reason = `${typeMenuId}-${choice.label.replace(/\s+/g, "-")}`;
+                    return (
+                      <li key={choice.label}>
+                        <button
+                          type="button"
+                          className="correction-type-choice"
+                          aria-disabled={!choice.available || busy ? "true" : undefined}
+                          aria-describedby={choice.available ? undefined : reason}
+                          onClick={() => chooseType(choice)}
+                        >
+                          {choice.label}
+                        </button>
+                        {!choice.available && choice.reason ? (
+                          <span id={reason} className="correction-type-reason">
+                            {choice.reason}
+                          </span>
+                        ) : null}
+                      </li>
+                    );
+                  })}
+                </ul>
+              </div>
             ) : null}
           </div>
         )}

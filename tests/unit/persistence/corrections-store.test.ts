@@ -8,13 +8,14 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import fakeIndexedDB, { IDBKeyRange } from "fake-indexeddb";
 import { Dexie } from "dexie";
-import { ArticleSchema, type Correction } from "../../../src/content/schema";
+import { ArticleSchema, type BlockTypeChoice, type Correction } from "../../../src/content/schema";
 import {
   deriveQuoteSelector,
   mainTextLength,
   normalizeText,
 } from "../../../src/content/normalizeText";
 import { applyCorrections, blockCorrection } from "../../../src/content/corrections/engine";
+import { setTypeCorrection } from "../../../src/content/corrections/setType";
 import { textStamp } from "../../../src/content/sameText";
 
 Dexie.dependencies.indexedDB = fakeIndexedDB;
@@ -530,6 +531,88 @@ describe("a correction with consequences", () => {
     await expect(applyCorrectionsChange(preview, { acceptConsequences: true })).rejects.toThrow(
       STALE_PREVIEW,
     );
+    expect(await db.corrections.count()).toBe(0);
+  });
+});
+
+// Issue #74 — changing a block's type through the same preview / apply path.
+function workSetType(path: number[], to: BlockTypeChoice, article = work): Correction {
+  const result = applyCorrections(article, []);
+  const block = result.view.allBlocks.find((b) => b.path.join(".") === path.join("."))!;
+  return setTypeCorrection(result, block, to, {
+    id: `set-type-${path.join(".")}`,
+    createdAt: "2026-11-27T10:00:00.000Z",
+  })!;
+}
+
+describe("changing a block's type", () => {
+  it("reports a paragraph becoming a heading as a chapter added to the contents", async () => {
+    const { db } = await seedWork();
+    const { previewAddCorrection, applyCorrectionsChange, ACCEPTANCE_REQUIRED } = await store();
+    const before = {
+      completions: await db.completions.toArray(),
+      collections: await db.collections.toArray(),
+    };
+    const preview = await previewAddCorrection(
+      work.id,
+      workSetType([2], { type: "heading", level: 2 }),
+    );
+    expect(preview.contents).toEqual([{ change: "added", title: "Share this article" }]);
+    // The chapters around it keep their identity: no reader data is touched.
+    expect(preview.chapters).toEqual([]);
+    expect(preview.clean).toBe(false);
+    await expect(applyCorrectionsChange(preview)).rejects.toThrow(ACCEPTANCE_REQUIRED);
+    await applyCorrectionsChange(preview, { acceptConsequences: true });
+    expect((await db.corrections.get(work.id))!.corrections).toHaveLength(1);
+    expect(await db.completions.toArray()).toEqual(before.completions);
+    expect(await db.collections.toArray()).toEqual(before.collections);
+  });
+
+  it("reports a heading becoming a paragraph as a chapter removed, with its reader data", async () => {
+    const { noon } = await seedWork();
+    const { previewAddCorrection } = await store();
+    const preview = await previewAddCorrection(work.id, workSetType([3], { type: "paragraph" }));
+    expect(preview.contents).toEqual([{ change: "removed", title: "Noon" }]);
+    expect(preview.chapters.map((c) => c.label)).toEqual([
+      `Remove finished status for chapter “Noon” (${noon}).`,
+      `Remove chapter “Noon” (${noon}), entry e-noon, from “Harbour plan”; it cannot be redirected to a different chapter.`,
+    ]);
+  });
+
+  it("applies at once when nothing changes for the reader's data or the contents", async () => {
+    await seedWork();
+    const { previewAddCorrection } = await store();
+    const preview = await previewAddCorrection(work.id, workSetType([2], { type: "quotation" }));
+    expect(preview.contents).toEqual([]);
+    expect(preview.droppedMarks).toEqual([]);
+    expect(preview.clean).toBe(true);
+  });
+
+  it("names the marks a code block would drop, before anything is written", async () => {
+    const { db } = await import("../../../src/persistence/db");
+    const marked = ArticleSchema.parse({
+      ...saved,
+      id: "marked-essay",
+      blocks: [
+        para("Intro."),
+        {
+          kind: "paragraph",
+          content: [
+            { text: "Run ", marks: [] },
+            { text: "make tide", marks: [{ type: "code" }] },
+            { text: " twice.", marks: [] },
+          ],
+        },
+      ],
+    });
+    await db.articles.put(marked);
+    const { previewAddCorrection } = await store();
+    const preview = await previewAddCorrection(
+      marked.id,
+      workSetType([1], { type: "code-block" }, marked),
+    );
+    expect(preview.droppedMarks).toEqual([{ mark: "code", text: "make tide" }]);
+    expect(preview.clean).toBe(false);
     expect(await db.corrections.count()).toBe(0);
   });
 });
