@@ -25,6 +25,7 @@ import {
   applyCorrections,
   blockCorrection,
   REASONS,
+  splitCorrection,
 } from "../../../src/content/corrections/engine";
 import { isSameText, textStamp } from "../../../src/content/sameText";
 import type {
@@ -265,6 +266,65 @@ describe("reprocessing a corrected URL article", () => {
     expect(preview.corrections).toEqual({ reapplied: [], notApplied: [] });
     // The diff is the originals' own: the sign-up's removal is a change.
     expect(preview.changes).toContainEqual({ kind: "removed", text: NEWSLETTER });
+  });
+});
+
+describe("reprocessing an article with a hidden block and a split paragraph", () => {
+  // A paragraph run together at ingest; the reader split it. (#73/#74's
+  // moved-caption kinds are not on the integration branch yet; a split is
+  // the structure-changing kind that is.)
+  const RUN = "The tide turns at noon. The boats come home by dusk.";
+  const article = ArticleSchema.parse({
+    ...saved,
+    blocks: [para(FERRY), para(SHARE), para(RUN), para(GULLS)],
+  });
+  const hide = hideOf(article, SHARE);
+  const split = (() => {
+    const result = applyCorrections(article, [hide]);
+    const graphemes = [...normalizeText(result.view.article)];
+    const block = result.view.allBlocks.find(
+      (b) => graphemes.slice(b.viewStart, b.viewEnd).join("") === RUN,
+    )!;
+    const caret = [...RUN.slice(0, RUN.indexOf("The boats"))].length;
+    return splitCorrection(result, block, caret, {
+      id: "split-run",
+      createdAt: "2026-11-27T10:01:00.000Z",
+    })!;
+  })();
+
+  it("keeps both when their text is still found in the new version", async () => {
+    const { db } = await import("../../../src/persistence/db");
+    await db.articles.put(article);
+    await db.corrections.put({
+      schemaVersion: 1,
+      articleId: article.id,
+      corrections: [hide, split],
+      updatedAt: "2026-11-27T10:01:00.000Z",
+    });
+    const { previewReprocess, applyReprocess } = await reprocess();
+    const fresh = ArticleSchema.parse({
+      ...refetched().article,
+      blocks: [para(FERRY), para(NEW_PASSAGE), para(SHARE), para(RUN), para(GULLS)],
+    });
+    const preview = await previewReprocess(article.id, {
+      article: fresh,
+      confidence: { state: "confident" },
+      assets: [],
+    });
+    expect(preview.corrections.reapplied.map((c) => c.id)).toEqual([hide.id, split.id]);
+    expect(preview.corrections.notApplied).toEqual([]);
+    expect(preview.changes).toEqual([{ kind: "added", text: NEW_PASSAGE }]);
+
+    await applyReprocess(preview);
+    const { result } = await shownFromLibrary(article.id);
+    expect(result.outcomes.map((o) => o.status)).toEqual(["applied", "applied"]);
+    expect(normalizeText(result.article).split("\n")).toEqual([
+      FERRY,
+      NEW_PASSAGE,
+      "The tide turns at noon.",
+      "The boats come home by dusk.",
+      GULLS,
+    ]);
   });
 });
 
