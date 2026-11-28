@@ -32,9 +32,14 @@ export function tailExcerpt(text: string, max = 30): string {
   return `…${(firstSpace >= 0 && firstSpace < max / 2 ? cut.slice(firstSpace + 1) : cut).trimStart()}`;
 }
 
-/** “the paragraph “Share this article”” */
+/** “the paragraph “Share this article””; a block with no text (story 53)
+ * by the words around it: “the figure after “…dawn.””. */
 export function blockPhrase(target: BlockTarget): string {
-  return `the ${BLOCK_KIND_NOUN[target.kind]} “${excerpt(target.quote.exact)}”`;
+  const noun = BLOCK_KIND_NOUN[target.kind];
+  if (target.quote.exact.length > 0) return `the ${noun} “${excerpt(target.quote.exact)}”`;
+  const before = target.quote.prefix.trim();
+  if (before.length > 0) return `the ${noun} after “${tailExcerpt(before)}”`;
+  return `the ${noun} before “${excerpt(target.quote.suffix.trim())}”`;
 }
 
 type Describer<K extends Correction["kind"]> = (correction: Extract<Correction, { kind: K }>) => {

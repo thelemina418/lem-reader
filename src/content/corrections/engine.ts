@@ -109,7 +109,8 @@ export type Step =
 export const HIDE_REASONS = {
   notFound: "Its text is no longer in this article.",
   ambiguous: "Its text now appears in more than one place, so it can't be placed with confidence.",
-  noText: "This block has no text to find it by, so the change couldn't be kept reliably.",
+  noText:
+    "This block has no text, and none around it, to find it by, so the change couldn't be kept reliably.",
   alreadyHidden: "This block is already hidden.",
   insideHidden: "The quotation around this block is hidden. Unhide the quotation instead.",
   notHidden: "This block isn't hidden.",
@@ -161,6 +162,7 @@ export function resolveBlockTarget(
   article: CanonicalArticle,
   target: BlockTarget,
 ): LaidBlock | "orphan" | "ambiguous" {
+  if (target.quote.exact.length === 0) return resolveTextlessTarget(article, target);
   const { clusters } = articleGraphemeIndex(article);
   const exact = graphemeClusters(target.quote.exact, article.lang);
   const laid = layoutOf(article);
@@ -184,15 +186,53 @@ export function resolveBlockTarget(
   return narrowed.length === 1 ? narrowed[0]! : "ambiguous";
 }
 
+/** The image source a text-less figure is also known by. */
+function mediaSrc(block: Block): string | undefined {
+  return block.kind === "figure" ? (block.src ?? block.originalSrc) : undefined;
+}
+
+/** Story 53 — a block with no text (an image with no alt or caption) is
+ * found by the text either side of it and its image source. Its context is
+ * all the evidence there is, so it must match exactly: a single block of
+ * the same kind, depth and source with that prefix and suffix around it. */
+function resolveTextlessTarget(
+  article: CanonicalArticle,
+  target: BlockTarget,
+): LaidBlock | "orphan" | "ambiguous" {
+  const { clusters } = articleGraphemeIndex(article);
+  const candidates = layoutOf(article).filter(
+    (b) =>
+      b.end === b.start &&
+      b.block.kind === target.kind &&
+      b.depth === target.depth &&
+      mediaSrc(b.block) === target.src &&
+      matchesContext(clusters, b.start, 0, target.quote, article.lang),
+  );
+  if (candidates.length === 0) return "orphan";
+  return candidates.length === 1 ? candidates[0]! : "ambiguous";
+}
+
 /** The text target for the block at `path` in `article`; null when the
- * block has no text to be found by (a figure with no alt or caption). */
+ * block can't be found by text (a text-less block with no text around it). */
 export function blockTargetFor(
   article: CanonicalArticle,
   path: readonly number[],
 ): BlockTarget | null {
   const key = blockPathKey(path);
   const laid = layoutOf(article).find((b) => b.key === key);
-  if (!laid || laid.end <= laid.start) return null;
+  if (!laid) return null;
+  if (laid.end <= laid.start) {
+    // Story 53: no words of its own — the text around it, like a highlight.
+    const quote = deriveQuoteSelector(article, { start: laid.start, end: laid.start });
+    if (quote.prefix.length === 0 && quote.suffix.length === 0) return null;
+    const src = mediaSrc(laid.block);
+    return {
+      quote,
+      kind: laid.block.kind,
+      depth: laid.depth,
+      ...(src !== undefined ? { src } : {}),
+    };
+  }
   return {
     quote: deriveQuoteSelector(article, { start: laid.start, end: laid.end }),
     kind: laid.block.kind,
@@ -262,7 +302,9 @@ const KINDS: { [K in Correction["kind"]]: Handler<K> } = {
     if (!state.hidden.has(found.key)) {
       return {
         ok: false,
-        reason: isHiddenUnder(state.hidden, found.path) ? HIDE_REASONS.insideHidden : HIDE_REASONS.notHidden,
+        reason: isHiddenUnder(state.hidden, found.path)
+          ? HIDE_REASONS.insideHidden
+          : HIDE_REASONS.notHidden,
       };
     }
     const hidden = new Set(state.hidden);
@@ -521,13 +563,14 @@ export function hideAvailability(
 ): Availability {
   const laid = laidFor(result, block);
   if (!laid) return { available: false, reason: HIDE_REASONS.notFound };
-  if (laid.end <= laid.start) return { available: false, reason: HIDE_REASONS.noText };
   const state = engineStateOf(result);
   const refusal = hideRefusal(state, laid);
   if (refusal) return { available: false, reason: refusal };
-  // The target must be findable again: unique by text in this article.
+  // The target must be findable again: unique by text in this article (a
+  // text-less block by the text around it, story 53).
   const target = blockTargetFor(result.view.article, block.path);
-  if (!target || resolveBlockTarget(result.view.article, target) !== laid) {
+  if (!target) return { available: false, reason: HIDE_REASONS.noText };
+  if (resolveBlockTarget(result.view.article, target) !== laid) {
     return { available: false, reason: HIDE_REASONS.ambiguous };
   }
   return { available: true };

@@ -260,7 +260,6 @@ export const StructureDestinationSchema = z.object({
 });
 export type StructureDestination = z.infer<typeof StructureDestinationSchema>;
 
-
 /** Spec #68 — the text-stamp fingerprint a stored record's coordinates
  * were saved against (src/content/sameText.ts): the applied corrections, or
  * a PDF repair of the original (#78). Absent = the original as ingested —
@@ -1191,12 +1190,25 @@ export const CorrectableBlockKindSchema = z.enum([
 /** A whole block, found by its text: `quote.exact` is the block's entire
  * normalized text, `kind` and `depth` (0 = top level, 1 = inside one
  * quotation, …) tell apart blocks that share a range (a quotation and its
- * only paragraph). */
-export const BlockTargetSchema = z.object({
-  quote: TextQuoteSelectorSchema,
-  kind: CorrectableBlockKindSchema,
-  depth: z.number().int().min(0),
-});
+ * only paragraph).
+ *
+ * Story 53 — a block with no text of its own (an image with no alt text and
+ * no caption) has an EMPTY `exact`: it is found by the text either side of
+ * it (`prefix` / `suffix`, the highlight quote-selector shape) plus, for an
+ * image, its source (`src`). An empty `exact` always carries context. */
+export const BlockTargetSchema = z
+  .object({
+    quote: TextQuoteSelectorSchema.extend({ exact: z.string() }),
+    kind: CorrectableBlockKindSchema,
+    depth: z.number().int().min(0),
+    src: z.string().min(1).optional(),
+  })
+  .refine(
+    (t) => t.quote.exact.length > 0 || t.quote.prefix.length > 0 || t.quote.suffix.length > 0,
+    {
+      message: "a block with no text is found by the text around it",
+    },
+  );
 export type BlockTarget = z.infer<typeof BlockTargetSchema>;
 
 const correctionBase = {
